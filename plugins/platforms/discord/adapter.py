@@ -5186,9 +5186,9 @@ class DiscordAdapter(BasePlatformAdapter):
         """Return channel identifiers accepted by Discord channel config gates.
 
         Users commonly configure channels by Discord snowflake ID, bare name, or
-        ``#name``. Include the current channel and, for threads, the parent
-        channel so free-response/no-thread/allow/ignore rules work with either
-        form.
+        ``#name``. Include the current channel, for threads the parent channel,
+        and the containing category's snowflake so free-response/no-thread/
+        allow/ignore rules can name a single channel or a whole category ring.
         """
         channel = getattr(message, "channel", None)
         return self._discord_channel_keys_from_channel(channel, parent_channel_id)
@@ -5223,6 +5223,21 @@ class DiscordAdapter(BasePlatformAdapter):
         if parent_name:
             keys.add(parent_name)
             keys.add(f"#{parent_name}")
+
+        # Category ring: Discord's raw API stores a channel's category in
+        # parent_id; discord.py surfaces it as ``category_id`` (threads reach
+        # it through their parent channel). Including the category snowflake
+        # lets allow/ignore/free-response lists name an entire category once
+        # instead of enumerating member channels — and because gates evaluate
+        # per message, channels created inside the category later are covered
+        # without a config re-render. Deliberately ID-only: category names
+        # routinely collide with channel names (a "studio" category next to a
+        # #studio channel), so name-form category matching is not offered.
+        category_id = getattr(channel, "category_id", None)
+        if category_id is None and parent_channel is not None:
+            category_id = getattr(parent_channel, "category_id", None)
+        if category_id:
+            keys.add(str(category_id))
 
         return keys
 
