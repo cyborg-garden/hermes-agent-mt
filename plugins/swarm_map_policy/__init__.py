@@ -4,16 +4,25 @@ Integrates with Swarm Map (formerly HSM) to enforce:
 - Group allowlists: only groups registered in HSM can interact
 - Admin checks: platform admin status from HSM settings
 - Session context caching: platform/chat_id/user_id/is_admin from gateway events
-- Approval gating: admin-only tool restrictions
+- Admin-gated tools: tools named in SWARM_MAP_ADMIN_GATED_TOOLS are blocked
+  for anyone HSM does not report as a platform admin
+
+This plugin does NOT gate dangerous-command approval. Approval is the
+gateway approval queue (/approve, Discord buttons), not a tool call, so a
+pre_tool_call hook never sees it. That gate lives in gateway/run.py
+(approvals.admin_only + allow_admin_from) and the Discord adapter
+(platforms.discord.extra.require_admin_for_exec_approval).
 
 Configuration via environment variables:
 - HSM_URL: URL of the HSM API (e.g., http://localhost:3002)
 - HERMES_AGENT_NAME: Agent identifier in HSM (e.g., hermes-personal)
+- SWARM_MAP_ADMIN_GATED_TOOLS: comma-separated registered tool names that
+  only HSM platform admins may call (default: none)
 
 Security model:
 - Group checks: FAIL-CLOSED (deny if HSM unreachable)
 - Admin checks: FAIL-CLOSED (deny if HSM unreachable)
-- Approval gating: FAIL-CLOSED (deny if no session context)
+- Admin-gated tools: FAIL-CLOSED (deny if no session context)
 - Tool checks: FAIL-OPEN (allow if not configured)
 """
 
@@ -32,8 +41,26 @@ except ImportError:
 # Thread-local storage for session context (plugin hooks are synchronous)
 _session_ctx = threading.local()
 
-# Tools that require admin privileges
-ADMIN_GATED_TOOLS = {"approval", "pr_approval"}
+# Tools that always require admin privileges. Empty by default: which tools
+# are admin-only is per-deployment policy, set with SWARM_MAP_ADMIN_GATED_TOOLS.
+# Every name here must be a registered tool (tests enforce it); the previous
+# {"approval", "pr_approval"} matched no tool, so the gate never fired.
+ADMIN_GATED_TOOLS: frozenset = frozenset()
+
+_ADMIN_GATED_TOOLS_ENV = "SWARM_MAP_ADMIN_GATED_TOOLS"
+
+
+def admin_gated_tools() -> frozenset:
+    """Built-in gated tools plus any named in SWARM_MAP_ADMIN_GATED_TOOLS."""
+    raw = os.environ.get(_ADMIN_GATED_TOOLS_ENV, "")
+    extra = {t.strip() for t in raw.split(",") if t.strip()}
+    return ADMIN_GATED_TOOLS | extra
+
+
+def unknown_gated_tools(gated, known_tool_names) -> list:
+    """Gated names that match no registered tool (a gate that can never fire)."""
+    known = set(known_tool_names)
+    return sorted(t for t in gated if t not in known)
 
 
 def _hsm_url() -> Optional[str]:
@@ -186,14 +213,34 @@ def _on_session_start(session_id: str = None, **kwargs) -> None:
 
 def _pre_tool_call(tool_name: str = None, **kwargs):
     """Gate tool calls based on HSM policy. Returns None to allow, dict to block."""
-    if tool_name in ADMIN_GATED_TOOLS:
+    if tool_name and tool_name in admin_gated_tools():
         ctx = get_session_context()
         if not ctx or not ctx.get("is_admin"):
             return {
                 "action": "block",
-                "message": "Admin privileges required for approval commands.",
+                "message": f"Admin privileges required to use {tool_name}.",
             }
     return None
+
+
+def _warn_unknown_gated_tools() -> None:
+    """Log gated names that match no registered tool, so a typo is visible."""
+    gated = admin_gated_tools()
+    if not gated:
+        return
+    try:
+        from tools.registry import registry
+        known = registry.get_all_tool_names()
+    except Exception:
+        return
+    if not known:
+        return  # tools not loaded yet; nothing to compare against
+    unknown = unknown_gated_tools(gated, known)
+    if unknown:
+        logger.warning(
+            "swarm-map-policy: %s names tools that do not exist, so they are "
+            "not gated: %s", _ADMIN_GATED_TOOLS_ENV, ", ".join(unknown),
+        )
 
 
 def register(ctx):
@@ -204,4 +251,8 @@ def register(ctx):
     ctx.register_hook("on_session_start", _on_session_start)
     ctx.register_hook("pre_tool_call", _pre_tool_call)
     ctx.register_hook("pre_gateway_dispatch", _pre_gateway_dispatch)
-    logger.info("swarm-map-policy: registered (HSM_URL=%s)", _hsm_url() or "not set")
+    _warn_unknown_gated_tools()
+    logger.info(
+        "swarm-map-policy: registered (HSM_URL=%s, admin-gated tools=%s)",
+        _hsm_url() or "not set", ",".join(sorted(admin_gated_tools())) or "none",
+    )
