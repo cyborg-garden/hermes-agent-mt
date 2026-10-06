@@ -3792,9 +3792,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         from gateway.slash_access import policy_for_source
         policy = policy_for_source(self.config, source)
+        identity = getattr(source, "platform_identity", None)
+        if policy.enabled and policy.is_admin(source.user_id, identity):
+            return True
+        # ``approver_roles`` (Discord): members holding a listed role in the
+        # guild the message came from may approve. Additive to either layer;
+        # never matches in DMs (no guild, no roles).
+        if self._has_approver_role(source):
+            return True
         if policy.enabled:
-            return policy.is_admin(source.user_id)
+            return False
         return self._is_individual_allowlisted(source)
+
+    def _has_approver_role(self, source: SessionSource) -> bool:
+        """True if *source*'s live identity holds a configured approver role."""
+        from gateway.slash_access import approver_role_matches
+        identity = getattr(source, "platform_identity", None)
+        if identity is None:
+            return False
+        try:
+            platform_config = self.config.platforms.get(source.platform)
+        except Exception:
+            return False
+        extra = getattr(platform_config, "extra", None)
+        return approver_role_matches(extra, identity)
 
     def _is_individual_allowlisted(self, source: SessionSource) -> bool:
         """True iff *source* is in the per-platform INDIVIDUAL (DM) allowlist —
@@ -13411,7 +13432,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not canonical_cmd:
             return None
         policy = _policy_for_source(self.config, source)
-        if not policy.enabled or policy.can_run(source.user_id, canonical_cmd):
+        identity = getattr(source, "platform_identity", None)
+        if not policy.enabled or policy.can_run(source.user_id, canonical_cmd, identity):
+            return None
+        # Approver-role holders may run the approval commands themselves; the
+        # handlers re-check via ``_is_approval_admin``. Nothing else widens.
+        if canonical_cmd in {"approve", "deny"} and self._has_approver_role(source):
             return None
         logger.info(
             "Slash command /%s denied for %s:%s (not admin, not in user_allowed_commands)",

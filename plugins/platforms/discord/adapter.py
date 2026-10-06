@@ -1167,6 +1167,10 @@ class DiscordAdapter(BasePlatformAdapter):
 
                 # Resolve any usernames in the allowed list to numeric IDs
                 await adapter_self._resolve_allowed_usernames()
+                try:
+                    adapter_self._log_admin_identity_resolution()
+                except Exception as exc:  # diagnostics only; never block ready
+                    logger.debug("[%s] admin identity log failed: %s", adapter_self.name, exc)
                 adapter_self._ready_event.set()
 
                 if adapter_self._post_connect_task and not adapter_self._post_connect_task.done():
@@ -4117,6 +4121,71 @@ class DiscordAdapter(BasePlatformAdapter):
             logger.error("[%s] Failed to get chat info for %s: %s", self.name, chat_id, e, exc_info=True)
             return {"name": str(chat_id), "type": "dm", "error": str(e)}
 
+    def _log_admin_identity_resolution(self) -> None:
+        """Log what username admins and approver role names resolve to.
+
+        Diagnostics only — the live check re-resolves at use time. Username
+        lookup uses the cached members, which is partial without the Server
+        Members intent; "not seen yet" is not an error.
+        """
+        from gateway.slash_access import _coerce_id_list
+
+        extra = getattr(self.config, "extra", None) or {}
+        if not isinstance(extra, dict):
+            return
+        usernames = {
+            e.lstrip("@").strip().lower()
+            for key in ("allow_admin_from", "group_allow_admin_from")
+            for e in _coerce_id_list(extra.get(key))
+            if not e.isdigit() and e != "*"
+        }
+        role_names = [
+            r for r in _coerce_id_list(extra.get("approver_roles")) if not r.isdigit()
+        ]
+        if extra.get("approver_roles") and str(
+            extra.get("require_admin_for_exec_approval", False)
+        ).strip().lower() not in {"true", "1", "yes"}:
+            logger.info(
+                "[%s] approver_roles is set but require_admin_for_exec_approval "
+                "is off: approval buttons stay open to every allowed user; the "
+                "roles still gate /approve and /deny.", self.name,
+            )
+        if not usernames and not role_names:
+            return
+        seen: set = set()
+        for guild in getattr(self._client, "guilds", None) or ():
+            for member in getattr(guild, "members", None) or ():
+                mname = str(getattr(member, "name", "") or "").lower()
+                if mname in usernames and mname not in seen:
+                    seen.add(mname)
+                    logger.info(
+                        "[%s] Admin username %r -> Discord user id %s",
+                        self.name, mname, getattr(member, "id", "?"),
+                    )
+            for name in role_names:
+                want = name.lstrip("@").strip().lower()
+                hits = [
+                    r for r in getattr(guild, "roles", None) or ()
+                    if str(getattr(r, "name", "")).strip().lower() == want
+                    and getattr(r, "id", None) != getattr(guild, "id", None)
+                ]
+                if len(hits) == 1:
+                    logger.info(
+                        "[%s] approver role %r -> role id %s in guild %s",
+                        self.name, name, hits[0].id, getattr(guild, "id", "?"),
+                    )
+                else:
+                    logger.warning(
+                        "[%s] approver role %r matches %d roles in guild %s — it "
+                        "grants nothing there. Use the role id.",
+                        self.name, name, len(hits), getattr(guild, "id", "?"),
+                    )
+        for name in sorted(usernames - seen):
+            logger.info(
+                "[%s] Admin username %r not seen in cached members yet; it will "
+                "match on first message or button click.", self.name, name,
+            )
+
     async def _resolve_allowed_usernames(self) -> None:
         """
         Resolve non-numeric entries in DISCORD_ALLOWED_USERS to Discord user IDs.
@@ -4855,6 +4924,9 @@ class DiscordAdapter(BasePlatformAdapter):
             chat_topic=chat_topic,
             parent_chat_id=parent_id or None,
         )
+        source.platform_identity = _discord_platform_identity(
+            interaction.user, getattr(interaction, "guild", None),
+        )
 
         msg_type = MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
         channel_id = str(interaction.channel_id)
@@ -4953,6 +5025,9 @@ class DiscordAdapter(BasePlatformAdapter):
             # Gateway channel-scoped access matches a thread by its parent
             # channel id, same as the on_message path.
             parent_chat_id=_parent_id or None,
+        )
+        source.platform_identity = _discord_platform_identity(
+            interaction.user, getattr(interaction, "guild", None),
         )
         _skills = self._resolve_channel_skills(thread_id, _parent_id or None)
         _channel_prompt = self._resolve_channel_prompt(thread_id, _parent_id or None)
@@ -5966,6 +6041,9 @@ class DiscordAdapter(BasePlatformAdapter):
                 allowed_role_ids=self._allowed_role_ids,
                 require_admin=require_admin,
                 admin_user_ids=admin_user_ids,
+                approver_roles=_exec_approval_approver_roles(
+                    getattr(self.config, "extra", None)
+                ),
                 allow_permanent=allow_permanent,
                 smart_denied=smart_denied,
             )
@@ -6726,6 +6804,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 or self._derive_auto_thread_name(message.content or "")
             ) if auto_threaded_channel is not None else None,
         )
+        source.platform_identity = _discord_platform_identity(message.author, guild)
 
         # Build media URLs -- download image attachments to local cache so the
         # vision tool can access them reliably (Discord CDN URLs can expire).
@@ -7240,6 +7319,58 @@ def _resolve_exec_approval_admin_gate(
     return (True, admin_ids)
 
 
+def _exec_approval_approver_roles(config_extra: Optional[dict]) -> set:
+    """Role IDs / names from ``approver_roles`` (see ``gateway.slash_access``)."""
+    extra = config_extra if isinstance(config_extra, dict) else {}
+    try:
+        from gateway.slash_access import _coerce_id_list
+        return set(_coerce_id_list(extra.get("approver_roles")))
+    except Exception:
+        return set()
+
+
+def _discord_platform_identity(user: Any, guild: Any = None):
+    """Build a ``PlatformIdentity`` from a live discord.py User/Member.
+
+    Uses ``user.name`` — the unique handle — and deliberately ignores
+    ``display_name``, ``global_name`` and ``nick``: anyone can set those to an
+    admin's handle. Roles are only captured in a guild context (a Member with
+    ``roles`` plus the guild's role list); in DMs ``in_guild`` is False so
+    ``approver_roles`` never grants there.
+    """
+    from gateway.slash_access import PlatformIdentity
+
+    if user is None:
+        return None
+    name = getattr(user, "name", None)
+    disc = getattr(user, "discriminator", None)
+    member_roles = getattr(user, "roles", None) if guild is not None else None
+    if guild is None or member_roles is None:
+        return PlatformIdentity(
+            username=str(name) if name else None,
+            discriminator=str(disc) if disc is not None else None,
+        )
+    try:
+        role_ids = frozenset(str(getattr(r, "id", "")) for r in member_roles)
+    except TypeError:
+        role_ids = frozenset()
+    try:
+        guild_roles = tuple(
+            (str(getattr(r, "id", "")), str(getattr(r, "name", "") or ""))
+            for r in (getattr(guild, "roles", None) or ())
+        )
+    except TypeError:
+        guild_roles = ()
+    return PlatformIdentity(
+        username=str(name) if name else None,
+        discriminator=str(disc) if disc is not None else None,
+        in_guild=True,
+        guild_id=str(getattr(guild, "id", "") or "") or None,
+        member_role_ids=role_ids - {""},
+        guild_roles=guild_roles,
+    )
+
+
 def _define_discord_view_classes() -> None:
     """Register Discord UI view classes as module globals.
 
@@ -7269,6 +7400,7 @@ def _define_discord_view_classes() -> None:
             allowed_role_ids: Optional[set] = None,
             require_admin: bool = False,
             admin_user_ids: Optional[set] = None,
+            approver_roles: Optional[set] = None,
             allow_permanent: bool = True,
             smart_denied: bool = False,
         ):
@@ -7282,6 +7414,10 @@ def _define_discord_view_classes() -> None:
             self.require_admin = require_admin
             self.admin_user_ids = {
                 str(a).strip() for a in (admin_user_ids or set()) if str(a).strip()
+            }
+            # Role IDs or names; a holder in the prompt's guild may approve.
+            self.approver_roles = {
+                str(r).strip() for r in (approver_roles or set()) if str(r).strip()
             }
             self.resolved = False
             if smart_denied:
@@ -7306,20 +7442,28 @@ def _define_discord_view_classes() -> None:
                 return False
             if not self.require_admin:
                 return True
+            from gateway.slash_access import admin_entries_match, approver_roles_match
+
             user = getattr(interaction, "user", None)
             try:
                 uid = str(getattr(user, "id", "") or "")
             except Exception:
                 uid = ""
-            if uid and uid in self.admin_user_ids:
+            identity = _discord_platform_identity(
+                user, getattr(interaction, "guild", None),
+            )
+            if uid and admin_entries_match(self.admin_user_ids, uid, identity):
                 return True
-            if not self.admin_user_ids:
+            if approver_roles_match(self.approver_roles, identity):
+                return True
+            if not self.admin_user_ids and not self.approver_roles:
                 logger.warning(
                     "[Discord] require_admin_for_exec_approval is enabled but "
-                    "no admins are configured (allow_admin_from is empty) — "
-                    "exec approval buttons are disabled for everyone. Add "
-                    "admin user IDs under the discord platform's "
-                    "allow_admin_from, or disable the toggle."
+                    "no admins are configured (allow_admin_from and "
+                    "approver_roles are empty) — exec approval buttons are "
+                    "disabled for everyone. Add admin user IDs or usernames "
+                    "under the discord platform's allow_admin_from, an "
+                    "approver role under approver_roles, or disable the toggle."
                 )
             return False
 

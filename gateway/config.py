@@ -1055,6 +1055,7 @@ _PLATFORM_ADMIN_KEYS_NOT_READ_UNDER_APPROVALS = (
     "require_admin_for_exec_approval",
     "allow_admin_from",
     "group_allow_admin_from",
+    "approver_roles",
 )
 
 
@@ -1337,6 +1338,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["allow_from"] = platform_cfg["allow_from"]
                 if "allow_admin_from" in platform_cfg:
                     bridged["allow_admin_from"] = platform_cfg["allow_admin_from"]
+                if plat == Platform.DISCORD and "approver_roles" in platform_cfg:
+                    bridged["approver_roles"] = platform_cfg["approver_roles"]
                 if "require_admin_for_exec_approval" in platform_cfg:
                     # Travels with allow_admin_from: bridging the admin list
                     # alone turns slash gating on while leaving the
@@ -1627,6 +1630,14 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         discord_config = _enable_from_env(Platform.DISCORD)
         discord_config.token = discord_token
     
+    # Approver roles (role IDs or names) for dangerous-command approval.
+    # config.yaml wins when both are set.
+    discord_approver_roles = (getenv("DISCORD_APPROVER_ROLES") or "").strip()
+    if discord_approver_roles and Platform.DISCORD in config.platforms:
+        config.platforms[Platform.DISCORD].extra.setdefault(
+            "approver_roles", discord_approver_roles
+        )
+
     discord_home = getenv("DISCORD_HOME_CHANNEL")
     if discord_home and Platform.DISCORD in config.platforms:
         config.platforms[Platform.DISCORD].home_channel = HomeChannel(

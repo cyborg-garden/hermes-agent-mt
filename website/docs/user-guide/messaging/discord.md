@@ -579,6 +579,62 @@ gateway:
 
 Use `/whoami` to see the active scope, your tier (admin / user / unrestricted), and which slash commands you can run.
 
+### Usernames in admin lists
+
+`allow_admin_from` and `group_allow_admin_from` accept Discord **usernames** as well as numeric user IDs. A username is the unique handle shown under your name in your profile (for example `juniperbevensee`), with or without a leading `@`, case-insensitive.
+
+```yaml
+gateway:
+  platforms:
+    discord:
+      extra:
+        allow_admin_from: "1519531373352849518, @alice, bob"
+        group_allow_admin_from:
+          - "@alice"
+```
+
+- Only the unique username matches. Display names, global names and server nicknames are **never** matched — anyone can set theirs to an admin's handle.
+- Webhook messages never match a username entry. A webhook (a bridge, PluralKit, anyone with Manage Webhooks) picks its sender name per message, so it is not a unique handle.
+- Legacy accounts that still have a 4-digit tag (mostly bots) must be written as `name#1234`.
+- Hermes logs each match once (`Admin entry '@alice' matched Discord username 'alice' -> user id …`) so you can check who a name resolved to.
+- **IDs are safer.** People can change their username. If an admin renames themselves they lose admin access until you update the list (it fails closed), and whoever later takes the old name would match it. Use IDs for anyone whose access matters.
+
+## Who Can Approve Dangerous Commands
+
+When the agent wants to run a dangerous command it posts a prompt with **Allow / Deny** buttons. By default any allowed user can click them. To restrict approval to specific people, turn on `require_admin_for_exec_approval`. Approvers are then:
+
+- anyone matching `allow_admin_from` (IDs or usernames, see above), **or**
+- any server member holding a role listed in `approver_roles`.
+
+```yaml
+gateway:
+  platforms:
+    discord:
+      extra:
+        require_admin_for_exec_approval: true
+        allow_admin_from: "1519531373352849518"
+        # Role IDs or role names. Anyone with one of these roles can approve.
+        approver_roles:
+          - "operator"
+          - "987654321098765432"
+```
+
+Or as an environment variable (config.yaml wins if both are set):
+
+```bash
+DISCORD_APPROVER_ROLES=operator,987654321098765432
+```
+
+How `approver_roles` behaves:
+
+- **Checked in the server the prompt was posted in.** The clicker must hold the role in that server.
+- **Role names** match the server's roles case-insensitively, exactly. If a name matches no role, or more than one role, it grants nothing and Hermes logs a warning. Role IDs avoid both problems and survive renames.
+- **`@everyone` never counts**, even if listed.
+- **Never in DMs.** A DM has no server, so roles are not checked there. People who need to approve from DMs must be in `allow_admin_from`.
+- **Approval only.** A role holder can click the approval buttons and run `/approve` and `/deny`. It does **not** make them a slash-command admin — use `allow_admin_from` for that.
+- **Still needs basic access.** The clicker must also be allowed to talk to the bot (`DISCORD_ALLOWED_USERS`, `DISCORD_ALLOWED_ROLES`, or pairing).
+- `approver_roles` on its own does not lock the buttons. Without `require_admin_for_exec_approval: true` the buttons stay open to every allowed user; the roles still gate `/approve` and `/deny`.
+
 ## Interactive Model Picker
 
 Send `/model` with no arguments in a Discord channel to open a dropdown-based model picker:
