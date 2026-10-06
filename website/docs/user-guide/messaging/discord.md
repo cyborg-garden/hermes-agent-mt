@@ -594,6 +594,7 @@ gateway:
 ```
 
 - Only the unique username matches. Display names, global names and server nicknames are **never** matched — anyone can set theirs to an admin's handle.
+- Webhook messages never match a username entry. A webhook (a bridge, PluralKit, anyone with Manage Webhooks) picks its sender name per message, so it is not a unique handle.
 - Legacy accounts that still have a 4-digit tag (mostly bots) must be written as `name#1234`.
 - Hermes logs each match once (`Admin entry '@alice' matched Discord username 'alice' -> user id …`) so you can check who a name resolved to.
 - **IDs are safer.** People can change their username. If an admin renames themselves they lose admin access until you update the list (it fails closed), and whoever later takes the old name would match it. Use IDs for anyone whose access matters.

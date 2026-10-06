@@ -105,10 +105,14 @@ def _username_entry_matches(entry: str, identity: PlatformIdentity) -> bool:
     if not want:
         return False
     disc = str(identity.discriminator or "0").strip()
+    if disc == "0000":
+        # Webhook authors: the sender picks ``name`` per message (bridges,
+        # PluralKit, anyone with Manage Webhooks). Not a unique handle.
+        return False
     if "#" in want:
         want_name, _, want_disc = want.rpartition("#")
         return want_name == name and want_disc == disc
-    return want == name and disc in {"0", "0000", ""}
+    return want == name and disc in {"0", ""}
 
 
 def admin_entries_match(

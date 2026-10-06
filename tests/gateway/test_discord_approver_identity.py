@@ -313,3 +313,28 @@ def test_non_numeric_platform_ids_still_match_exactly():
         policy = policy_from_extra({"allow_admin_from": uid}, "dm")
         assert policy.is_admin(uid) is True
         assert policy.is_admin("someone") is False
+
+
+def test_webhook_author_never_matches_username():
+    """Webhook messages carry a sender-chosen ``name`` and discriminator
+    ``0000`` (bridges, PluralKit, anyone with Manage Webhooks). That name is
+    not a unique handle, so it must never match a username admin entry —
+    neither the bare name nor an explicit ``#0000`` tag."""
+    webhook_author = SimpleNamespace(
+        id=555, name="juniperbevensee", discriminator="0000", bot=True,
+    )
+    built = _discord_platform_identity(webhook_author, None)
+    for entry in ("juniperbevensee", "@juniperbevensee", "juniperbevensee#0000"):
+        policy = policy_from_extra({"group_allow_admin_from": entry}, "group")
+        assert policy.enabled is True
+        assert policy.is_admin("555", built) is False, entry
+
+
+def test_roles_never_grant_outside_guild_even_if_roles_present():
+    """``in_guild`` is the DM guard on its own, not just the empty role set."""
+    forged = PlatformIdentity(
+        username="x", discriminator="0", in_guild=False, guild_id=GUILD,
+        member_role_ids=frozenset({ROLE_APPROVER}), guild_roles=GUILD_ROLES,
+    )
+    assert approver_role_matches({"approver_roles": ROLE_APPROVER}, forged) is False
+    assert approver_role_matches({"approver_roles": "DCG Approver"}, forged) is False
