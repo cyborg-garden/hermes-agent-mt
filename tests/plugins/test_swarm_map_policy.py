@@ -324,3 +324,69 @@ class TestAdminGatedTools:
         monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal")
         self._set_admin_context(is_admin=False)
         assert "terminal" in _pre_tool_call(tool_name="terminal")["message"]
+
+
+_STARTUP_PROBE = r"""
+import json, logging, sys
+records = []
+class _H(logging.Handler):
+    def emit(self, r):
+        if "swarm" in r.name and r.levelno >= logging.WARNING:
+            records.append(r.getMessage())
+logging.getLogger().addHandler(_H())
+logging.getLogger().setLevel(logging.INFO)
+# The gateway startup path: plugins are discovered before model_tools has
+# imported the built-in tools (gateway/run.py, "Discover Python plugins").
+from hermes_cli.plugins import discover_plugins, get_plugin_manager
+discover_plugins()
+loaded = get_plugin_manager()._plugins.get("swarm-map-policy")
+print(json.dumps({"loaded": bool(loaded and loaded.enabled), "warnings": records}))
+"""
+
+
+class TestGatedToolWarningAtStartup:
+    """The unknown-name warning must not fire for real tools at gateway startup.
+
+    At startup the registry holds only plugin tools discovered so far; the
+    built-ins arrive later. A check against that partial registry calls real
+    tools "not gated" while the gate in fact works, sending operators after a
+    bug that is not there. Runs in a fresh interpreter so the registry starts
+    as empty as it does in the gateway.
+    """
+
+    def _run(self, tmp_path, gated):
+        import json
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        home = tmp_path / "hermes_home"
+        home.mkdir()
+        (home / "config.yaml").write_text("plugins:\n  enabled: [swarm-map-policy]\n")
+        env = dict(os.environ)
+        env.update(
+            HERMES_HOME=str(home),
+            HSM_URL="http://127.0.0.1:9",
+            SWARM_MAP_ADMIN_GATED_TOOLS=gated,
+            PYTHONPATH=str(repo) + os.pathsep + env.get("PYTHONPATH", ""),
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", _STARTUP_PROBE],
+            cwd=str(repo), env=env, capture_output=True, text=True, timeout=180,
+        )
+        assert out.returncode == 0, out.stderr[-2000:]
+        result = json.loads(out.stdout.strip().splitlines()[-1])
+        assert result["loaded"], "plugin did not load; probe would be vacuous"
+        return result["warnings"]
+
+    def test_real_tools_do_not_warn(self, tmp_path):
+        warnings = self._run(tmp_path, "terminal,execute_code,web_search,delegate_task")
+        assert not [w for w in warnings if "not gated" in w], warnings
+
+    def test_unknown_name_still_warns(self, tmp_path):
+        """Non-vacuity: a typo must still produce the warning."""
+        warnings = self._run(tmp_path, "terminal,approvall")
+        hits = [w for w in warnings if "not gated" in w]
+        assert hits and "approvall" in hits[0] and "terminal" not in hits[0], warnings

@@ -229,17 +229,22 @@ def _warn_unknown_gated_tools() -> None:
     if not gated:
         return
     try:
-        from tools.registry import registry
+        # At gateway startup plugins are discovered before model_tools imports
+        # the built-ins, so the registry holds only plugin tools. Load the
+        # built-ins first (idempotent) or every real name looks unknown.
+        from tools.registry import discover_builtin_tools, registry
+        discover_builtin_tools()
         known = registry.get_all_tool_names()
     except Exception:
         return
     if not known:
-        return  # tools not loaded yet; nothing to compare against
+        return  # nothing to compare against
     unknown = unknown_gated_tools(gated, known)
     if unknown:
         logger.warning(
-            "swarm-map-policy: %s names tools that do not exist, so they are "
-            "not gated: %s", _ADMIN_GATED_TOOLS_ENV, ", ".join(unknown),
+            "swarm-map-policy: %s names tools that match no built-in or plugin "
+            "tool, so they are not gated: %s (MCP tools register later and "
+            "are not checked here)", _ADMIN_GATED_TOOLS_ENV, ", ".join(unknown),
         )
 
 
