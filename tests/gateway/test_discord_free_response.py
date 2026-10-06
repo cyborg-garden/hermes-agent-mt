@@ -1763,3 +1763,36 @@ async def test_discord_text_batch_does_not_merge_observe_only_with_real_turn(ada
     observed = [e for e in events if e.observe_only]
     assert len(real) == 1 and real[0].text == "answer this"
     assert len(observed) == 1 and observed[0].text == "just chatting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_thread", [False, True], ids=["channel", "thread"])
+async def test_discord_text_batch_keeps_split_tail_in_mentioned_turn(adapter, monkeypatch, in_thread):
+    """A long @mention that Discord splits at 2000 chars keeps its tail.
+
+    Only the first chunk carries the mention, so the continuation chunk is
+    observe-only.  When the pending real turn ended near the split point the
+    tail is a continuation, not a separate message, and must merge into the
+    turn instead of being split off as observed text the bot never answers.
+    """
+    import asyncio
+
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+    adapter._text_batch_delay_seconds = 0.05
+    adapter._text_batch_split_delay_seconds = 0.05
+
+    channel = FakeThread(channel_id=4566, name="t") if in_thread else FakeTextChannel(channel_id=4567)
+    bot_user = adapter._client.user
+    body = "x" * 1990
+    await adapter._handle_message(
+        make_message(channel=channel, content=f"<@{bot_user.id}> {body}", mentions=[bot_user])
+    )
+    await adapter._handle_message(make_message(channel=channel, content="TAIL"))
+    await asyncio.sleep(0.3)
+
+    events = [c.args[0] for c in adapter.handle_message.await_args_list]
+    assert [e.observe_only for e in events] == [False]
+    assert events[0].text.endswith("TAIL")
+    assert body in events[0].text

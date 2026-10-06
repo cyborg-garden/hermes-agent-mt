@@ -7020,14 +7020,24 @@ class DiscordAdapter(BasePlatformAdapter):
         """
         key = self._text_batch_key(event)
         existing = self._pending_text_batches.get(key)
-        if existing is not None and bool(getattr(existing, "observe_only", False)) != bool(
-            getattr(event, "observe_only", False)
-        ):
-            # Never merge an observe-only message with a real turn: the merged
-            # event keeps the first event's flag, so either an @mention is
-            # swallowed as observe-only or un-mentioned text rides along in a
-            # turn the bot answers.  Dispatch the pending batch now and start a
-            # fresh one for this event.
+        existing_observe = bool(getattr(existing, "observe_only", False))
+        event_observe = bool(getattr(event, "observe_only", False))
+        # A long @mention that Discord split at 2000 chars carries the mention
+        # only in its first chunk, so the continuation arrives observe-only.
+        # When the pending real turn ended near the split point, treat the
+        # observed event as that turn's tail and merge it.
+        is_split_tail = (
+            existing is not None
+            and not existing_observe
+            and event_observe
+            and getattr(existing, "_last_chunk_len", 0) >= self._SPLIT_THRESHOLD
+        )
+        if existing is not None and existing_observe != event_observe and not is_split_tail:
+            # Otherwise never merge an observe-only message with a real turn:
+            # the merged event keeps the first event's flag, so either an
+            # @mention is swallowed as observe-only or un-mentioned text rides
+            # along in a turn the bot answers.  Dispatch the pending batch now
+            # and start a fresh one for this event.
             self._pending_text_batches.pop(key, None)
             prior_task = self._pending_text_batch_tasks.pop(key, None)
             if prior_task and not prior_task.done():
