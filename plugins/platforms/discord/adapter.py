@@ -4121,9 +4121,13 @@ class DiscordAdapter(BasePlatformAdapter):
         """
         Resolve non-numeric entries in DISCORD_ALLOWED_USERS to Discord user IDs.
 
-        Users can specify usernames (e.g. "teknium") or display names instead of
-        raw numeric IDs.  After resolution, the env var and internal set are updated
-        so authorization checks work with IDs only.
+        Entries may be the unique Discord username (``teknium`` / ``@teknium``,
+        case-insensitive) or, for legacy accounts with a discriminator such as
+        bots, ``name#1234``. Display names, global names and server nicknames
+        are NEVER matched: anyone can set theirs to a listed name, so matching
+        them would admit strangers from any guild the bot shares. After
+        resolution, the env var and internal set are updated so authorization
+        checks work with IDs only.
         """
         if not self._allowed_user_ids or not self._client:
             return
@@ -4144,13 +4148,15 @@ class DiscordAdapter(BasePlatformAdapter):
                 # first ``on_ready``.
                 numeric_ids.add(entry)
             else:
-                to_resolve.add(entry.lower())
+                to_resolve.add(entry.strip().lstrip("@").strip().lower())
 
+        to_resolve.discard("")
         if not to_resolve:
             return
 
         print(f"[{self.name}] Resolving {len(to_resolve)} username(s): {', '.join(to_resolve)}")
         resolved_count = 0
+        display_only: set = set()
 
         for guild in self._client.guilds:
             # Fetch full member list (requires members intent)
@@ -4163,20 +4169,42 @@ class DiscordAdapter(BasePlatformAdapter):
                 continue
 
             for member in members:
-                name_lower = member.name.lower()
-                display_lower = member.display_name.lower()
-                global_lower = (member.global_name or "").lower()
-
-                matched = name_lower in to_resolve or display_lower in to_resolve or global_lower in to_resolve
-                if matched:
+                name_lower = str(getattr(member, "name", "") or "").lower()
+                disc = str(getattr(member, "discriminator", None) or "0").strip()
+                # Unique-username accounts carry discriminator "0"; a bare
+                # entry only matches those. Legacy accounts (mostly bots)
+                # must be listed as ``name#1234``.
+                if disc in {"0", ""}:
+                    key = name_lower
+                elif disc == "0000":
+                    continue  # webhook-style author: name is sender-chosen
+                else:
+                    key = f"{name_lower}#{disc}"
+                if name_lower and key in to_resolve:
                     uid = str(member.id)
                     numeric_ids.add(uid)
                     resolved_count += 1
-                    matched_name = name_lower if name_lower in to_resolve else (
-                        display_lower if display_lower in to_resolve else global_lower
+                    to_resolve.discard(key)
+                    logger.info(
+                        "[%s] DISCORD_ALLOWED_USERS entry %r resolved to user id %s "
+                        "(by unique username; list the id to be rename-proof)",
+                        self.name, key, uid,
                     )
-                    to_resolve.discard(matched_name)
-                    print(f"[{self.name}] Resolved '{matched_name}' -> {uid} ({member.name}#{member.discriminator})")
+                    continue
+                for alias in (
+                    getattr(member, "display_name", None),
+                    getattr(member, "global_name", None),
+                    getattr(member, "nick", None),
+                ):
+                    alias_lower = str(alias or "").strip().lower()
+                    if alias_lower and alias_lower in to_resolve and alias_lower not in display_only:
+                        display_only.add(alias_lower)
+                        logger.warning(
+                            "[%s] DISCORD_ALLOWED_USERS entry %r matches only a display "
+                            "name/nickname (user %s, username %r). Display names are not "
+                            "matched; replace the entry with the user id or username.",
+                            self.name, alias_lower, member.id, name_lower,
+                        )
 
             if not to_resolve:
                 break
