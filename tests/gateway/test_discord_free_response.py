@@ -116,6 +116,7 @@ def adapter(monkeypatch):
         "DISCORD_HISTORY_BACKFILL",
         "DISCORD_HISTORY_BACKFILL_LIMIT",
         "DISCORD_ALLOW_BOTS",
+        "DISCORD_OBSERVE_UNMENTIONED",
     ):
         monkeypatch.delenv(_var, raising=False)
 
@@ -565,8 +566,9 @@ async def test_discord_auto_thread_can_be_disabled(adapter, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discord_bot_thread_skips_mention_requirement(adapter, monkeypatch):
-    """Messages in a thread the bot has participated in should not require @mention."""
+    """Opt-out: with thread_require_mention=false, a participated thread needs no @mention."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "false")
     monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
     monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
 
@@ -705,11 +707,11 @@ async def test_discord_voice_linked_parent_thread_still_requires_mention(adapter
 
 
 @pytest.mark.asyncio
-async def test_discord_thread_default_keeps_responding_after_participation(adapter, monkeypatch):
-    """Default behavior: once the bot is in a thread, it auto-responds without @mention."""
+async def test_discord_thread_opt_out_keeps_responding_after_participation(adapter, monkeypatch):
+    """Opt-out (thread_require_mention=false): once in a thread, auto-respond without @mention."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
     monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
-    monkeypatch.delenv("DISCORD_THREAD_REQUIRE_MENTION", raising=False)
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "false")
 
     thread = FakeThread(channel_id=456, name="follow-up")
     adapter._threads.mark("456")  # bot has previously participated
@@ -1359,7 +1361,7 @@ async def test_discord_participated_thread_backfills_without_mention(adapter, mo
     """Known threads still need recent thread context when mention gating is bypassed."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
     monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
-    monkeypatch.delenv("DISCORD_THREAD_REQUIRE_MENTION", raising=False)
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "false")
     adapter.config.extra["history_backfill"] = True
     adapter._fetch_channel_context = AsyncMock(return_value="[Recent channel messages]\n[Alice] thread context")
 
@@ -1647,3 +1649,150 @@ async def test_discord_mentioned_is_not_observe_only(adapter, monkeypatch):
     adapter.handle_message.assert_awaited_once()
     event = adapter.handle_message.await_args.args[0]
     assert event.observe_only is False
+
+
+# ---------------------------------------------------------------------------
+# Thread mention gating (cyborg-garden/hermes-agent-mt#140)
+#
+# Incident 2026-10-06: an un-mentioned message reached a bot as observe-only,
+# the adapter marked the thread as "participated", and with the old
+# thread_require_mention=false default the bot then answered every later
+# un-mentioned message in that thread.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discord_observe_only_message_does_not_mark_thread(adapter, monkeypatch):
+    """Watching a message is not joining the thread: no participation mark."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+    # Opted out of thread gating, so a bogus mark would open the thread.
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "false")
+
+    thread = FakeThread(channel_id=4561, name="someone else's thread")
+    message = make_message(channel=thread, content="not for the bot")
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+    assert adapter.handle_message.await_args.args[0].observe_only is True
+    assert "4561" not in adapter._threads
+
+
+@pytest.mark.asyncio
+async def test_discord_observed_thread_stays_observe_only_on_next_message(adapter, monkeypatch):
+    """The second un-mentioned message in an observed thread is still observe-only."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+    monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "false")
+
+    thread = FakeThread(channel_id=4562, name="someone else's thread")
+    await adapter._handle_message(make_message(channel=thread, content="first"))
+    await adapter._handle_message(make_message(channel=thread, content="second"))
+
+    events = [c.args[0] for c in adapter.handle_message.await_args_list]
+    assert [e.observe_only for e in events] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_discord_mentioned_message_in_thread_still_marks_participation(adapter, monkeypatch):
+    """A real @mention in a thread still records participation (guard is not too broad)."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+
+    thread = FakeThread(channel_id=4563, name="thread")
+    bot_user = adapter._client.user
+    message = make_message(
+        channel=thread, content=f"<@{bot_user.id}> over to you", mentions=[bot_user],
+    )
+    await adapter._handle_message(message)
+
+    assert adapter.handle_message.await_args.args[0].observe_only is False
+    assert "4563" in adapter._threads
+
+
+@pytest.mark.asyncio
+async def test_discord_thread_require_mention_defaults_true(adapter, monkeypatch):
+    """With nothing configured, a participated thread still needs an @mention."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_THREAD_REQUIRE_MENTION", raising=False)
+    assert "thread_require_mention" not in adapter.config.extra
+
+    thread = FakeThread(channel_id=4564, name="bot's own thread")
+    adapter._threads.mark("4564")
+
+    await adapter._handle_message(make_message(channel=thread, content="chatter"))
+
+    adapter.handle_message.assert_not_awaited()
+    assert adapter._discord_thread_require_mention() is True
+
+
+def test_discord_default_config_requires_mention_in_threads():
+    """A config.yaml dumped from DEFAULT_CONFIG must not re-open threads."""
+    from hermes_cli.config import DEFAULT_CONFIG
+
+    assert DEFAULT_CONFIG["discord"]["thread_require_mention"] is True
+
+
+@pytest.mark.asyncio
+async def test_discord_text_batch_does_not_merge_observe_only_with_real_turn(adapter, monkeypatch):
+    """An observed message followed quickly by a real @mention must not swallow the mention.
+
+    Text batching merges events with the same session key.  Before the fix the
+    merged event kept the first event's observe_only=True, so the @mention that
+    followed within the batch window never produced a turn.  The opposite
+    order (real turn first, observed second) would fold un-mentioned text into
+    a replied-to turn.  Batches must not mix the two kinds.
+    """
+    import asyncio
+
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+    adapter._text_batch_delay_seconds = 0.05
+
+    channel = FakeTextChannel(channel_id=4565)
+    bot_user = adapter._client.user
+    await adapter._handle_message(make_message(channel=channel, content="just chatting"))
+    await adapter._handle_message(
+        make_message(channel=channel, content=f"<@{bot_user.id}> answer this", mentions=[bot_user])
+    )
+    await asyncio.sleep(0.3)
+
+    events = [c.args[0] for c in adapter.handle_message.await_args_list]
+    real = [e for e in events if not e.observe_only]
+    observed = [e for e in events if e.observe_only]
+    assert len(real) == 1 and real[0].text == "answer this"
+    assert len(observed) == 1 and observed[0].text == "just chatting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_thread", [False, True], ids=["channel", "thread"])
+async def test_discord_text_batch_keeps_split_tail_in_mentioned_turn(adapter, monkeypatch, in_thread):
+    """A long @mention that Discord splits at 2000 chars keeps its tail.
+
+    Only the first chunk carries the mention, so the continuation chunk is
+    observe-only.  When the pending real turn ended near the split point the
+    tail is a continuation, not a separate message, and must merge into the
+    turn instead of being split off as observed text the bot never answers.
+    """
+    import asyncio
+
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_OBSERVE_UNMENTIONED", "true")
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+    adapter._text_batch_delay_seconds = 0.05
+    adapter._text_batch_split_delay_seconds = 0.05
+
+    channel = FakeThread(channel_id=4566, name="t") if in_thread else FakeTextChannel(channel_id=4567)
+    bot_user = adapter._client.user
+    body = "x" * 1990
+    await adapter._handle_message(
+        make_message(channel=channel, content=f"<@{bot_user.id}> {body}", mentions=[bot_user])
+    )
+    await adapter._handle_message(make_message(channel=channel, content="TAIL"))
+    await asyncio.sleep(0.3)
+
+    events = [c.args[0] for c in adapter.handle_message.await_args_list]
+    assert [e.observe_only for e in events] == [False]
+    assert events[0].text.endswith("TAIL")
+    assert body in events[0].text
