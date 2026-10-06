@@ -7,8 +7,9 @@ gateway*, which ones can run *which slash commands*.
 Two lists per platform scope (DM vs group, mirroring ``allow_from`` vs
 ``group_allow_from``):
 
-  - ``allow_admin_from``      — user IDs that get every registered slash
-                                command (built-in + plugin-registered).
+  - ``allow_admin_from``      — user IDs (or, on Discord, unique usernames)
+                                that get every registered slash command
+                                (built-in + plugin-registered).
   - ``user_allowed_commands`` — slash command names non-admin users may
                                 run. Empty / unset → non-admins get no
                                 slash commands.
@@ -34,8 +35,11 @@ included here — only the slash-command access split.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, FrozenSet, Iterable, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # Slash commands that MUST stay reachable for any allowed user, even when
@@ -54,6 +58,152 @@ _ALWAYS_ALLOWED_FOR_USERS: FrozenSet[str] = frozenset({
 
 
 @dataclass(frozen=True)
+class PlatformIdentity:
+    """Live identity facts an adapter attaches for name/role admin matching.
+
+    Built by the Discord adapter from the live ``Member``/``User`` object at
+    ingest or button-click time (``_discord_platform_identity``). Platforms
+    that don't build one pass ``None`` and keep the numeric-ID-only behavior.
+
+    ``username`` is the platform's *unique* handle (Discord ``user.name``) —
+    never a display name, global name or nickname, which anyone can set to
+    anything. ``in_guild`` is False in DMs, and roles never grant there.
+    """
+
+    username: Optional[str] = None
+    discriminator: Optional[str] = None
+    in_guild: bool = False
+    guild_id: Optional[str] = None
+    member_role_ids: FrozenSet[str] = frozenset()
+    guild_roles: Tuple[Tuple[str, str], ...] = ()  # (role id, role name)
+
+
+# One log line per (entry, user) / (guild, role entry) so operators can verify
+# what a name resolved to without the log repeating on every message.
+_logged_resolutions: set = set()
+
+
+def _log_once(key: tuple, level: int, msg: str, *args: Any) -> None:
+    if key in _logged_resolutions:
+        return
+    _logged_resolutions.add(key)
+    logger.log(level, msg, *args)
+
+
+def _username_entry_matches(entry: str, identity: PlatformIdentity) -> bool:
+    """Match one non-numeric admin entry against the unique handle.
+
+    ``juniperbevensee`` / ``@juniperbevensee`` match a user whose ``name`` is
+    that (case-insensitive) and who is on the unique-username system
+    (discriminator ``0``/absent). Legacy accounts — mostly bots — must be
+    written as ``name#1234``.
+    """
+    name = (identity.username or "").strip().lower()
+    if not name:
+        return False
+    want = entry.strip().lstrip("@").strip().lower()
+    if not want:
+        return False
+    disc = str(identity.discriminator or "0").strip()
+    if "#" in want:
+        want_name, _, want_disc = want.rpartition("#")
+        return want_name == name and want_disc == disc
+    return want == name and disc in {"0", "0000", ""}
+
+
+def admin_entries_match(
+    entries: Iterable[str],
+    user_id: Optional[str],
+    identity: Optional[PlatformIdentity] = None,
+) -> bool:
+    """True if *user_id* / *identity* matches any admin entry.
+
+    Every entry is first compared exactly against the user id (fast path, no
+    identity needed) — that keeps non-numeric platform ids (Slack ``U…``,
+    Matrix ``@a:b``, phone numbers) working as before. Non-numeric entries are
+    then tried as usernames, only when the adapter supplied an identity. Shared by slash gating, /approve and /deny, and the
+    Discord exec-approval buttons so all three agree.
+    """
+    uid = str(user_id).strip() if user_id is not None else ""
+    names = []
+    for raw in entries or ():
+        entry = str(raw).strip()
+        if not entry:
+            continue
+        if uid and entry == uid:
+            return True
+        if not entry.isdigit() and entry != "*":
+            names.append(entry)
+    if not names or identity is None or not uid:
+        return False
+    for entry in names:
+        if _username_entry_matches(entry, identity):
+            _log_once(
+                ("user", entry.lower(), uid), logging.INFO,
+                "Admin entry %r matched Discord username %r -> user id %s "
+                "(usernames can be changed; list the id to be rename-proof)",
+                entry, identity.username, uid,
+            )
+            return True
+    return False
+
+
+def approver_roles_match(
+    role_entries: Iterable[str],
+    identity: Optional[PlatformIdentity],
+) -> bool:
+    """True if the member holds a listed approver role in this guild.
+
+    Entries are role IDs or role names. Names resolve against the guild's
+    current roles, case-insensitive exact match; a name matching zero or
+    several roles grants nothing and logs a WARNING. The @everyone role
+    (id == guild id) never grants. Never grants outside a guild (DMs).
+    """
+    if identity is None or not identity.in_guild:
+        return False
+    entries = [str(e).strip() for e in (role_entries or ()) if str(e).strip()]
+    if not entries:
+        return False
+    guild_id = str(identity.guild_id or "")
+    held = {str(r) for r in identity.member_role_ids} - {guild_id}
+    if not held:
+        return False
+    for entry in entries:
+        if entry.isdigit():
+            if entry != guild_id and entry in held:
+                return True
+            continue
+        want = entry.lstrip("@").strip().lower() if entry.lower() != "@everyone" else ""
+        matches = [
+            str(rid) for rid, rname in identity.guild_roles
+            if want and str(rname).strip().lower() == want and str(rid) != guild_id
+        ]
+        if len(matches) != 1:
+            _log_once(
+                ("role", guild_id, entry.lower(), len(matches)), logging.WARNING,
+                "approver_roles entry %r matches %d roles in guild %s — not "
+                "granting anything for it. Use the role id to be exact.",
+                entry, len(matches), guild_id or "?",
+            )
+            continue
+        _log_once(
+            ("role", guild_id, entry.lower(), matches[0]), logging.INFO,
+            "approver_roles entry %r resolved to role id %s in guild %s",
+            entry, matches[0], guild_id or "?",
+        )
+        if matches[0] in held:
+            return True
+    return False
+
+
+def approver_role_matches(extra: Any, identity: Optional[PlatformIdentity]) -> bool:
+    """``approver_roles`` from a platform ``extra`` dict, checked for *identity*."""
+    if not isinstance(extra, dict):
+        return False
+    return approver_roles_match(_coerce_id_list(extra.get("approver_roles")), identity)
+
+
+@dataclass(frozen=True)
 class SlashAccessPolicy:
     """Resolved access policy for a single (platform, scope) pair.
 
@@ -66,7 +216,9 @@ class SlashAccessPolicy:
     admin_user_ids: FrozenSet[str]
     user_allowed_commands: FrozenSet[str]
 
-    def is_admin(self, user_id: Optional[str]) -> bool:
+    def is_admin(
+        self, user_id: Optional[str], identity: Optional[PlatformIdentity] = None,
+    ) -> bool:
         if not self.enabled:
             # Gating disabled → treat every allowed user as admin so
             # downstream code can keep using ``is_admin`` / ``can_run``
@@ -74,12 +226,15 @@ class SlashAccessPolicy:
             return True
         if not user_id:
             return False
-        return str(user_id) in self.admin_user_ids
+        return admin_entries_match(self.admin_user_ids, user_id, identity)
 
-    def can_run(self, user_id: Optional[str], canonical_cmd: str) -> bool:
+    def can_run(
+        self, user_id: Optional[str], canonical_cmd: str,
+        identity: Optional[PlatformIdentity] = None,
+    ) -> bool:
         if not self.enabled:
             return True
-        if self.is_admin(user_id):
+        if self.is_admin(user_id, identity):
             return True
         if not canonical_cmd:
             return False
@@ -223,6 +378,10 @@ def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
 
 
 __all__ = [
+    "PlatformIdentity",
+    "admin_entries_match",
+    "approver_role_matches",
+    "approver_roles_match",
     "SlashAccessPolicy",
     "policy_from_extra",
     "policy_for_source",

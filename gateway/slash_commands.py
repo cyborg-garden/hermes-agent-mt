@@ -401,7 +401,7 @@ class GatewaySlashCommandsMixin:
                 f"Slash commands: all available"
             )
 
-        if policy.is_admin(user_id):
+        if policy.is_admin(user_id, getattr(source, "platform_identity", None)):
             return (
                 f"**You** — {platform} ({scope})\n"
                 f"User ID: `{user_id}`\n"
@@ -821,7 +821,11 @@ class GatewaySlashCommandsMixin:
             from gateway.slash_access import policy_for_source
             policy = policy_for_source(self.config, source)
             uid = getattr(source, "user_id", None)
-            return bool(policy.enabled and uid and policy.is_admin(uid))
+            return bool(
+                policy.enabled
+                and uid
+                and policy.is_admin(uid, getattr(source, "platform_identity", None))
+            )
         except Exception:
             return False
 

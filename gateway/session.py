@@ -17,7 +17,7 @@ import threading
 import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -202,6 +202,12 @@ class SessionSource:
     # deliberately excluded from ``to_dict``/``from_dict`` so a peer can never
     # forge it across the wire or have it restored from persistence.
     delivered_via_upstream_relay: bool = False
+
+    # Internal, wire-INVISIBLE: live identity facts (unique username, member
+    # role ids, guild roles) the Discord adapter attaches at ingest so admin
+    # checks can honor usernames and ``approver_roles``. Never serialized —
+    # it must not be forgeable across the relay or restored from disk.
+    platform_identity: Optional[Any] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # D-Q2.5 dual-field reconciliation: `scope_id` is canonical, `guild_id`
