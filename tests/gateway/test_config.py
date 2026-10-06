@@ -1594,3 +1594,88 @@ class TestMultiplexProfilesConfig:
             "Explicit top-level false was overridden by nested true — "
             "loader must respect top-level precedence when key is present"
         )
+
+
+class TestExecApprovalAdminGatePlacement:
+    """The Discord exec-approval admin gate is read from ``platforms.discord.extra``.
+
+    Regression for the 2026-10-06 fleet audit: two agents had
+    ``require_admin_for_exec_approval`` / ``allow_admin_from`` under the
+    top-level ``approvals:`` block, where nothing reads them, so the
+    approval-button gate was silently OFF.
+    """
+
+    def _load(self, tmp_path, monkeypatch, yaml_text):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(yaml_text, encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        return load_gateway_config()
+
+    def test_top_level_discord_block_bridges_exec_approval_toggle(self, tmp_path, monkeypatch):
+        """A top-level ``discord:`` block already bridges ``allow_admin_from``
+        (turning slash gating ON); the exec-approval toggle must travel with
+        it, or buttons stay ungated while slash commands are gated."""
+        config = self._load(
+            tmp_path, monkeypatch,
+            "discord:\n"
+            "  require_admin_for_exec_approval: true\n"
+            "  allow_admin_from: '111'\n",
+        )
+        extra = config.platforms[Platform.DISCORD].extra
+        assert extra["allow_admin_from"] == "111"
+        assert extra["require_admin_for_exec_approval"] is True
+
+    def test_platform_extra_placement_still_works(self, tmp_path, monkeypatch):
+        config = self._load(
+            tmp_path, monkeypatch,
+            "platforms:\n"
+            "  discord:\n"
+            "    enabled: true\n"
+            "    extra:\n"
+            "      require_admin_for_exec_approval: true\n"
+            "      allow_admin_from: '111'\n",
+        )
+        extra = config.platforms[Platform.DISCORD].extra
+        assert extra["require_admin_for_exec_approval"] is True
+        assert extra["allow_admin_from"] == "111"
+
+    def test_keys_under_approvals_block_warn_and_are_not_honored(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """Keys under ``approvals:`` are misplaced. They are NOT silently
+        honored (that would change who may approve on deploy without an
+        operator decision); instead the load logs a WARNING that names the
+        right home so the misplacement is visible."""
+        with caplog.at_level(logging.WARNING, logger="gateway.config"):
+            config = self._load(
+                tmp_path, monkeypatch,
+                "approvals:\n"
+                "  admin_only: true\n"
+                "  require_admin_for_exec_approval: true\n"
+                "  allow_admin_from: '111,222'\n"
+                "platforms:\n"
+                "  discord:\n"
+                "    enabled: true\n",
+            )
+        extra = config.platforms[Platform.DISCORD].extra
+        assert "require_admin_for_exec_approval" not in extra
+        assert "allow_admin_from" not in extra
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        hit = [w for w in warnings if "approvals:" in w and "platforms.discord.extra" in w]
+        assert hit, f"expected a misplacement warning, got {warnings!r}"
+        assert "require_admin_for_exec_approval" in hit[0]
+        assert "allow_admin_from" in hit[0]
+
+    def test_no_warning_for_normal_approvals_block(self, tmp_path, monkeypatch, caplog):
+        with caplog.at_level(logging.WARNING, logger="gateway.config"):
+            self._load(
+                tmp_path, monkeypatch,
+                "approvals:\n"
+                "  mode: manual\n"
+                "  admin_only: true\n",
+            )
+        assert not [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "approvals:" in r.getMessage()
+        ]

@@ -1047,6 +1047,38 @@ class GatewayConfig:
         return "public"
 
 
+# Per-platform admin keys that operators sometimes put under the top-level
+# ``approvals:`` block. Nothing reads them there: the exec-approval button gate
+# and slash-command gating read ``platforms.<platform>.extra`` (or a top-level
+# ``<platform>:`` block, which is bridged into it).
+_PLATFORM_ADMIN_KEYS_NOT_READ_UNDER_APPROVALS = (
+    "require_admin_for_exec_approval",
+    "allow_admin_from",
+    "group_allow_admin_from",
+)
+
+
+def _warn_misplaced_approval_admin_keys(yaml_cfg: dict) -> None:
+    """Log loudly when admin-gate keys sit under ``approvals:``.
+
+    They are deliberately NOT honored from there: doing so would change who
+    may approve dangerous commands on the next deploy, without an operator
+    choosing it. The warning makes the silent no-op visible instead.
+    """
+    approvals = yaml_cfg.get("approvals") if isinstance(yaml_cfg, dict) else None
+    if not isinstance(approvals, dict):
+        return
+    misplaced = [k for k in _PLATFORM_ADMIN_KEYS_NOT_READ_UNDER_APPROVALS if k in approvals]
+    if not misplaced:
+        return
+    logger.warning(
+        "config.yaml has %s under approvals:, where they are ignored, so "
+        "this admin gate is OFF. Move them to platforms.discord.extra (or "
+        "the matching platforms.<platform>.extra).",
+        ", ".join(misplaced),
+    )
+
+
 def load_gateway_config() -> GatewayConfig:
     """
     Load gateway configuration from multiple sources.
@@ -1089,6 +1121,8 @@ def load_gateway_config() -> GatewayConfig:
             # the messaging gateway. Fail-open via the shared helper.
             from hermes_cli import managed_scope
             yaml_cfg = managed_scope.apply_managed_overlay(yaml_cfg)
+
+            _warn_misplaced_approval_admin_keys(yaml_cfg)
 
             # Map config.yaml keys → GatewayConfig.from_dict() schema.
             # Each key overwrites whatever gateway.json may have set.
@@ -1303,6 +1337,11 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["allow_from"] = platform_cfg["allow_from"]
                 if "allow_admin_from" in platform_cfg:
                     bridged["allow_admin_from"] = platform_cfg["allow_admin_from"]
+                if "require_admin_for_exec_approval" in platform_cfg:
+                    # Travels with allow_admin_from: bridging the admin list
+                    # alone turns slash gating on while leaving the
+                    # exec-approval buttons ungated.
+                    bridged["require_admin_for_exec_approval"] = platform_cfg["require_admin_for_exec_approval"]
                 if "user_allowed_commands" in platform_cfg:
                     bridged["user_allowed_commands"] = platform_cfg["user_allowed_commands"]
                 if "group_policy" in platform_cfg:

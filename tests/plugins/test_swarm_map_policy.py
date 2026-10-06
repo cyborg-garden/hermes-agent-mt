@@ -249,61 +249,144 @@ class TestAdminResolution:
         mock_admin.assert_called_once_with("tg-user-789", "telegram")
 
 
-class TestApprovalGating:
-    """Tests for approval command admin gating via pre_tool_call."""
+class TestAdminGatedTools:
+    """pre_tool_call admin gating.
+
+    Regression for the 2026-10-06 audit: the gate listed ``approval`` and
+    ``pr_approval``, which are not registered tools, so it never fired, while
+    its tests (which called the hook with those made-up names) stayed green.
+    Dangerous-command approval is not a tool call at all: it is the gateway
+    approval queue (/approve, Discord buttons), gated in gateway/run.py and
+    the Discord adapter. This hook can only gate real tool names.
+    """
 
     def setup_method(self):
         from plugins.swarm_map_policy import clear_session_context
         clear_session_context()
 
     def _set_admin_context(self, is_admin=True):
-        """Set up session context with admin status."""
         from plugins.swarm_map_policy import _pre_gateway_dispatch
         event = _make_event(platform="signal", user_id="user-1")
         with patch("plugins.swarm_map_policy.is_platform_admin", return_value=is_admin):
             _pre_gateway_dispatch(event=event)
 
-    def test_admin_can_use_approval_tool(self):
-        """Admin users can execute approval tools."""
+    def test_every_default_gated_name_is_a_registered_tool(self):
+        """Non-vacuity floor: a gated name that matches no tool is a dead gate."""
+        from tools.registry import discover_builtin_tools, registry
+        from plugins.swarm_map_policy import ADMIN_GATED_TOOLS
+        discover_builtin_tools()
+        known = set(registry.get_all_tool_names())
+        assert known, "registry discovery returned nothing; test would be vacuous"
+        assert set(ADMIN_GATED_TOOLS) <= known, (
+            f"gated names that match no registered tool: "
+            f"{sorted(set(ADMIN_GATED_TOOLS) - known)}"
+        )
+
+    def test_unknown_names_reported(self):
+        from plugins.swarm_map_policy import unknown_gated_tools
+        assert unknown_gated_tools({"terminal", "approval"}, ["terminal", "web_search"]) == ["approval"]
+        assert unknown_gated_tools({"terminal"}, ["terminal"]) == []
+
+    def test_env_gates_a_real_tool_for_non_admin(self, monkeypatch):
         from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal, execute_code")
+        self._set_admin_context(is_admin=False)
+        for tool in ("terminal", "execute_code"):
+            result = _pre_tool_call(tool_name=tool)
+            assert result is not None and result["action"] == "block", tool
+
+    def test_env_gated_tool_allowed_for_admin(self, monkeypatch):
+        from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal")
         self._set_admin_context(is_admin=True)
-        result = _pre_tool_call(tool_name="approval")
-        assert result is None  # Allowed
+        assert _pre_tool_call(tool_name="terminal") is None
 
-    def test_non_admin_blocked_from_approval(self):
-        """Non-admin users are blocked from approval tools."""
+    def test_env_gated_tool_blocked_without_context(self, monkeypatch):
+        """Fail-closed: no dispatch context means not known to be an admin."""
         from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal")
+        result = _pre_tool_call(tool_name="terminal")
+        assert result is not None and result["action"] == "block"
+
+    def test_non_gated_tool_allowed_without_admin(self, monkeypatch):
+        from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal")
         self._set_admin_context(is_admin=False)
-        result = _pre_tool_call(tool_name="approval")
-        assert result is not None
-        assert result["action"] == "block"
-        assert "admin" in result["message"].lower() or "Admin" in result["message"]
+        assert _pre_tool_call(tool_name="web_search") is None
 
-    def test_non_admin_blocked_from_pr_approval(self):
-        """Non-admin users are blocked from pr_approval tool."""
+    def test_non_gated_tool_allowed_without_context(self, monkeypatch):
         from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.delenv("SWARM_MAP_ADMIN_GATED_TOOLS", raising=False)
+        assert _pre_tool_call(tool_name="web_search") is None
+
+    def test_block_message_names_the_tool(self, monkeypatch):
+        from plugins.swarm_map_policy import _pre_tool_call
+        monkeypatch.setenv("SWARM_MAP_ADMIN_GATED_TOOLS", "terminal")
         self._set_admin_context(is_admin=False)
-        result = _pre_tool_call(tool_name="pr_approval")
-        assert result is not None
-        assert result["action"] == "block"
+        assert "terminal" in _pre_tool_call(tool_name="terminal")["message"]
 
-    def test_no_context_blocks_approval(self):
-        """Missing session context blocks approval tools (fail-closed)."""
-        from plugins.swarm_map_policy import _pre_tool_call
-        # No dispatch happened, so no context
-        result = _pre_tool_call(tool_name="approval")
-        assert result is not None
-        assert result["action"] == "block"
 
-    def test_non_gated_tool_allowed_without_admin(self):
-        """Non-gated tools are allowed regardless of admin status."""
-        from plugins.swarm_map_policy import _pre_tool_call
-        self._set_admin_context(is_admin=False)
-        result = _pre_tool_call(tool_name="web_search")
-        assert result is None  # Allowed
+_STARTUP_PROBE = r"""
+import json, logging, sys
+records = []
+class _H(logging.Handler):
+    def emit(self, r):
+        if "swarm" in r.name and r.levelno >= logging.WARNING:
+            records.append(r.getMessage())
+logging.getLogger().addHandler(_H())
+logging.getLogger().setLevel(logging.INFO)
+# The gateway startup path: plugins are discovered before model_tools has
+# imported the built-in tools (gateway/run.py, "Discover Python plugins").
+from hermes_cli.plugins import discover_plugins, get_plugin_manager
+discover_plugins()
+loaded = get_plugin_manager()._plugins.get("swarm-map-policy")
+print(json.dumps({"loaded": bool(loaded and loaded.enabled), "warnings": records}))
+"""
 
-    def test_non_gated_tool_allowed_without_context(self):
-        """Non-gated tools are allowed even without session context."""
-        from plugins.swarm_map_policy import _pre_tool_call
-        result = _pre_tool_call(tool_name="web_search")
-        assert result is None  # Allowed
+
+class TestGatedToolWarningAtStartup:
+    """The unknown-name warning must not fire for real tools at gateway startup.
+
+    At startup the registry holds only plugin tools discovered so far; the
+    built-ins arrive later. A check against that partial registry calls real
+    tools "not gated" while the gate in fact works, sending operators after a
+    bug that is not there. Runs in a fresh interpreter so the registry starts
+    as empty as it does in the gateway.
+    """
+
+    def _run(self, tmp_path, gated):
+        import json
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        home = tmp_path / "hermes_home"
+        home.mkdir()
+        (home / "config.yaml").write_text("plugins:\n  enabled: [swarm-map-policy]\n")
+        env = dict(os.environ)
+        env.update(
+            HERMES_HOME=str(home),
+            HSM_URL="http://127.0.0.1:9",
+            SWARM_MAP_ADMIN_GATED_TOOLS=gated,
+            PYTHONPATH=str(repo) + os.pathsep + env.get("PYTHONPATH", ""),
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", _STARTUP_PROBE],
+            cwd=str(repo), env=env, capture_output=True, text=True, timeout=180,
+        )
+        assert out.returncode == 0, out.stderr[-2000:]
+        result = json.loads(out.stdout.strip().splitlines()[-1])
+        assert result["loaded"], "plugin did not load; probe would be vacuous"
+        return result["warnings"]
+
+    def test_real_tools_do_not_warn(self, tmp_path):
+        warnings = self._run(tmp_path, "terminal,execute_code,web_search,delegate_task")
+        assert not [w for w in warnings if "not gated" in w], warnings
+
+    def test_unknown_name_still_warns(self, tmp_path):
+        """Non-vacuity: a typo must still produce the warning."""
+        warnings = self._run(tmp_path, "terminal,approvall")
+        hits = [w for w in warnings if "not gated" in w]
+        assert hits and "approvall" in hits[0] and "terminal" not in hits[0], warnings
