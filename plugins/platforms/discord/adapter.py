@@ -5263,21 +5263,25 @@ class DiscordAdapter(BasePlatformAdapter):
     def _discord_thread_require_mention(self) -> bool:
         """Return whether thread participation requires @mention to follow up.
 
-        When ``False`` (default), once the bot has participated in a thread it
-        keeps responding to every message in that thread without needing to be
-        mentioned again — useful for one-on-one conversations.
+        When ``True`` (default), the @mention requirement is enforced inside
+        threads the same as in channels, even after the bot has participated.
+        This is the safe posture for shared servers: a bot never answers an
+        un-mentioned message just because it once spoke in (or watched) the
+        thread, which also prevents bot-to-bot loops and cross-replies.
 
-        When ``True``, the @mention requirement is enforced inside threads as
-        well.  Set this when multiple bots share a thread and you want each
-        one to only fire on explicit @mention, avoiding bot-to-bot loops or
-        unwanted cross-replies.
+        When ``False``, once the bot has participated in a thread it keeps
+        responding to every message in that thread without needing to be
+        mentioned again — an explicit opt-in for one-on-one threads.
+
+        Fork divergence: upstream hermes-agent defaults this to ``False``.
+        cyborg-garden flipped it to fail closed (hermes-agent-mt#140).
         """
         configured = self.config.extra.get("thread_require_mention")
         if configured is not None:
             if isinstance(configured, str):
                 return configured.lower() not in {"false", "0", "no", "off"}
             return bool(configured)
-        return os.getenv("DISCORD_THREAD_REQUIRE_MENTION", "false").lower() in {"true", "1", "yes", "on"}
+        return os.getenv("DISCORD_THREAD_REQUIRE_MENTION", "true").lower() not in {"false", "0", "no", "off"}
 
     def _discord_history_backfill(self) -> bool:
         """Return whether history backfill is enabled for shared sessions."""
@@ -6972,8 +6976,11 @@ class DiscordAdapter(BasePlatformAdapter):
         )
 
         # Track thread participation so the bot won't require @mention for
-        # follow-up messages in threads it has already engaged in.
-        if thread_id:
+        # follow-up messages in threads it has already engaged in.  An
+        # observe-only message is not participation: marking on it let a bot
+        # that merely watched a thread answer every later un-mentioned message
+        # there (#140).
+        if thread_id and not observe_only:
             self._threads.mark(thread_id)
 
         # Only batch plain text messages — commands, media, etc. dispatch
@@ -7013,6 +7020,22 @@ class DiscordAdapter(BasePlatformAdapter):
         """
         key = self._text_batch_key(event)
         existing = self._pending_text_batches.get(key)
+        if existing is not None and bool(getattr(existing, "observe_only", False)) != bool(
+            getattr(event, "observe_only", False)
+        ):
+            # Never merge an observe-only message with a real turn: the merged
+            # event keeps the first event's flag, so either an @mention is
+            # swallowed as observe-only or un-mentioned text rides along in a
+            # turn the bot answers.  Dispatch the pending batch now and start a
+            # fresh one for this event.
+            self._pending_text_batches.pop(key, None)
+            prior_task = self._pending_text_batch_tasks.pop(key, None)
+            if prior_task and not prior_task.done():
+                prior_task.cancel()
+            flush_now = asyncio.create_task(self.handle_message(existing))
+            self._background_tasks.add(flush_now)
+            flush_now.add_done_callback(self._background_tasks.discard)
+            existing = None
         chunk_len = len(event.text or "")
         if existing is None:
             event._last_chunk_len = chunk_len  # type: ignore[attr-defined]
