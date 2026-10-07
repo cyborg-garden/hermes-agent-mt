@@ -188,6 +188,11 @@ RUN npm install --prefer-offline --no-audit --fetch-retries=5 && \
 # image update and recall/retain then fails with
 # `ModuleNotFoundError: No module named 'hindsight_client'` (#38128).
 #
+# The web-research SDKs ([firecrawl] for web_extract against a self-hosted
+# FIRECRAWL_API_URL, [ddgs] for the keyless DuckDuckGo search fallback) are
+# baked in because HERMES_DISABLE_LAZY_INSTALLS=1 below means a backend whose
+# SDK is missing at build time can never import in the container.
+#
 # The Matrix gateway's deps ([matrix] extra) are baked in because
 # python-olm (transitive via mautrix[encryption]) builds from source on
 # Python/image combinations without usable wheels.  The Docker image is
@@ -198,7 +203,7 @@ RUN npm install --prefer-offline --no-audit --fetch-retries=5 && \
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra firecrawl --extra ddgs
 # Pre-install voice transcription (faster-whisper) so voice memos Just Work
 # in production gateway deployments without lazy-install latency.
 RUN uv pip install --no-cache-dir faster-whisper==1.2.1

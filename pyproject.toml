@@ -148,6 +148,10 @@ anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
 # search provider (configured via `hermes tools` or config.yaml).
 exa = ["exa-py==2.10.2"]
 firecrawl = ["firecrawl-py==4.17.0"]
+# Keyless DuckDuckGo search fallback (plugins/web/ddgs). Opt-in like the
+# other search backends; baked into the Docker image (lazy installs are off
+# there) via `--extra ddgs`.
+ddgs = ["ddgs==9.16.0"]
 parallel-web = ["parallel-web==0.4.2"]
 # Image generation backends
 fal = ["fal-client==0.13.1"]
