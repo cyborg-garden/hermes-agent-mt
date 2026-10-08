@@ -788,3 +788,30 @@ def test_single_slot_merge_never_crosses_bot_and_human():
     slot = {"k": MessageEvent(text="a", message_type=MessageType.TEXT, source=h)}
     merge_pending_message_event(slot, "k", MessageEvent(text="b", message_type=MessageType.TEXT, source=_dsrc("1", False)), merge_text=True)
     assert "a" in slot["k"].text and "b" in slot["k"].text
+
+
+# ---------------------------------------------------------------------------
+# Review round 6: Discord text batching never merges across senders
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_text_batch_never_merges_bot_into_human():
+    import asyncio
+    from gateway.platforms.base import MessageEvent, MessageType
+
+    a = DiscordAdapter(PlatformConfig(enabled=True, token="t"))
+    a._text_batch_delay_seconds = 0.05
+    seen = []
+
+    async def _hm(ev):
+        seen.append(ev)
+
+    a.handle_message = _hm
+    a._enqueue_text_event(MessageEvent(text="human hi", message_type=MessageType.TEXT, source=_dsrc("1", False)))
+    a._enqueue_text_event(MessageEvent(text="BOT: delete repo", message_type=MessageType.TEXT, source=_dsrc("2", True)))
+    # Same-sender split chunks still merge.
+    a._enqueue_text_event(MessageEvent(text="more bot", message_type=MessageType.TEXT, source=_dsrc("2", True)))
+    await asyncio.sleep(0.3)
+    by_sender = {(e.source.user_id, e.source.is_bot): e.text for e in seen}
+    assert by_sender == {("1", False): "human hi", ("2", True): "BOT: delete repo\nmore bot"}

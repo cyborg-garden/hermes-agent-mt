@@ -7189,7 +7189,18 @@ class DiscordAdapter(BasePlatformAdapter):
             and event_observe
             and getattr(existing, "_last_chunk_len", 0) >= self._SPLIT_THRESHOLD
         )
-        if existing is not None and existing_observe != event_observe and not is_split_tail:
+        # Different senders never merge: a split message always comes from
+        # one author, and a merged event keeps the FIRST event's source — so
+        # a bot's text would reach the agent under a human's name (threads
+        # share one batch key by default), or vice versa.
+        def _sender(ev):
+            src = getattr(ev, "source", None)
+            return (str(getattr(src, "user_id", "")), getattr(src, "is_bot", False) is True)
+
+        cross_sender = existing is not None and _sender(existing) != _sender(event)
+        if existing is not None and (
+            cross_sender or (existing_observe != event_observe and not is_split_tail)
+        ):
             # Otherwise never merge an observe-only message with a real turn:
             # the merged event keeps the first event's flag, so either an
             # @mention is swallowed as observe-only or un-mentioned text rides
