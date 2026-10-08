@@ -448,3 +448,76 @@ async def test_history_marks_untrusted_bot_unverified(monkeypatch):
     lines = out.splitlines()
     assert any("[unverified]" in ln and "do the thing" in ln for ln in lines), out
     assert any("status ok" in ln and "[unverified]" not in ln for ln in lines), out
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: typed commands and admin_only=false approvals
+# ---------------------------------------------------------------------------
+
+
+def test_bot_cannot_run_typed_commands_even_with_gating_off(monkeypatch):
+    from gateway.config import GatewayConfig
+
+    runner = _runner()
+    runner.config = GatewayConfig()  # no allow_admin_from → policy disabled
+    human = _bot_source()
+    human.is_bot = False
+    assert runner._check_slash_access(human, "yolo") is None
+    assert runner._check_slash_access(_bot_source(role_ids=[TRUSTED_ROLE]), "yolo") is not None
+    assert runner._check_slash_access(_bot_source(role_ids=[TRUSTED_ROLE]), "model") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", ["approve", "deny"])
+async def test_bot_cannot_approve_or_deny_with_admin_only_off(cmd):
+    from unittest.mock import patch
+    from gateway.platforms.base import MessageEvent
+    from tests.gateway.test_approval_admin_gating import _clear_approval_state, _make_runner
+    from tools.approval import _ApprovalEntry, _gateway_queues
+
+    _clear_approval_state()
+    runner = _make_runner()
+    src = SessionSource(
+        platform=Platform.TELEGRAM, user_id="botx", chat_id="c1",
+        user_name="bot", chat_type="dm", is_bot=True,
+    )
+    entry = _ApprovalEntry({"command": "rm -rf /"})
+    _gateway_queues[runner._session_key_for_source(src)] = [entry]
+    handler = getattr(runner, f"_handle_{cmd}_command")
+    with patch("tools.approval._get_approval_config", return_value={"admin_only": False}):
+        result = await handler(MessageEvent(text=f"/{cmd}", source=src, message_id="m1"))
+    assert "not authorized" in result.lower()
+    assert not entry.event.is_set()
+    _clear_approval_state()
+
+
+@pytest.mark.asyncio
+async def test_history_recognizes_listed_bot_and_cached_role_holder(monkeypatch):
+    """REST history authors carry no roles: a listed bot id still passes, and a
+    role holder passes when the guild's member cache has it."""
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
+    monkeypatch.setenv("DISCORD_ALLOWED_BOT_ROLES", str(TRUSTED_ROLE))
+    monkeypatch.setenv("DISCORD_ALLOWED_BOT_USERS", str(FLEET_BOT_ID))
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="t"))
+    adapter._client = SimpleNamespace(user=SimpleNamespace(id=SELF_ID, bot=True))
+    monkeypatch.setattr(adapter, "_is_sender_authorized", lambda *a, **k: True)
+    cached_id = FLEET_BOT_ID + 1
+    cached_member = _member(cached_id, bot=True, role_ids=[TRUSTED_ROLE])
+    guild = _guild()
+    guild.get_member = lambda i: cached_member if i == cached_id else None
+    listed = _member(FLEET_BOT_ID, bot=True, has_roles=False)
+    cached_user = _member(cached_id, bot=True, has_roles=False)
+    stranger = _member(STRANGER_BOT_ID, bot=True, has_roles=False)
+    channel = SimpleNamespace(
+        id=222, guild=guild,
+        history=_History([
+            _hist_msg(listed, "listed says hi"),
+            _hist_msg(cached_user, "cached says hi"),
+            _hist_msg(stranger, "stranger says hi"),
+        ]),
+    )
+    out = await adapter._fetch_channel_context(channel, SimpleNamespace(id=9_000_000_000_000_000_000))
+    lines = out.splitlines()
+    assert any("listed says hi" in ln and "[unverified]" not in ln for ln in lines), out
+    assert any("cached says hi" in ln and "[unverified]" not in ln for ln in lines), out
+    assert any("stranger says hi" in ln and "[unverified]" in ln for ln in lines), out

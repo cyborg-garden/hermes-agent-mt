@@ -5547,11 +5547,20 @@ class DiscordAdapter(BasePlatformAdapter):
                     # Bots outside DISCORD_ALLOWED_BOT_ROLES / _USERS are
                     # still shown (context), but tagged like an unlisted
                     # human so the model does not take orders from them.
+                    # REST history carries no member data, so roles come
+                    # from the member cache when present; a bot whose
+                    # member is not cached is tagged too (fail closed —
+                    # this only affects the label, never admission).
+                    _h_guild = getattr(channel, "guild", None)
+                    _h_author = msg.author
+                    if getattr(_h_author, "roles", None) is None and _h_guild is not None:
+                        try:
+                            _h_author = _h_guild.get_member(int(_h_author.id)) or _h_author
+                        except Exception:
+                            pass
                     if discord_bot_gate_decision(
                         str(getattr(msg.author, "id", "")),
-                        _discord_platform_identity(
-                            msg.author, getattr(channel, "guild", None)
-                        ),
+                        _discord_history_identity(_h_author, _h_guild),
                     ) is False:
                         trust_tag = "[unverified] "
                         has_unverified = True
@@ -7441,6 +7450,26 @@ def _discord_platform_identity(user: Any, guild: Any = None):
         guild_id=str(getattr(guild, "id", "") or "") or None,
         member_role_ids=role_ids - {""},
         guild_roles=guild_roles,
+    )
+
+
+def _discord_history_identity(user: Any, guild: Any = None):
+    """Identity for a history-backfill author.
+
+    Like ``_discord_platform_identity``, but a guild channel's author always
+    counts as in-guild even with no role data (REST history omits members),
+    so a listed DISCORD_ALLOWED_BOT_USERS id is still recognized. Roles stay
+    empty when unknown, so role-based trust never passes on missing data.
+    """
+    from dataclasses import replace
+
+    identity = _discord_platform_identity(user, guild)
+    if identity is None or identity.in_guild or guild is None:
+        return identity
+    return replace(
+        identity,
+        in_guild=True,
+        guild_id=str(getattr(guild, "id", "") or "") or None,
     )
 
 

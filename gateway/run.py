@@ -13435,6 +13435,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if not canonical_cmd:
             return None
+        # Bot senders never run commands (/yolo, /model, /approve, ...),
+        # whatever the policy says — an admitted bot may talk, not operate.
+        if getattr(source, "is_bot", False) is True:
+            logger.info(
+                "Slash command /%s refused for bot %s:%s",
+                canonical_cmd,
+                source.platform.value if source.platform else "?",
+                source.user_id,
+            )
+            return "⛔ Bots can't run commands."
         policy = _policy_for_source(self.config, source)
         identity = getattr(source, "platform_identity", None)
         if not policy.enabled or policy.can_run(source.user_id, canonical_cmd, identity):
@@ -15493,6 +15503,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Admin-only gating: when admin_only is set (default True),
         # only admin users may approve dangerous commands.
         approval_cfg = _get_approval_config()
+        # A bot never approves or denies, even with admin_only off.
+        if getattr(source, "is_bot", False) is True:
+            return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):
             is_admin_approver = self._is_approval_admin(source)
@@ -15570,6 +15583,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Admin-only gating: when admin_only is set (default True),
         # only admin users may deny dangerous commands.
         approval_cfg = _get_approval_config()
+        # A bot never approves or denies, even with admin_only off.
+        if getattr(source, "is_bot", False) is True:
+            return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):
             is_admin_approver = self._is_approval_admin(source)
