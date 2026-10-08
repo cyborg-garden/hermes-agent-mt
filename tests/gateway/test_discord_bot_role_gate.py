@@ -702,3 +702,33 @@ def test_discord_bot_cannot_answer_pending_prompts():
     src = inspect.getsource(GatewayRunner._handle_message)
     assert "_bot_sender = _is_discord_bot_sender(source)" in src
     assert src.count("not _bot_sender") >= 3
+
+
+# ---------------------------------------------------------------------------
+# Review round 4: a Discord bot never interrupts a running turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_bot,expect_interrupt", [(True, False), (False, True)])
+async def test_discord_bot_message_queues_instead_of_interrupting(is_bot, expect_interrupt):
+    from unittest.mock import patch
+    from gateway.platforms.base import MessageEvent, MessageType
+    from gateway.session import build_session_key
+    from tests.gateway import test_internal_event_never_interrupts_busy_session as B
+
+    runner = B._make_runner()
+    runner._busy_input_mode = "interrupt"
+    adapter = B._make_adapter()
+    src = SessionSource(
+        platform=Platform.DISCORD, chat_id="222", chat_type="thread",
+        thread_id="222", user_id=str(FLEET_BOT_ID), is_bot=is_bot,
+    )
+    event = MessageEvent(text="hello", message_type=MessageType.TEXT, source=src, message_id="m1")
+    sk = build_session_key(src)
+    parent = B._make_running_parent()
+    runner._running_agents[sk] = parent
+    runner.adapters[Platform.DISCORD] = adapter
+    with patch("gateway.run.merge_pending_message_event"):
+        await runner._handle_active_session_busy_message(event, sk)
+    assert parent.interrupt.called is expect_interrupt

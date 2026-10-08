@@ -4808,8 +4808,10 @@ class BasePlatformAdapter(ABC):
                 # through the dedicated handoff path that serializes
                 # cancellation + runner response + pending drain.
                 # A Discord bot's /stop etc. is refused by the gateway; it
-                # takes the plain direct-dispatch path below so it can never
-                # cancel the running (possibly human) session.
+                # takes the plain direct-dispatch path below so it does not
+                # cancel the running (possibly human) session. (Bot plain
+                # text is queued, never an interrupt — see the runner's
+                # busy handling.)
                 _bot_cmd = (
                     getattr(event.source, "is_bot", False) is True
                     and event.source.platform == Platform.DISCORD

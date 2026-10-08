@@ -5907,12 +5907,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # do-not-continue note on the next turn), never be demoted to
         # queue/steer where the resumed task would keep running and treat
         # the human's "stop" as advisory input to fold in.
+        _bot_sender = _is_discord_bot_sender(getattr(event, "source", None))
         _terminal_resume_interrupt = (
             event.message_type == MessageType.TEXT
+            and not _bot_sender
             and session_key in getattr(self, "_startup_resume_sessions", ())
         )
 
         effective_mode = self._busy_input_mode
+        # A Discord bot never interrupts or steers a running turn (threads
+        # share one session, so that turn may be a human's): it queues.
+        if _bot_sender and effective_mode in {"interrupt", "steer"}:
+            logger.info(
+                "Queueing Discord bot message for busy session %s instead of %s",
+                session_key, effective_mode,
+            )
+            effective_mode = "queue"
         busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
         if (
             not _terminal_resume_interrupt
@@ -10394,7 +10404,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if self._queue_during_drain_enabled()
                     else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
                 )
-            if self._busy_input_mode == "queue":
+            if self._busy_input_mode == "queue" or _is_discord_bot_sender(source):
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 self._queue_or_replace_pending_event(_quick_key, event)
                 return None
@@ -13482,7 +13492,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             return resolve_skill_command_key(command) is not None
         except Exception:
-            logger.debug("command lookup failed; treating as a command", exc_info=True)
+            logger.warning("command lookup failed; treating as a command", exc_info=True)
             return True
 
     def _check_slash_access(
