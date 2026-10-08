@@ -1223,8 +1223,31 @@ class DiscordAdapter(BasePlatformAdapter):
                         and not self._self_is_raw_mentioned(message)
                     ):
                         return
-                    # "all" falls through; bot is permitted — skip the
-                    # human-user allowlist below (bots aren't in it).
+                    # DISCORD_ALLOWED_BOT_ROLES / _USERS: when set, the bot
+                    # must ALSO hold a listed role in this guild (or be a
+                    # listed bot id). Without it, every bot in an allowed
+                    # channel could drive this agent with one @mention.
+                    # Unset → None → unchanged. DMs and unreadable role
+                    # lists → False (fail closed).
+                    from gateway.slash_access import discord_bot_gate_decision
+
+                    if discord_bot_gate_decision(
+                        str(message.author.id),
+                        _discord_platform_identity(
+                            message.author, getattr(message, "guild", None)
+                        ),
+                    ) is False:
+                        logger.info(
+                            "[%s] Dropping message from bot %s (%s): not in "
+                            "DISCORD_ALLOWED_BOT_ROLES / DISCORD_ALLOWED_BOT_USERS "
+                            "for this guild",
+                            adapter_self.name,
+                            message.author.id,
+                            getattr(message.author, "name", "?"),
+                        )
+                        return
+                    # Bot is permitted — skip the human-user allowlist
+                    # below (bots aren't in it).
                 else:
                     # Non-bot: enforce the configured user/role allowlists.
                     # Pass guild + is_dm so role checks are scoped to the
@@ -3683,6 +3706,9 @@ class DiscordAdapter(BasePlatformAdapter):
                 return (False, "missing interaction.user with allowlist configured")
             return (False, "missing interaction.user")
 
+        if getattr(user, "bot", False) is True:
+            return (False, "bot accounts cannot run slash commands")
+
         user_id = str(user.id)
         # Pass guild + is_dm so role check is scoped to the originating
         # guild and cross-guild DM bypass (#12136) can't land via the
@@ -5446,6 +5472,8 @@ class DiscordAdapter(BasePlatformAdapter):
         if limit <= 0:
             return ""
 
+        from gateway.slash_access import discord_bot_gate_decision
+
         # Determine which bot messages to include in context
         allow_bots_raw = os.getenv("DISCORD_ALLOW_BOTS", "none").lower().strip()
         include_other_bots = allow_bots_raw != "none"
@@ -5511,10 +5539,23 @@ class DiscordAdapter(BasePlatformAdapter):
                 # Mark senders not on the allowlist as [unverified] so the LLM
                 # treats their content as background reference rather than
                 # authoritative input — mirrors the Slack thread-context fix.
-                # Bot messages bypass the check; the auth check is configured
-                # by GatewayRunner.
+                # Humans are checked against the gateway allowlist; other
+                # bots against DISCORD_ALLOWED_BOT_ROLES / _USERS (when that
+                # gate is unset, bot lines carry no tag, as before).
                 trust_tag = ""
-                if not is_bot_author:
+                if is_bot_author and msg.author != self._client.user:
+                    # Bots outside DISCORD_ALLOWED_BOT_ROLES / _USERS are
+                    # still shown (context), but tagged like an unlisted
+                    # human so the model does not take orders from them.
+                    if discord_bot_gate_decision(
+                        str(getattr(msg.author, "id", "")),
+                        _discord_platform_identity(
+                            msg.author, getattr(channel, "guild", None)
+                        ),
+                    ) is False:
+                        trust_tag = "[unverified] "
+                        has_unverified = True
+                elif not is_bot_author:
                     author_id = str(getattr(msg.author, "id", ""))
                     is_authorized = self._is_sender_authorized(
                         author_id,
@@ -7243,6 +7284,10 @@ def _component_check_auth(
     """
     user = getattr(interaction, "user", None)
     if user is None or getattr(user, "id", None) is None:
+        return False
+    # Bots never click approval/component buttons. Discord does not deliver
+    # bot-originated interactions today; this keeps it true if that changes.
+    if getattr(user, "bot", False) is True:
         return False
 
     # R7: the moderation deny store beats every allow branch below —

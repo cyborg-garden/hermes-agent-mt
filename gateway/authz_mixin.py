@@ -468,6 +468,18 @@ class GatewayAuthorizationMixin:
         if getattr(source, "is_bot", False):
             allow_bots_var = platform_allow_bots_map.get(source.platform)
             if allow_bots_var and os.getenv(allow_bots_var, "none").lower().strip() in {"mentions", "all"}:
+                if source.platform == Platform.DISCORD:
+                    # DISCORD_ALLOWED_BOT_ROLES / _USERS narrow the bypass to
+                    # trusted bots. Re-checked here against the live identity
+                    # the adapter attached (never serialized, so a relay peer
+                    # cannot supply it). A bot that fails is refused outright
+                    # — it does not fall through to the human allowlist.
+                    from gateway.slash_access import discord_bot_gate_decision
+
+                    if discord_bot_gate_decision(
+                        user_id, getattr(source, "platform_identity", None)
+                    ) is False:
+                        return False
                 return True
 
         if not user_id:

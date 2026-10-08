@@ -3790,6 +3790,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ``True`` for everyone (gating disabled) — which is why we must NOT use it
         as the fallback here, or every group member would be an approval admin.
         """
+        # A bot never approves a dangerous command, whatever lists or roles
+        # it appears in — approval is a human decision.
+        if getattr(source, "is_bot", False) is True:
+            return False
         from gateway.slash_access import policy_for_source
         policy = policy_for_source(self.config, source)
         identity = getattr(source, "platform_identity", None)
