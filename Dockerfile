@@ -211,6 +211,28 @@ RUN uv pip install --no-cache-dir faster-whisper==1.2.1
 # without lazy-install latency (read_document tool).
 RUN uv pip install --no-cache-dir pymupdf==1.27.2.3
 
+# ---------- Optional per-agent system packages ----------
+# Space-separated Debian package names one agent needs and the rest of the
+# fleet does not (e.g. headless LibreOffice + pandoc for an agent whose
+# file tools convert Office documents). Swarm Map renders it as a compose
+# build arg from the agent's `extraAptPackages` overlay field, so it
+# survives compose regeneration. Empty by default: the layer is a no-op and
+# every other agent's image is unchanged.
+#
+# Placed after the heavy dependency layers so an agent that sets it still
+# shares their build cache; only the frontend build and source layers below
+# are rebuilt separately for it. Names are validated before reaching apt.
+ARG HERMES_EXTRA_APT_PACKAGES=
+RUN set -f; if [ -n "${HERMES_EXTRA_APT_PACKAGES}" ]; then \
+        for p in ${HERMES_EXTRA_APT_PACKAGES}; do \
+            printf '%s\n' "$p" | grep -Eq '^[a-z0-9][a-z0-9.+-]*$' || \
+                { echo "HERMES_EXTRA_APT_PACKAGES: invalid package name '$p'" >&2; exit 1; }; \
+        done && \
+        apt-get -o Acquire::Retries=3 update && \
+        apt-get -o Acquire::Retries=3 install -y --no-install-recommends ${HERMES_EXTRA_APT_PACKAGES} && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't
 # invalidate the (relatively slow) web + ui-tui build layer.
