@@ -225,8 +225,10 @@ RUN uv pip install --no-cache-dir pymupdf==1.27.2.3
 ARG HERMES_EXTRA_APT_PACKAGES=
 RUN set -f; if [ -n "${HERMES_EXTRA_APT_PACKAGES}" ]; then \
         for p in ${HERMES_EXTRA_APT_PACKAGES}; do \
-            printf '%s\n' "$p" | grep -Eq '^[a-z0-9][a-z0-9.+-]*$' || \
-                { echo "HERMES_EXTRA_APT_PACKAGES: invalid package name '$p'" >&2; exit 1; }; \
+            case "$p" in \
+                [!a-z0-9]*|*[!a-z0-9.+-]*) \
+                    echo "HERMES_EXTRA_APT_PACKAGES: invalid package name '$p'" >&2; exit 1 ;; \
+            esac; \
         done && \
         apt-get -o Acquire::Retries=3 update && \
         apt-get -o Acquire::Retries=3 install -y --no-install-recommends ${HERMES_EXTRA_APT_PACKAGES} && \

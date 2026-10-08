@@ -40,17 +40,20 @@ def test_layer_sits_after_dependency_layers_and_before_source() -> None:
     assert arg < _index(r"^COPY --link --chmod=a\+rX,go-w \. \.")
 
 
-def _validator() -> str:
-    """Extract the package-name regex the RUN step uses."""
+def _layer() -> str:
     text = DOCKERFILE.read_text()
-    m = re.search(r"grep -Eq '(\^\[a-z0-9\][^']*)'", text)
-    assert m, "extra-apt layer must validate package names with grep -Eq"
-    return m.group(1)
+    start = text.index("ARG HERMES_EXTRA_APT_PACKAGES=")
+    end = text.index("\n\n", start)
+    return text[start:end]
 
 
 def _accepts(name: str) -> bool:
-    rx = _validator()
-    r = subprocess.run(["grep", "-Eq", rx], input=name + "\n", text=True)
+    """Run the layer's own validation loop (everything before apt) in sh."""
+    body = _layer().split("RUN ", 1)[1]
+    check = body.split("apt-get", 1)[0].replace("\\\n", "\n").rstrip().removesuffix("&&")
+    script = check + "\nfi\n"
+    r = subprocess.run(["sh", "-c", script], env={"HERMES_EXTRA_APT_PACKAGES": name, "LC_ALL": "C"},
+                       capture_output=True, text=True)
     return r.returncode == 0
 
 
