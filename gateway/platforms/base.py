@@ -4807,7 +4807,14 @@ class BasePlatformAdapter(ABC):
                 # and preserve ordering of queued follow-ups.  Route those
                 # through the dedicated handoff path that serializes
                 # cancellation + runner response + pending drain.
-                if cmd in {"stop", "new", "reset"}:
+                # A Discord bot's /stop etc. is refused by the gateway; it
+                # takes the plain direct-dispatch path below so it can never
+                # cancel the running (possibly human) session.
+                _bot_cmd = (
+                    getattr(event.source, "is_bot", False) is True
+                    and event.source.platform == Platform.DISCORD
+                )
+                if cmd in {"stop", "new", "reset"} and not _bot_cmd:
                     self._discard_text_debounce(session_key)
                     try:
                         await self._dispatch_active_session_command(event, session_key, cmd)

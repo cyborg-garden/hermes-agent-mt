@@ -1233,7 +1233,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
                     if discord_bot_gate_decision(
                         str(message.author.id),
-                        _discord_platform_identity(
+                        _discord_bot_gate_identity(
                             message.author, getattr(message, "guild", None)
                         ),
                     ) is False:
@@ -5560,7 +5560,7 @@ class DiscordAdapter(BasePlatformAdapter):
                             pass
                     if discord_bot_gate_decision(
                         str(getattr(msg.author, "id", "")),
-                        _discord_history_identity(_h_author, _h_guild),
+                        _discord_bot_gate_identity(_h_author, _h_guild),
                     ) is False:
                         trust_tag = "[unverified] "
                         has_unverified = True
@@ -7453,13 +7453,15 @@ def _discord_platform_identity(user: Any, guild: Any = None):
     )
 
 
-def _discord_history_identity(user: Any, guild: Any = None):
-    """Identity for a history-backfill author.
+def _discord_bot_gate_identity(user: Any, guild: Any = None):
+    """Identity for the DISCORD_ALLOWED_BOT_* gate.
 
-    Like ``_discord_platform_identity``, but a guild channel's author always
-    counts as in-guild even with no role data (REST history omits members),
-    so a listed DISCORD_ALLOWED_BOT_USERS id is still recognized. Roles stay
-    empty when unknown, so role-based trust never passes on missing data.
+    Like ``_discord_platform_identity``, but an author in a guild channel
+    always counts as in-guild even with no role data (REST history omits
+    members; webhook authors carry none), so a listed
+    DISCORD_ALLOWED_BOT_USERS id is still recognized. Roles stay empty when
+    unknown, so role-based trust never passes on missing data. DMs (no
+    guild) stay out of guild.
     """
     from dataclasses import replace
 

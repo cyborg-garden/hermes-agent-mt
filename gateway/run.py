@@ -2981,6 +2981,21 @@ async def _dispose_unused_adapter(adapter: "BasePlatformAdapter | None") -> None
         )
 
 
+
+def _is_discord_bot_sender(source: Any) -> bool:
+    """True for a message authored by a Discord bot (not this agent).
+
+    Such senders may talk to an agent (DISCORD_ALLOW_BOTS, and the
+    DISCORD_ALLOWED_BOT_ROLES gate) but never operate it: no commands, no
+    approvals, no answers to a human's pending prompt. Discord only — other
+    platforms mark bots too (Telegram anonymous admins arrive as a bot), and
+    their behavior is unchanged.
+    """
+    return (
+        getattr(source, "is_bot", False) is True
+        and getattr(source, "platform", None) == Platform.DISCORD
+    )
+
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
@@ -3792,7 +3807,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         # A bot never approves a dangerous command, whatever lists or roles
         # it appears in — approval is a human decision.
-        if getattr(source, "is_bot", False) is True:
+        if _is_discord_bot_sender(source):
             return False
         from gateway.slash_access import policy_for_source
         policy = policy_for_source(self.config, source)
@@ -9814,7 +9829,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # consumed as update answers instead of being dispatched normally.
         _quick_key = self._session_key_for_source(source)
         _update_prompts = getattr(self, "_update_prompt_pending", {})
-        if _update_prompts.get(_quick_key):
+        # A Discord bot never answers a human's pending prompt (update,
+        # clarify, slash-confirm): those replies are approvals by another name.
+        _bot_sender = _is_discord_bot_sender(source)
+        if _update_prompts.get(_quick_key) and not _bot_sender:
             raw = (event.text or "").strip()
             # Accept /approve and /deny as shorthand for yes/no
             cmd = event.get_command()
@@ -9893,7 +9911,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         except Exception:
             _pending_clarify = None
-        if _pending_clarify is not None and _clarify_mod is not None:
+        if _pending_clarify is not None and _clarify_mod is not None and not _bot_sender:
             _raw_clarify_reply = (event.text or "").strip()
             # Skip slash commands — the user clearly wanted to issue a
             # command, not answer the clarify.  Leave the clarify pending
@@ -9946,7 +9964,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _tool_approval_live = has_blocking_approval(_quick_key)
         except Exception:
             _tool_approval_live = False
-        if _pending_confirm and not _tool_approval_live:
+        if _pending_confirm and not _tool_approval_live and not _bot_sender:
             _raw_reply = (event.text or "").strip()
             # Accept bang-prefixed replies (`!always`, `!cancel`) verbatim.
             # Slack/Matrix instruction text shows the `!` prefix (typed `/`
@@ -13437,7 +13455,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return None
         # Bot senders never run commands (/yolo, /model, /approve, ...),
         # whatever the policy says — an admitted bot may talk, not operate.
-        if getattr(source, "is_bot", False) is True:
+        if _is_discord_bot_sender(source):
             logger.info(
                 "Slash command /%s refused for bot %s:%s",
                 canonical_cmd,
@@ -15504,7 +15522,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # only admin users may approve dangerous commands.
         approval_cfg = _get_approval_config()
         # A bot never approves or denies, even with admin_only off.
-        if getattr(source, "is_bot", False) is True:
+        if _is_discord_bot_sender(source):
             return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):
@@ -15584,7 +15602,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # only admin users may deny dangerous commands.
         approval_cfg = _get_approval_config()
         # A bot never approves or denies, even with admin_only off.
-        if getattr(source, "is_bot", False) is True:
+        if _is_discord_bot_sender(source):
             return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):

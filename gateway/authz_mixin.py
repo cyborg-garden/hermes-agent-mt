@@ -476,9 +476,22 @@ class GatewayAuthorizationMixin:
                     # — it does not fall through to the human allowlist.
                     from gateway.slash_access import discord_bot_gate_decision
 
-                    if discord_bot_gate_decision(
-                        user_id, getattr(source, "platform_identity", None)
-                    ) is False:
+                    _identity = getattr(source, "platform_identity", None)
+                    if (
+                        _identity is not None
+                        and not getattr(_identity, "in_guild", False)
+                        and source.guild_id
+                        and source.chat_type != "dm"
+                    ):
+                        # Guild message whose author carried no role data
+                        # (webhook): still in the guild, with no roles, so
+                        # only a listed bot id can pass — as at the adapter.
+                        from dataclasses import replace as _dc_replace
+
+                        _identity = _dc_replace(
+                            _identity, in_guild=True, guild_id=str(source.guild_id),
+                        )
+                    if discord_bot_gate_decision(user_id, _identity) is False:
                         return False
                 return True
 

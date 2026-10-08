@@ -478,8 +478,8 @@ async def test_bot_cannot_approve_or_deny_with_admin_only_off(cmd):
     _clear_approval_state()
     runner = _make_runner()
     src = SessionSource(
-        platform=Platform.TELEGRAM, user_id="botx", chat_id="c1",
-        user_name="bot", chat_type="dm", is_bot=True,
+        platform=Platform.DISCORD, user_id="botx", chat_id="c1",
+        user_name="bot", chat_type="group", is_bot=True,
     )
     entry = _ApprovalEntry({"command": "rm -rf /"})
     _gateway_queues[runner._session_key_for_source(src)] = [entry]
@@ -521,3 +521,94 @@ async def test_history_recognizes_listed_bot_and_cached_role_holder(monkeypatch)
     assert any("listed says hi" in ln and "[unverified]" not in ln for ln in lines), out
     assert any("cached says hi" in ln and "[unverified]" not in ln for ln in lines), out
     assert any("stranger says hi" in ln and "[unverified]" in ln for ln in lines), out
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: /stop cancels, prompt replies, webhooks, non-Discord bots
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_bot,expect_cancel", [(True, False), (False, True)])
+async def test_discord_bot_stop_never_cancels_running_session(is_bot, expect_cancel):
+    import asyncio
+    from gateway.platforms.base import MessageEvent, MessageType
+    from gateway.session import build_session_key
+    from tests.gateway.test_command_bypass_active_session import _StubAdapter
+
+    adapter = _StubAdapter(PlatformConfig(enabled=True, token="t"), Platform.DISCORD)
+    adapter._busy_text_mode = ""
+    sent = []
+
+    async def _handler(event):
+        return "refused" if event.source.is_bot else "stopped"
+
+    async def _send(chat_id, content, **kw):
+        sent.append(content)
+
+    adapter._message_handler = _handler
+    adapter._send_with_retry = _send
+    cancelled = []
+
+    async def _cancel(key, **kw):
+        cancelled.append(key)
+
+    adapter.cancel_session_processing = _cancel
+    src = SessionSource(
+        platform=Platform.DISCORD, chat_id="222", chat_type="thread",
+        thread_id="222", user_id=str(FLEET_BOT_ID), is_bot=is_bot,
+    )
+    sk = build_session_key(src, thread_sessions_per_user=False)
+    adapter._active_sessions[sk] = asyncio.Event()
+    await adapter.handle_message(MessageEvent(text="/stop", message_type=MessageType.TEXT, source=src))
+    assert bool(cancelled) is expect_cancel
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_listed_webhook_bot_passes_in_guild(monkeypatch):
+    """A webhook author carries no roles; a listed id still passes in a guild."""
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
+    monkeypatch.setenv("DISCORD_ALLOWED_BOT_USERS", str(FLEET_BOT_ID))
+    hook = _member(FLEET_BOT_ID, bot=True, has_roles=False)
+    hook.discriminator = "0000"
+    assert await _deliver(monkeypatch, hook) is True
+    # ... but not in a DM, and an unlisted roleless bot still fails.
+    assert await _deliver(monkeypatch, hook, dm=True) is False
+    assert await _deliver(monkeypatch, _member(STRANGER_BOT_ID, bot=True, has_roles=False)) is False
+
+
+def test_mixin_listed_webhook_passes_in_guild(monkeypatch):
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
+    monkeypatch.setenv("DISCORD_ALLOWED_BOT_USERS", str(FLEET_BOT_ID))
+    src = _bot_source(in_guild=False)
+    src.guild_id = str(GUILD_ID)
+    src.scope_id = str(GUILD_ID)
+    assert _runner()._is_user_authorized(src) is True
+    src2 = _bot_source(in_guild=False, uid=STRANGER_BOT_ID)
+    src2.guild_id = str(GUILD_ID)
+    assert _runner()._is_user_authorized(src2) is False
+
+
+def test_non_discord_bots_keep_commands_and_approval(monkeypatch):
+    """Telegram anonymous admins arrive as bots; their behavior is unchanged."""
+    from gateway.config import GatewayConfig
+
+    monkeypatch.setenv("TELEGRAM_ALLOW_ALL_USERS", "true")
+    runner = _runner()
+    runner.config = GatewayConfig()
+    tg = SessionSource(
+        platform=Platform.TELEGRAM, chat_id="1", chat_type="group",
+        user_id="1087968824", is_bot=True,
+    )
+    assert runner._check_slash_access(tg, "yolo") is None
+
+
+def test_discord_bot_cannot_answer_pending_prompts():
+    """Update/clarify/slash-confirm interceptions are skipped for Discord bots."""
+    import inspect
+    from gateway.run import GatewayRunner
+
+    src = inspect.getsource(GatewayRunner._handle_message)
+    assert "_bot_sender = _is_discord_bot_sender(source)" in src
+    assert src.count("not _bot_sender") >= 3
