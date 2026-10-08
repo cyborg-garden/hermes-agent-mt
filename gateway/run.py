@@ -1931,6 +1931,7 @@ from gateway.platforms.base import (
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     merge_pending_message_event,
+    _is_cross_sender_with_discord_bot,
     utf16_len,
 )
 from gateway.restart import (
@@ -5733,7 +5734,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # semantics); everything else appends to the overflow tail.
         pending_slot = getattr(adapter, "_pending_messages", None)
         existing = pending_slot.get(session_key) if isinstance(pending_slot, dict) else None
-        if existing is not None and (
+        if existing is not None and not _is_cross_sender_with_discord_bot(existing, event) and (
             getattr(existing, "message_type", None) == MessageType.PHOTO
             or event.message_type == MessageType.PHOTO
             or bool(getattr(existing, "media_urls", None))
