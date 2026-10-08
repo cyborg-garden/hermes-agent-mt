@@ -604,6 +604,96 @@ def test_non_discord_bots_keep_commands_and_approval(monkeypatch):
     assert runner._check_slash_access(tg, "yolo") is None
 
 
+def _bot_runner(monkeypatch):
+    import gateway.run as gr
+    from gateway.config import GatewayConfig
+    from tests.gateway import test_unknown_command as T
+
+    runner = T._make_runner()
+    runner.config = GatewayConfig(
+        platforms={Platform.DISCORD: PlatformConfig(enabled=True, token="x")}
+    )
+    runner._run_agent = AsyncMock(side_effect=AssertionError("reached the agent"))
+    monkeypatch.setattr(gr, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "x"})
+    return runner
+
+
+def _discord_src(is_bot=True):
+    return SessionSource(
+        platform=Platform.DISCORD, user_id=str(FLEET_BOT_ID), chat_id="c1",
+        user_name="bot", chat_type="group", is_bot=is_bot, guild_id=str(GUILD_ID),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("typed", ["/my-cmd", "/my_cmd", "/yolo", "/status", "/model x"])
+async def test_discord_bot_cannot_run_any_command(monkeypatch, typed):
+    from gateway.platforms.base import MessageEvent
+    from hermes_cli import plugins as P
+
+    runner = _bot_runner(monkeypatch)
+    ran = []
+    monkeypatch.setattr(P, "get_plugin_commands", lambda: {"my-cmd": {"description": "d", "args_hint": ""}})
+    monkeypatch.setattr(
+        P, "get_plugin_command_handler",
+        lambda n: (lambda a: ran.append(n) or "RAN") if n == "my-cmd" else None,
+    )
+    res = await runner._handle_message(MessageEvent(text=typed, source=_discord_src(), message_id="m"))
+    assert not ran
+    assert "can't run commands" in (res or "")
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_skill_command_refused(monkeypatch):
+    from gateway.platforms.base import MessageEvent
+    import agent.skill_commands as SC
+
+    runner = _bot_runner(monkeypatch)
+    monkeypatch.setattr(SC, "resolve_skill_command_key", lambda c: "/my-skill" if c in {"my-skill", "my_skill"} else None)
+    res = await runner._handle_message(MessageEvent(text="/my_skill go", source=_discord_src(), message_id="m"))
+    assert "can't run commands" in (res or "")
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_cannot_answer_pending_slash_confirm(monkeypatch):
+    from gateway.platforms.base import MessageEvent
+    from tools import slash_confirm
+
+    runner = _bot_runner(monkeypatch)
+    src = _discord_src()
+    key = runner._session_key_for_source(src)
+    resolved = []
+    monkeypatch.setattr(slash_confirm, "get_pending", lambda k: {"id": "x"} if k == key else None)
+
+    async def _resolve(*a, **k):
+        resolved.append(a)
+        return "resolved"
+
+    monkeypatch.setattr(slash_confirm, "resolve", _resolve)
+    res = await runner._handle_message(MessageEvent(text="/approve", source=src, message_id="m"))
+    assert "can't run commands" in (res or "")
+    # The bare-word reply path (no slash) must not resolve it either.
+    try:
+        await runner._handle_message(MessageEvent(text="always", source=src, message_id="m2"))
+    except AssertionError:
+        pass  # fell through to the (stubbed) agent: fine, it did not resolve
+    assert not resolved
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_cannot_answer_pending_update_prompt(monkeypatch, tmp_path):
+    from gateway.platforms.base import MessageEvent
+    import gateway.run as gr
+
+    runner = _bot_runner(monkeypatch)
+    monkeypatch.setattr(gr, "_hermes_home", tmp_path)
+    src = _discord_src()
+    runner._update_prompt_pending = {runner._session_key_for_source(src): True}
+    await runner._handle_message(MessageEvent(text="/approve", source=src, message_id="m"))
+    await runner._handle_message(MessageEvent(text="y", source=src, message_id="m2"))
+    assert not (tmp_path / ".update_response").exists()
+
+
 def test_discord_bot_cannot_answer_pending_prompts():
     """Update/clarify/slash-confirm interceptions are skipped for Discord bots."""
     import inspect

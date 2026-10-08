@@ -9828,6 +9828,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Otherwise control/session commands like /new or /help get silently
         # consumed as update answers instead of being dispatched normally.
         _quick_key = self._session_key_for_source(source)
+        # Discord bots may talk, never operate: any message that would
+        # dispatch as a command of ANY kind (built-in, plugin, quick, skill,
+        # bundle — each with its own name normalization) is refused here,
+        # before every later dispatch point, including /status on the busy
+        # path. Text that merely starts with "/" falls through as chat.
+        if _is_discord_bot_sender(source) and self._is_dispatchable_command(event):
+            logger.info(
+                "Command %r refused for Discord bot %s",
+                (event.text or "").split(maxsplit=1)[0][:64],
+                source.user_id,
+            )
+            return "⛔ Bots can't run commands."
         _update_prompts = getattr(self, "_update_prompt_pending", {})
         # A Discord bot never answers a human's pending prompt (update,
         # clarify, slash-confirm): those replies are approvals by another name.
@@ -13435,6 +13447,43 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
+
+    def _is_dispatchable_command(self, event: MessageEvent) -> bool:
+        """True if *event* would run as a command through any dispatcher.
+
+        Mirrors each dispatcher's own lookup: registry names and aliases,
+        quick commands, plugin commands (``_`` → ``-``), skill commands and
+        skill bundles (both underscore-tolerant). Fails CLOSED: a lookup that
+        raises counts as dispatchable.
+        """
+        command = event.get_command()
+        if not command:
+            return False
+        try:
+            from hermes_cli.commands import resolve_command
+
+            if resolve_command(command) is not None:
+                return True
+            if isinstance(self.config, dict):
+                quick = self.config.get("quick_commands", {}) or {}
+            else:
+                quick = getattr(self.config, "quick_commands", {}) or {}
+            if isinstance(quick, dict) and command in quick:
+                return True
+            from hermes_cli.plugins import get_plugin_command_handler
+
+            if get_plugin_command_handler(command.replace("_", "-")):
+                return True
+            from agent.skill_bundles import resolve_bundle_command_key
+
+            if resolve_bundle_command_key(command) is not None:
+                return True
+            from agent.skill_commands import resolve_skill_command_key
+
+            return resolve_skill_command_key(command) is not None
+        except Exception:
+            logger.debug("command lookup failed; treating as a command", exc_info=True)
+            return True
 
     def _check_slash_access(
         self, source: SessionSource, canonical_cmd: str
