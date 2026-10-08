@@ -277,6 +277,8 @@ For cloud sandbox backends, persistence is filesystem-oriented. `TERMINAL_LIFETI
 | `DISCORD_ALLOWED_USERS` | Comma-separated Discord user IDs allowed to use the bot |
 | `DISCORD_ALLOW_ALL_USERS` | Allow any Discord user to trigger the bot (dev only). |
 | `DISCORD_ALLOWED_ROLES` | Comma-separated Discord role IDs allowed to use the bot (OR with `DISCORD_ALLOWED_USERS`). Auto-enables the Members intent. Useful when moderation teams churn — role grants propagate automatically. |
+| `DISCORD_ALLOWED_BOT_ROLES` | Comma-separated role IDs. When set (or `DISCORD_ALLOWED_BOT_USERS` is), a bot sender admitted by `DISCORD_ALLOW_BOTS` must also hold one of these roles in the originating server, or be listed in `DISCORD_ALLOWED_BOT_USERS`. Never passes in DMs; fails closed when roles can't be read. Unset = unchanged. |
+| `DISCORD_ALLOWED_BOT_USERS` | Comma-separated bot user IDs that pass the `DISCORD_ALLOWED_BOT_ROLES` gate without holding a role. |
 | `DISCORD_ALLOWED_CHANNELS` | Comma-separated Discord channel IDs. When set, the bot only responds in these channels (plus DMs if allowed). Overrides `config.yaml` `discord.allowed_channels`. |
 | `DISCORD_CHANNEL_SCOPED_ACCESS` | Opt-in. When `true`, anyone posting in a channel explicitly listed in `DISCORD_ALLOWED_CHANNELS` (or a thread under one) is authorized to talk to the bot, in addition to `DISCORD_ALLOWED_USERS` / `DISCORD_ALLOWED_ROLES` / pairing grants. `*` is not honored as a grant — an explicit channel list is required. DMs are unaffected. Prefer this over `DISCORD_ALLOWED_USERS=*` for "public in approved channels" bots. |
 | `DISCORD_PROXY` | Proxy URL for Discord connections — overrides `HTTPS_PROXY`. Supports `http://`, `https://`, `socks5://` |

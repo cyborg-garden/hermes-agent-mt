@@ -2118,6 +2118,26 @@ class EphemeralReply(str):
         return str.__str__(self)
 
 
+def _is_cross_sender_with_discord_bot(a: Any, b: Any) -> bool:
+    """True when two events come from different senders and one is a Discord bot.
+
+    Merging such a pair would put the bot's words under the human's name
+    (the merged event keeps the first event's source), so callers must keep
+    them as separate turns instead.
+    """
+    sa = getattr(a, "source", None)
+    sb = getattr(b, "source", None)
+    if sa is None or sb is None:
+        return False
+
+    def _bot(src: Any) -> bool:
+        return getattr(src, "is_bot", False) is True and getattr(src, "platform", None) == Platform.DISCORD
+
+    if not (_bot(sa) or _bot(sb)):
+        return False
+    return str(getattr(sa, "user_id", "")) != str(getattr(sb, "user_id", "")) or _bot(sa) != _bot(sb)
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -2137,6 +2157,21 @@ def merge_pending_message_event(
     the last queued fragment.
     """
     existing = pending_messages.get(session_key)
+    if existing and _is_cross_sender_with_discord_bot(existing, event):
+        # One slot, two senders, one a Discord bot: never merge (that would
+        # attribute the bot's text to the human). A human message wins the
+        # slot; a bot message arriving behind a human's is dropped.
+        # GatewayRunner._queue_or_replace_pending_event keeps both via its
+        # FIFO; this single-slot path is the narrow fallback.
+        if getattr(getattr(existing, "source", None), "is_bot", False) is True:
+            pending_messages[session_key] = event
+        else:
+            logger.info(
+                "Dropping Discord bot message for session %s: a different "
+                "sender's message already holds the pending slot",
+                session_key,
+            )
+        return
     if existing:
         existing_is_photo = getattr(existing, "message_type", None) == MessageType.PHOTO
         incoming_is_photo = event.message_type == MessageType.PHOTO
@@ -4807,7 +4842,16 @@ class BasePlatformAdapter(ABC):
                 # and preserve ordering of queued follow-ups.  Route those
                 # through the dedicated handoff path that serializes
                 # cancellation + runner response + pending drain.
-                if cmd in {"stop", "new", "reset"}:
+                # A Discord bot's /stop etc. is refused by the gateway; it
+                # takes the plain direct-dispatch path below so it does not
+                # cancel the running (possibly human) session. (Bot plain
+                # text is queued, never an interrupt — see the runner's
+                # busy handling.)
+                _bot_cmd = (
+                    getattr(event.source, "is_bot", False) is True
+                    and event.source.platform == Platform.DISCORD
+                )
+                if cmd in {"stop", "new", "reset"} and not _bot_cmd:
                     self._discard_text_debounce(session_key)
                     try:
                         await self._dispatch_active_session_command(event, session_key, cmd)

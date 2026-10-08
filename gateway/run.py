@@ -1931,6 +1931,7 @@ from gateway.platforms.base import (
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     merge_pending_message_event,
+    _is_cross_sender_with_discord_bot,
     utf16_len,
 )
 from gateway.restart import (
@@ -2981,6 +2982,21 @@ async def _dispose_unused_adapter(adapter: "BasePlatformAdapter | None") -> None
         )
 
 
+
+def _is_discord_bot_sender(source: Any) -> bool:
+    """True for a message authored by a Discord bot (not this agent).
+
+    Such senders may talk to an agent (DISCORD_ALLOW_BOTS, and the
+    DISCORD_ALLOWED_BOT_ROLES gate) but never operate it: no commands, no
+    approvals, no answers to a human's pending prompt. Discord only — other
+    platforms mark bots too (Telegram anonymous admins arrive as a bot), and
+    their behavior is unchanged.
+    """
+    return (
+        getattr(source, "is_bot", False) is True
+        and getattr(source, "platform", None) == Platform.DISCORD
+    )
+
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
@@ -3790,6 +3806,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ``True`` for everyone (gating disabled) — which is why we must NOT use it
         as the fallback here, or every group member would be an approval admin.
         """
+        # A bot never approves a dangerous command, whatever lists or roles
+        # it appears in — approval is a human decision.
+        if _is_discord_bot_sender(source):
+            return False
         from gateway.slash_access import policy_for_source
         policy = policy_for_source(self.config, source)
         identity = getattr(source, "platform_identity", None)
@@ -5714,7 +5734,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # semantics); everything else appends to the overflow tail.
         pending_slot = getattr(adapter, "_pending_messages", None)
         existing = pending_slot.get(session_key) if isinstance(pending_slot, dict) else None
-        if existing is not None and (
+        if existing is not None and not _is_cross_sender_with_discord_bot(existing, event) and (
             getattr(existing, "message_type", None) == MessageType.PHOTO
             or event.message_type == MessageType.PHOTO
             or bool(getattr(existing, "media_urls", None))
@@ -5888,12 +5908,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # do-not-continue note on the next turn), never be demoted to
         # queue/steer where the resumed task would keep running and treat
         # the human's "stop" as advisory input to fold in.
+        _bot_sender = _is_discord_bot_sender(getattr(event, "source", None))
         _terminal_resume_interrupt = (
             event.message_type == MessageType.TEXT
+            and not _bot_sender
             and session_key in getattr(self, "_startup_resume_sessions", ())
         )
 
         effective_mode = self._busy_input_mode
+        # A Discord bot never interrupts or steers a running turn (threads
+        # share one session, so that turn may be a human's): it queues.
+        if _bot_sender and effective_mode in {"interrupt", "steer"}:
+            logger.info(
+                "Queueing Discord bot message for busy session %s instead of %s",
+                session_key, effective_mode,
+            )
+            effective_mode = "queue"
         busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
         if (
             not _terminal_resume_interrupt
@@ -9809,8 +9839,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Otherwise control/session commands like /new or /help get silently
         # consumed as update answers instead of being dispatched normally.
         _quick_key = self._session_key_for_source(source)
+        # Discord bots may talk, never operate: any message that would
+        # dispatch as a command of ANY kind (built-in, plugin, quick, skill,
+        # bundle — each with its own name normalization) is refused here,
+        # before every later dispatch point, including /status on the busy
+        # path. Text that merely starts with "/" falls through as chat.
+        if _is_discord_bot_sender(source) and self._is_dispatchable_command(event):
+            logger.info(
+                "Command %r refused for Discord bot %s",
+                (event.text or "").split(maxsplit=1)[0][:64],
+                source.user_id,
+            )
+            return "⛔ Bots can't run commands."
         _update_prompts = getattr(self, "_update_prompt_pending", {})
-        if _update_prompts.get(_quick_key):
+        # A Discord bot never answers a human's pending prompt (update,
+        # clarify, slash-confirm): those replies are approvals by another name.
+        _bot_sender = _is_discord_bot_sender(source)
+        if _update_prompts.get(_quick_key) and not _bot_sender:
             raw = (event.text or "").strip()
             # Accept /approve and /deny as shorthand for yes/no
             cmd = event.get_command()
@@ -9889,7 +9934,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         except Exception:
             _pending_clarify = None
-        if _pending_clarify is not None and _clarify_mod is not None:
+        if _pending_clarify is not None and _clarify_mod is not None and not _bot_sender:
             _raw_clarify_reply = (event.text or "").strip()
             # Skip slash commands — the user clearly wanted to issue a
             # command, not answer the clarify.  Leave the clarify pending
@@ -9942,7 +9987,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _tool_approval_live = has_blocking_approval(_quick_key)
         except Exception:
             _tool_approval_live = False
-        if _pending_confirm and not _tool_approval_live:
+        if _pending_confirm and not _tool_approval_live and not _bot_sender:
             _raw_reply = (event.text or "").strip()
             # Accept bang-prefixed replies (`!always`, `!cancel`) verbatim.
             # Slack/Matrix instruction text shows the `!` prefix (typed `/`
@@ -10360,7 +10405,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if self._queue_during_drain_enabled()
                     else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
                 )
-            if self._busy_input_mode == "queue":
+            if self._busy_input_mode == "queue" or _is_discord_bot_sender(source):
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 self._queue_or_replace_pending_event(_quick_key, event)
                 return None
@@ -13414,6 +13459,43 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
+    def _is_dispatchable_command(self, event: MessageEvent) -> bool:
+        """True if *event* would run as a command through any dispatcher.
+
+        Mirrors each dispatcher's own lookup: registry names and aliases,
+        quick commands, plugin commands (``_`` → ``-``), skill commands and
+        skill bundles (both underscore-tolerant). Fails CLOSED: a lookup that
+        raises counts as dispatchable.
+        """
+        command = event.get_command()
+        if not command:
+            return False
+        try:
+            from hermes_cli.commands import resolve_command
+
+            if resolve_command(command) is not None:
+                return True
+            if isinstance(self.config, dict):
+                quick = self.config.get("quick_commands", {}) or {}
+            else:
+                quick = getattr(self.config, "quick_commands", {}) or {}
+            if isinstance(quick, dict) and command in quick:
+                return True
+            from hermes_cli.plugins import get_plugin_command_handler
+
+            if get_plugin_command_handler(command.replace("_", "-")):
+                return True
+            from agent.skill_bundles import resolve_bundle_command_key
+
+            if resolve_bundle_command_key(command) is not None:
+                return True
+            from agent.skill_commands import resolve_skill_command_key
+
+            return resolve_skill_command_key(command) is not None
+        except Exception:
+            logger.warning("command lookup failed; treating as a command", exc_info=True)
+            return True
+
     def _check_slash_access(
         self, source: SessionSource, canonical_cmd: str
     ) -> Optional[str]:
@@ -13431,6 +13513,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if not canonical_cmd:
             return None
+        # Bot senders never run commands (/yolo, /model, /approve, ...),
+        # whatever the policy says — an admitted bot may talk, not operate.
+        if _is_discord_bot_sender(source):
+            logger.info(
+                "Slash command /%s refused for bot %s:%s",
+                canonical_cmd,
+                source.platform.value if source.platform else "?",
+                source.user_id,
+            )
+            return "⛔ Bots can't run commands."
         policy = _policy_for_source(self.config, source)
         identity = getattr(source, "platform_identity", None)
         if not policy.enabled or policy.can_run(source.user_id, canonical_cmd, identity):
@@ -15489,6 +15581,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Admin-only gating: when admin_only is set (default True),
         # only admin users may approve dangerous commands.
         approval_cfg = _get_approval_config()
+        # A bot never approves or denies, even with admin_only off.
+        if _is_discord_bot_sender(source):
+            return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):
             is_admin_approver = self._is_approval_admin(source)
@@ -15566,6 +15661,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Admin-only gating: when admin_only is set (default True),
         # only admin users may deny dangerous commands.
         approval_cfg = _get_approval_config()
+        # A bot never approves or denies, even with admin_only off.
+        if _is_discord_bot_sender(source):
+            return "⛔ Not authorized — only admin users can approve/deny dangerous commands."
         is_admin_approver = True
         if approval_cfg.get("admin_only", True):
             is_admin_approver = self._is_approval_admin(source)

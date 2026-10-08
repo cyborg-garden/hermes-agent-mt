@@ -36,6 +36,7 @@ included here — only the slash-command access split.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, FrozenSet, Iterable, Optional, Tuple
 
@@ -205,6 +206,59 @@ def approver_role_matches(extra: Any, identity: Optional[PlatformIdentity]) -> b
     if not isinstance(extra, dict):
         return False
     return approver_roles_match(_coerce_id_list(extra.get("approver_roles")), identity)
+
+
+_BOT_ROLES_ENV = "DISCORD_ALLOWED_BOT_ROLES"
+_BOT_USERS_ENV = "DISCORD_ALLOWED_BOT_USERS"
+
+
+def _snowflakes_from_env(var: str) -> Tuple[bool, FrozenSet[str]]:
+    """(configured, numeric ids) for a comma-separated id list in *var*.
+
+    ``configured`` is True whenever the variable holds anything non-blank,
+    even if no entry parses: a role NAME where an id belongs must match
+    nobody, not switch the gate off.
+    """
+    raw = os.getenv(var, "") or ""
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    ids = frozenset(e for e in entries if e.isdigit())
+    bad = [e for e in entries if not e.isdigit()]
+    if bad:
+        _log_once(
+            ("bot-gate-parse", var, raw), logging.ERROR,
+            "%s=%r has non-numeric entries %r — they match nobody. Use the "
+            "numeric Discord id (Developer Mode > Copy ID).",
+            var, raw, bad,
+        )
+    return bool(entries), ids
+
+
+def discord_bot_gate_decision(
+    user_id: Optional[str], identity: Optional[PlatformIdentity],
+) -> Optional[bool]:
+    """Whether a Discord BOT sender passes ``DISCORD_ALLOWED_BOT_ROLES/_USERS``.
+
+    Returns ``None`` when neither variable is set — the gate is off and the
+    caller keeps its old behavior (``DISCORD_ALLOW_BOTS`` alone decides).
+    Otherwise ``True``/``False``. This is an extra requirement on top of
+    ``DISCORD_ALLOW_BOTS``, never a substitute for it.
+
+    Fails closed: no identity, no guild (DMs), or no readable role list all
+    return False — a listed bot user id does not pass in a DM either. The
+    @everyone role (id == guild id) never grants.
+    """
+    roles_set, role_ids = _snowflakes_from_env(_BOT_ROLES_ENV)
+    users_set, user_ids = _snowflakes_from_env(_BOT_USERS_ENV)
+    if not roles_set and not users_set:
+        return None
+    if identity is None or not identity.in_guild:
+        return False
+    uid = str(user_id).strip() if user_id is not None else ""
+    if uid and uid in user_ids:
+        return True
+    guild_id = str(identity.guild_id or "")
+    held = {str(r) for r in identity.member_role_ids} - {guild_id, ""}
+    return bool(held & (set(role_ids) - {guild_id}))
 
 
 @dataclass(frozen=True)
@@ -386,6 +440,7 @@ __all__ = [
     "admin_entries_match",
     "approver_role_matches",
     "approver_roles_match",
+    "discord_bot_gate_decision",
     "SlashAccessPolicy",
     "policy_from_extra",
     "policy_for_source",
