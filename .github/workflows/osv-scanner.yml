@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
 
       - name: 'Run scanner'
-        uses: google/osv-scanner-action/osv-scanner-action@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
+        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
           # Scan explicit lockfiles rather than recursing, so we only look at
           # the three sources of truth and skip vendored / test / worktree dirs.
@@ -60,7 +60,7 @@ jobs:
         continue-on-error: true
 
       - name: 'Run osv-scanner-reporter'
-        uses: google/osv-scanner-action/osv-reporter-action@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
+        uses: google/osv-scanner-action/osv-reporter-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
           scan-args: |-
             --output=results.sarif
@@ -73,7 +73,7 @@ jobs:
       - name: 'Upload artifact'
         id: 'upload_artifact'
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: OSV Scanner SARIF file
           path: results.sarif
@@ -82,7 +82,7 @@ jobs:
       # Upload the results to GitHub's code scanning dashboard.
       - name: 'Upload to code-scanning'
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: results.sarif
 
