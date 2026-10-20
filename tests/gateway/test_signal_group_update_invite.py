@@ -32,6 +32,8 @@ APPROVED_UUID = "66666666-6666-6666-6666-666666666666"
 STRANGER = "+15550000000"
 STRANGER_UUID = "77777777-7777-7777-7777-777777777777"
 GID = "groceries-group-id-0001"
+BOT = "+15551112222"
+BOT_UUID = "99999999-9999-9999-9999-999999999999"
 
 
 @pytest.fixture(autouse=True)
@@ -56,21 +58,42 @@ def _update_envelope(group_id=GID, sender=APPROVED, sender_uuid=APPROVED_UUID,
     return {"envelope": env}
 
 
-def _wire(adapter, *, is_member=True, list_groups_ok=True, accept_ok=True):
+def _group_entry(state):
+    entry = {"id": GID, "isMember": state == "member", "isBlocked": False}
+    if state == "pending":
+        entry["pendingMembers"] = [{"number": BOT, "uuid": BOT_UUID}]
+    return entry
+
+
+def _wire(adapter, *, is_member=True, list_groups_ok=True, accept_ok=True,
+          before=None, baseline=True, join_works=True):
+    """Mock signal-cli. ``before`` is the bot's state in GID at connect
+    (None = not in the group); the UPDATE has already moved it to
+    member (is_member=True) or pending (is_member=False)."""
     calls = []
+    state = {"now": "member" if is_member else "pending"}
+    adapter._own_uuid = BOT_UUID
+    adapter._account_normalized = BOT
+    if baseline:
+        adapter._group_membership = {GID: before} if before else {}
+        adapter._membership_snapshot_ok = True
 
     async def mock_rpc(method, params, rpc_id=None, **kwargs):
         calls.append(method)
         if method == "listGroups":
             if not list_groups_ok:
                 raise RuntimeError("listGroups failed")
-            return [{"id": GID, "isMember": is_member, "isBlocked": False}]
-        if method in ("joinGroup", "updateGroup") and not accept_ok:
-            raise RuntimeError(f"{method} failed")
+            return [_group_entry(state["now"])] if state["now"] else []
+        if method in ("joinGroup", "updateGroup"):
+            if not accept_ok:
+                raise RuntimeError(f"{method} failed")
+            if join_works and state["now"] == "pending":
+                state["now"] = "member"
         return {"success": True}
 
     adapter._rpc = mock_rpc
     adapter.handle_message = AsyncMock()
+    adapter._mock_state = state
     return calls
 
 
@@ -112,6 +135,17 @@ class TestUpdateFromApprovedSender:
 
         assert "joinGroup" in calls
         assert GID in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_accept_rpc_succeeds_but_not_joined_does_not_approve(self, monkeypatch, tmp_path):
+        """An accept RPC that 'succeeds' as a no-op must not approve."""
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, is_member=False, join_works=False)
+
+        await adapter._handle_envelope(_update_envelope())
+
+        assert GID not in adapter.group_allow_from
+        assert GID not in _persisted(tmp_path)
 
     @pytest.mark.asyncio
     async def test_not_member_and_accept_fails_does_not_approve(self, monkeypatch, tmp_path):
@@ -157,7 +191,7 @@ class TestUpdateRejected:
 
         assert GID not in adapter.group_allow_from
         assert GID not in _persisted(tmp_path)
-        assert calls == []
+        assert "joinGroup" not in calls and "updateGroup" not in calls
         adapter.handle_message.assert_not_called()
 
     @pytest.mark.asyncio
@@ -306,3 +340,105 @@ class TestExistingPathsUnchanged:
 
         assert "listGroups" not in calls
         assert GID not in adapter.group_allow_from
+
+
+class TestUpdateOnlyApprovesTheAdd:
+    """Audit finding: an UPDATE does not say what changed, so it may only
+    approve when the bot was not already in the group (issue #56)."""
+
+    @pytest.mark.asyncio
+    async def test_stranger_adds_bot_then_approved_user_update_does_not_approve(
+        self, monkeypatch, tmp_path,
+    ):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, before=None)
+
+        await adapter._handle_envelope(
+            _update_envelope(sender=STRANGER, sender_uuid=STRANGER_UUID, revision=1)
+        )
+        assert GID not in adapter.group_allow_from
+
+        # Approved user later leaves / changes title / rotates profile key.
+        await adapter._handle_envelope(_update_envelope(revision=3))
+        assert GID not in adapter.group_allow_from
+        assert GID not in _persisted(tmp_path)
+
+        # And a stranger's message still never reaches the agent.
+        env = _update_envelope(sender=STRANGER, sender_uuid=STRANGER_UUID,
+                               message="/help", revision=3)
+        env["envelope"]["dataMessage"]["groupInfo"]["type"] = "DELIVER"
+        adapter.require_mention = False
+        await adapter._handle_envelope(env)
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bot_member_at_connect_update_does_not_approve(self, monkeypatch, tmp_path):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        calls = _wire(adapter, before="member")
+
+        await adapter._handle_envelope(_update_envelope())
+
+        assert GID not in adapter.group_allow_from
+        assert "joinGroup" not in calls and "updateGroup" not in calls
+
+    @pytest.mark.asyncio
+    async def test_pending_on_stranger_invite_then_approved_update_does_not_accept(
+        self, monkeypatch, tmp_path,
+    ):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        calls = _wire(adapter, is_member=False, before=None)
+
+        await adapter._handle_envelope(
+            _update_envelope(sender=STRANGER, sender_uuid=STRANGER_UUID, revision=1)
+        )
+        await adapter._handle_envelope(_update_envelope(revision=2))
+
+        assert GID not in adapter.group_allow_from
+        assert "joinGroup" not in calls and "updateGroup" not in calls
+
+    @pytest.mark.asyncio
+    async def test_removed_then_readded_by_approved_user_approves(self, monkeypatch, tmp_path):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, before="member")
+
+        # Removal UPDATE: bot no longer listed as a member.
+        adapter._mock_state["now"] = None
+        await adapter._handle_envelope(_update_envelope(revision=4))
+        assert GID not in adapter.group_allow_from
+
+        # Re-added by the approved user.
+        adapter._mock_state["now"] = "member"
+        await adapter._handle_envelope(_update_envelope(revision=5))
+        assert GID in adapter.group_allow_from
+        assert GID in _persisted(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_no_baseline_fails_closed(self, monkeypatch, tmp_path):
+        """listGroups failed at connect: cannot tell an add from a later change."""
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, baseline=False)
+
+        await adapter._handle_envelope(_update_envelope())
+
+        assert GID not in adapter.group_allow_from
+        assert adapter._membership_snapshot_ok is True  # baseline taken now
+
+    @pytest.mark.asyncio
+    async def test_listgroups_failure_does_not_approve(self, monkeypatch, tmp_path):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, list_groups_ok=False)
+
+        await adapter._handle_envelope(_update_envelope())
+
+        assert GID not in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_reconcile_seeds_membership_baseline(self, monkeypatch, tmp_path):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users=APPROVED)
+        _wire(adapter, baseline=False)
+
+        await adapter._reconcile_groups()
+
+        assert adapter._membership_snapshot_ok is True
+        assert adapter._group_membership == {GID: "member"}
+        assert GID not in adapter.group_allow_from  # approved-only: #56 holds
