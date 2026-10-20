@@ -798,6 +798,114 @@ class SignalAdapter(BasePlatformAdapter):
                 approved,
             )
 
+    def _is_inviter_approved(self, sender: str, sender_uuid: str) -> bool:
+        """Whether *sender* may add the bot to a new group (invite policy)."""
+        if self.group_invite_policy == "allow-all":
+            return True
+        # Prefer UUID match (stable) with phone-number fallback.
+        return bool(
+            not self.dm_allow_from  # no allowlist = open mode
+            or "*" in self.dm_allow_from  # wildcard = accept all
+            or (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
+            or sender in self.dm_allow_from
+            or (sender_uuid and sender_uuid in self.dm_allow_from)
+        )
+
+    async def _bot_is_group_member(self, group_id: str) -> Optional[bool]:
+        """True/False if listGroups reports our membership, None if unknown."""
+        try:
+            result = await self._rpc("listGroups", {"account": self.account})
+        except Exception:
+            return None
+        if not isinstance(result, list):
+            return None
+        for group in result:
+            if isinstance(group, dict) and group.get("id") == group_id:
+                return bool(group.get("isMember", False)) and not group.get("isBlocked", False)
+        return None
+
+    async def _accept_group_invite(
+        self,
+        group_id: str,
+        sender: str,
+        sender_uuid: str,
+        sender_name: str,
+        *,
+        via_update: bool = False,
+    ) -> None:
+        """Accept a group invite if the inviter passes the invite policy, then
+        add the group to the runtime allowlist and persist it.
+
+        ``via_update`` marks a dataMessage groupInfo.type == "UPDATE" event.
+        When the bot is already a full member there is nothing to accept, so
+        the join RPC is skipped; otherwise the same joinGroup -> updateGroup
+        sequence as a classic invite runs, and failure means no approval.
+        """
+        gid_short = group_id[:12] if group_id else "?"
+        if not self._is_inviter_approved(sender, sender_uuid):
+            logger.warning(
+                "Signal: rejecting group invite from unapproved user %s for group %s",
+                sender_uuid[:12] if sender_uuid else sender,
+                gid_short,
+            )
+            return
+
+        already_member = False
+        if via_update:
+            already_member = await self._bot_is_group_member(group_id) is True
+
+        if already_member:
+            logger.info(
+                "Signal: auto-accepting group invitation (update) from %s for group %s "
+                "(already a member, no join needed)",
+                sender_uuid[:12] if sender_uuid else sender,
+                gid_short,
+            )
+        else:
+            try:
+                logger.info(
+                    "Signal: auto-accepting group invitation from %s for group %s",
+                    sender_uuid[:12] if sender_uuid else sender,
+                    gid_short,
+                )
+                await self._rpc(
+                    "joinGroup",
+                    {"account": self.account, "groupId": group_id},
+                )
+            except Exception:
+                logger.warning(
+                    "Signal: joinGroup failed for %s, trying updateGroup",
+                    gid_short,
+                )
+                try:
+                    await self._rpc(
+                        "updateGroup",
+                        {"account": self.account, "groupId": group_id},
+                    )
+                except Exception:
+                    logger.exception(
+                        "Signal: failed to accept group invitation for %s",
+                        gid_short,
+                    )
+                    return
+
+        # Dynamically add the accepted group to the runtime allowlist
+        # so subsequent messages from this group are not dropped.
+        self.group_allow_from.add(group_id)
+        logger.info(
+            "Signal: group %s added to runtime allowlist after invite acceptance",
+            gid_short,
+        )
+        # Persist so the group survives container restarts.
+        try:
+            self._persist_approved_group(group_id, sender, sender_uuid, sender_name)
+        except Exception:
+            logger.warning(
+                "Signal: could not persist approved group %s (non-fatal)",
+                gid_short,
+                exc_info=True,
+            )
+
     # ------------------------------------------------------------------
     # Message Handling
     # ------------------------------------------------------------------
@@ -874,71 +982,9 @@ class SignalAdapter(BasePlatformAdapter):
                 group_v2_update = envelope_data.get("groupV2Update") or {}
                 group_v2_invite_id = group_v2_update.get("groupId")
             if group_v2_invite_id:
-                # Check group invite policy
-                if self.group_invite_policy == "allow-all":
-                    inviter_approved = True
-                else:
-                    # Check if the inviter is an approved user.
-                    # Prefer UUID match (stable) with phone-number fallback.
-                    inviter_approved = (
-                        not self.dm_allow_from  # no allowlist = open mode
-                        or "*" in self.dm_allow_from  # wildcard = accept all
-                        or (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
-                        or sender in self.dm_allow_from
-                        or sender_uuid in self.dm_allow_from
-                    )
-                if not inviter_approved:
-                    logger.warning(
-                        "Signal: rejecting group invite from unapproved user %s for group %s",
-                        sender_uuid[:12] if sender_uuid else sender,
-                        group_v2_invite_id[:12] if group_v2_invite_id else "?",
-                    )
-                    return
-                try:
-                    logger.info(
-                        "Signal: auto-accepting group invitation from %s for group %s",
-                        sender_uuid[:12] if sender_uuid else sender,
-                        group_v2_invite_id[:12] if group_v2_invite_id else "?",
-                    )
-                    await self._rpc(
-                        "joinGroup",
-                        {"account": self.account, "groupId": group_v2_invite_id},
-                    )
-                except Exception:
-                    logger.warning(
-                        "Signal: joinGroup failed for %s, trying updateGroup",
-                        group_v2_invite_id[:12] if group_v2_invite_id else "?",
-                    )
-                    try:
-                        await self._rpc(
-                            "updateGroup",
-                            {"account": self.account, "groupId": group_v2_invite_id},
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Signal: failed to accept group invitation for %s",
-                            group_v2_invite_id[:12] if group_v2_invite_id else "?",
-                        )
-                        return
-
-                # Dynamically add the accepted group to the runtime allowlist
-                # so subsequent messages from this group are not dropped.
-                self.group_allow_from.add(group_v2_invite_id)
-                logger.info(
-                    "Signal: group %s added to runtime allowlist after invite acceptance",
-                    group_v2_invite_id[:12] if group_v2_invite_id else "?",
+                await self._accept_group_invite(
+                    group_v2_invite_id, sender, sender_uuid, sender_name,
                 )
-                # Persist so the group survives container restarts.
-                try:
-                    self._persist_approved_group(
-                        group_v2_invite_id, sender, sender_uuid, sender_name,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Signal: could not persist approved group %s (non-fatal)",
-                        group_v2_invite_id[:12] if group_v2_invite_id else "?",
-                        exc_info=True,
-                    )
                 return  # nothing else to process — no dataMessage
 
         # Get data message — also check editMessage (edited messages contain
@@ -963,6 +1009,26 @@ class SignalAdapter(BasePlatformAdapter):
             or (group_info.get("groupId") if isinstance(group_info, dict) else None)
         )
         is_group = bool(group_id)
+
+        # Group-state change (current signal-cli JSON-RPC). Being added to a
+        # group — including remove + re-add — arrives as a dataMessage whose
+        # groupInfo.type is "UPDATE" rather than as a top-level groupV2
+        # envelope, so the invite branch above never sees it. Treat an UPDATE
+        # for a not-yet-allowed group as an invite, gated by exactly the same
+        # inviter policy. An UPDATE never carries user text, so it is never
+        # forwarded to the agent — for allowed groups it is simply dropped.
+        if (
+            is_group
+            and not is_note_to_self
+            and isinstance(group_info, dict)
+            and str(group_info.get("type") or "").upper() == "UPDATE"
+        ):
+            if "*" not in self.group_allow_from and group_id not in self.group_allow_from:
+                await self._accept_group_invite(
+                    group_id, sender, sender_uuid, sender_name,
+                    via_update=True,
+                )
+            return
 
         # Group message filtering — derived from SIGNAL_GROUP_ALLOWED_USERS:
         # - No env var set → groups disabled (default safe behavior)
