@@ -13,6 +13,8 @@ Covers:
   - plain messages in unapproved groups still dropped
   - already-approved group -> no-op, not forwarded to the agent
   - sealed-sender (UUID-only) approved sender works
+  - unset / empty SIGNAL_ALLOWED_USERS never approves (fail-closed)
+  - explicit '*' / allow-all flags approve, mirroring run.py
   - command in a DM approves nothing
   - UPDATE envelopes approve nothing
   - legacy groupV2 invite path unchanged
@@ -45,8 +47,26 @@ def _reset_signal_scheduler():
     _reset_scheduler()
 
 
-def _adapter(monkeypatch, tmp_path, **kw):
-    kw.setdefault("allowed_users", APPROVED)
+def _adapter(monkeypatch, tmp_path, allowed_users=APPROVED, **kw):
+    """Build an adapter with a hermetic environment.
+
+    ``allowed_users=None`` leaves SIGNAL_ALLOWED_USERS unset. Env vars other
+    tests may leak into os.environ (test_config writes SIGNAL_REQUIRE_MENTION)
+    are cleared, and require_mention is always passed explicitly so the result
+    never depends on test order.
+    """
+    for var in (
+        "SIGNAL_REQUIRE_MENTION",
+        "SIGNAL_ALLOWED_USERS",
+        "GATEWAY_ALLOWED_USERS",
+        "SIGNAL_ALLOW_ALL_USERS",
+        "GATEWAY_ALLOW_ALL_USERS",
+        "SIGNAL_GROUP_INVITE_POLICY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    kw.setdefault("require_mention", False)
+    if allowed_users is not None:
+        kw["allowed_users"] = allowed_users
     adapter = _make_signal_adapter(monkeypatch, tmp_path, account=BOT, **kw)
     adapter._own_uuid = BOT_UUID
     adapter._account_normalized = BOT
@@ -250,11 +270,120 @@ class TestRequireMention:
         adapter.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_require_mention_accepts_text_mention(self, monkeypatch, tmp_path):
+    async def test_require_mention_rejects_typed_text_mention(self, monkeypatch, tmp_path):
+        # "@+1555..." typed as plain text is not a Signal mention: no metadata.
         adapter = _adapter(monkeypatch, tmp_path, require_mention=True)
 
         await adapter._handle_envelope(_group_msg(f"@{BOT} /approve-group"))
 
+        assert GID not in adapter.group_allow_from
+        adapter.send.assert_not_called()
+
+
+class TestExplicitAllowlistRequired:
+    """Round-3 audit: an unset SIGNAL_ALLOWED_USERS must never approve.
+
+    dm_allow_from defaults to {"*"} when the variable is unset; the approval
+    gate mirrors run.py's fail-closed _is_individual_allowlisted instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unset_allowlist_stranger_cannot_approve(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        assert "*" in adapter.dm_allow_from  # the fail-open default being guarded
+
+        await adapter._handle_envelope(_group_msg(
+            "/approve-group", sender=STRANGER, sender_uuid=STRANGER_UUID, mention_bot=True,
+        ))
+
+        assert GID not in adapter.group_allow_from
+        assert _persisted(tmp_path) == {}
+        adapter.send.assert_not_called()
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_allowlist_cannot_approve(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users="")
+
+        await adapter._handle_envelope(_group_msg("/approve-group", mention_bot=True))
+
+        assert GID not in adapter.group_allow_from
+        adapter.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_listed_phone_approves(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=f"+15553333333,{APPROVED}")
+
+        await adapter._handle_envelope(_group_msg("/approve-group", mention_bot=True))
+
+        assert GID in adapter.group_allow_from
+        adapter.send.assert_awaited_once_with(f"group:{GID}", "This group is approved.")
+
+    @pytest.mark.asyncio
+    async def test_listed_uuid_sealed_sender_approves(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=APPROVED_UUID)
+
+        await adapter._handle_envelope(_group_msg(
+            "/approve-group", sender=None, sender_uuid=APPROVED_UUID, mention_bot=True,
+        ))
+
+        assert GID in adapter.group_allow_from
+        adapter.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_explicit_wildcard_approves_like_run_py(self, monkeypatch, tmp_path):
+        # run.py's _is_individual_allowlisted treats an explicit "*" as allow-all.
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users="*")
+
+        await adapter._handle_envelope(_group_msg(
+            "/approve-group", sender=STRANGER, sender_uuid=STRANGER_UUID, mention_bot=True,
+        ))
+
+        assert GID in adapter.group_allow_from
+        adapter.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_gateway_allowed_users_listed_approves(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        monkeypatch.setenv("GATEWAY_ALLOWED_USERS", APPROVED)
+
+        await adapter._handle_envelope(_group_msg("/approve-group", mention_bot=True))
+
+        assert GID in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_signal_allow_all_users_approves(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        monkeypatch.setenv("SIGNAL_ALLOW_ALL_USERS", "true")
+
+        await adapter._handle_envelope(_group_msg(
+            "/approve-group", sender=STRANGER, sender_uuid=STRANGER_UUID, mention_bot=True,
+        ))
+
+        assert GID in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_resolved_uuid_without_explicit_list_cannot_approve(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        adapter.dm_allow_from_uuids.add(STRANGER_UUID)
+
+        await adapter._handle_envelope(_group_msg(
+            "/approve-group", sender=None, sender_uuid=STRANGER_UUID, mention_bot=True,
+        ))
+
+        assert GID not in adapter.group_allow_from
+        adapter.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_legacy_invite_unset_allowlist_unchanged(self, monkeypatch, tmp_path):
+        # Legacy groupV2 invite path keeps its old semantics (dm_allow_from).
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+
+        calls = await _send_invite_envelope(
+            adapter, GID, sender=STRANGER, sender_uuid=STRANGER_UUID,
+        )
+
+        assert "joinGroup" in calls
         assert GID in adapter.group_allow_from
 
 

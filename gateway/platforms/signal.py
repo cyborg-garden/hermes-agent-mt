@@ -804,18 +804,47 @@ class SignalAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
 
     def _is_approved_user(self, sender: str, sender_uuid: str) -> bool:
-        """Whether *sender* passes the DM allowlist (UUID or phone match).
+        """Whether *sender* may approve a group with /approve-group.
 
-        Same check the legacy group-invite path uses for "approved-only".
+        Fail-closed, and mirrors ``GatewayRunner._is_individual_allowlisted``
+        in gateway/run.py (the "approved = admin" set) rather than
+        ``dm_allow_from``: ``dm_allow_from`` defaults to ``{"*"}`` when
+        SIGNAL_ALLOWED_USERS is unset, which would let any stranger approve a
+        group (and, through the group allowlist, authorize every member).
+
+        Approves only when:
+          - SIGNAL_ALLOW_ALL_USERS or GATEWAY_ALLOW_ALL_USERS is truthy, or
+          - SIGNAL_ALLOWED_USERS / GATEWAY_ALLOWED_USERS is set explicitly and
+            contains ``*`` (run.py treats an explicit ``*`` as allow-all), or
+            lists the sender's phone or UUID (including the UUID a listed
+            phone resolved to at startup, for sealed-sender messages).
+
+        An unset or empty allowlist never approves. Narrower than run.py in
+        one way: the DM pairing store is not consulted (the adapter has no
+        access to it); list approvers in SIGNAL_ALLOWED_USERS instead.
         """
-        return bool(
-            not self.dm_allow_from  # no allowlist = open mode
-            or "*" in self.dm_allow_from  # wildcard = accept all
-            or (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
-            or (sender and sender in self.dm_allow_from_uuids)
-            or (sender and sender in self.dm_allow_from)
-            or (sender_uuid and sender_uuid in self.dm_allow_from)
-        )
+        truthy = {"true", "1", "yes"}
+        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+
+        explicit = set()
+        for env_name in ("SIGNAL_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS"):
+            explicit.update(
+                x.strip() for x in os.getenv(env_name, "").split(",") if x.strip()
+            )
+        if not explicit:
+            return False
+        if "*" in explicit:
+            return True
+
+        check_ids = {i for i in (sender, sender_uuid) if i}
+        if check_ids & explicit:
+            return True
+        # UUIDs resolved at startup from phones listed in SIGNAL_ALLOWED_USERS.
+        # Only explicit entries are ever resolved, so this cannot widen access.
+        return bool(check_ids & (self.dm_allow_from_uuids or set()))
 
     def _bot_mention_ids(self) -> set:
         """Identifiers a rendered @mention of the bot may carry."""
@@ -836,7 +865,8 @@ class SignalAdapter(BasePlatformAdapter):
         optionally with @mentions of the bot. Any other text, including a
         mention of someone else, is not the command. Group UPDATE events are
         never the command. When require_mention is on, the bot must be
-        @mentioned."""
+        @mentioned with a real Signal mention (mention metadata), not just
+        "@<number>" typed as text."""
         if isinstance(group_info, dict) and str(group_info.get("type") or "").upper() == "UPDATE":
             return False
         raw = data_message.get("message") or ""
@@ -850,11 +880,11 @@ class SignalAdapter(BasePlatformAdapter):
             for m in mentions
             if isinstance(m, dict)
         )
+        # Strip bot mentions (rendered or typed) so the remaining text can be
+        # compared, but only mention metadata counts as "mentioned".
         for ident in sorted(bot_ids, key=len, reverse=True):
             pattern = "@" + re.escape(ident)
-            if re.search(pattern, text, flags=re.IGNORECASE):
-                mentioned = True
-                text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
         if self.require_mention and not mentioned:
             return False
         return text.strip().lower() == "/approve-group"
