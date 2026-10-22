@@ -66,5 +66,9 @@ def test_cli_matches_function():
         check=True,
     )
     assert out.stdout.strip() == "v0.22.4"
+    # No qualifying tag: empty output, exit 0. The workflow treats a non-zero
+    # exit as a crash and fails the run rather than syncing to upstream/main.
     empty = subprocess.run([sys.executable, str(_PATH)], input="junk\n", capture_output=True, text=True)
-    assert empty.returncode == 1 and empty.stdout == ""
+    assert empty.returncode == 0 and empty.stdout == ""
+    none = subprocess.run([sys.executable, str(_PATH)], input="", capture_output=True, text=True)
+    assert none.returncode == 0 and none.stdout == ""

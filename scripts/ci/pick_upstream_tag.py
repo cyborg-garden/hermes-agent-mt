@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Pick the upstream release tag the weekly Upstream Sync should merge.
 
-Reads newline-separated tag names on stdin and prints the chosen tag (or
-nothing, exit 1, when no release tag qualifies).
+Reads newline-separated tag names on stdin and prints the chosen tag. When no
+release tag qualifies it prints nothing and still exits 0, so the workflow can
+tell "no tag" (empty output) from "the picker crashed" (non-zero exit), and a
+crash fails the run instead of silently syncing to the moving upstream/main.
 
 Upstream changed tag schemes in 2026-09:
 
@@ -50,9 +52,8 @@ def pick(tags: list[str]) -> str | None:
 
 def main() -> int:
     chosen = pick(sys.stdin.read().splitlines())
-    if chosen is None:
-        return 1
-    print(chosen)
+    if chosen is not None:
+        print(chosen)
     return 0
 
 

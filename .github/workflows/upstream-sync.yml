@@ -75,7 +75,13 @@ jobs:
             # 2026-09. A plain `--sort=-v:refname` ranks 2026 above 0 and kept
             # picking the stale date tag, so selection lives in a tested script:
             # semver beats date tags, canary/pre-release tags never qualify.
-            TARGET=$(git tag -l 'v*' --merged upstream/main | python3 scripts/ci/pick_upstream_tag.py || true)
+            # No `|| true`: the picker prints nothing (exit 0) when no tag
+            # qualifies, so a non-zero exit is a real failure (crash, broken
+            # git) and must fail the run, not fall back to the moving main.
+            # pipefail because the default `bash -e` shell does not set it,
+            # and a failed `git tag` would otherwise read as "no tags".
+            set -o pipefail
+            TARGET=$(git tag -l 'v*' --merged upstream/main | python3 scripts/ci/pick_upstream_tag.py)
             if [ -z "$TARGET" ]; then
               echo "::warning::No upstream release tag found; falling back to upstream/main"
               TARGET="upstream/main"
