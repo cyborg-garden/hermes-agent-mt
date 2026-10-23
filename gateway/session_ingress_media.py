@@ -497,7 +497,12 @@ def collect_unheld_api_images(db):
     ``db``: a sweep whose database belongs to another profile would see every image here as
     unowned, so it collects nothing."""
     from hermes_constants import get_hermes_home
-    if Path(db.db_path).resolve().parent != get_hermes_home().resolve():
+    # Ownership gate with the same symlinked-store tolerance as
+    # gateway/run_runtime.store_belongs_to_profile: the db may be a symlink
+    # onto a named volume while it still belongs to the active profile.
+    active = get_hermes_home().resolve()
+    db_home = Path(db.db_path).parent
+    if db_home != active and db_home.resolve() != active:
         logger.warning(
             'Skipped retained API image collection: %s is not the active profile store', db.db_path)
         return 0
