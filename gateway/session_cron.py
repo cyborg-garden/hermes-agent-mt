@@ -20,12 +20,12 @@ _owners = {}
 
 
 def bind_owner(authority):
-    home = Path(authority.db.db_path).resolve().parent
+    home = Path(authority.db.db_path).parent
     _owners[home] = (os.getpid(), authority, asyncio.get_running_loop())
 
 
 def unbind_owner(authority):
-    home = Path(authority.db.db_path).resolve().parent
+    home = Path(authority.db.db_path).parent
     bound = _owners.get(home)
     if bound is not None and bound[1] is authority:
         del _owners[home]
@@ -298,7 +298,7 @@ async def execute(authority, ref, row, policy):
     try:
         from cron.cancellation import CancelRequest, _CombinedCancelEvent
 
-        db_path = await asyncio.to_thread(Path(authority.db.db_path).resolve)
+        db_path = Path(authority.db.db_path)
         with _profile_runtime_scope(db_path.parent):
             # The forwarded ``cron.cancel`` carries no reason, so the operator's marker is read here
             # first: a stopped agent run reports "cancelled on request", not a lost fire claim.
