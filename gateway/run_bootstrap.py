@@ -618,6 +618,10 @@ def _reserve_waiting_out_browse_reconcile(ownership, homes, *, wait_s: float | N
             # Only the homes that actually conflict decide: a real owner on any of them refuses at
             # once, even while another home is mid-browse (multiplexer boot, all-or-nothing).
             conflicting = _conflicting_homes(homes)
+            if not conflicting:
+                # The lock was released in the probe window — the OC was stale. Retry immediately;
+                # reserve() should succeed on the next attempt.
+                continue
             holders = [h for h in conflicting
                        if maintenance_holder(h, BROWSE_RECONCILE_PURPOSE) or lock_record_unpublished(h)]
             if not holders or len(holders) < len(conflicting) or time.monotonic() >= deadline:
