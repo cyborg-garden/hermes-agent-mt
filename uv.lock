@@ -2345,7 +2345,7 @@ doc-extract = [
     { name = "firecrawl-anydoc" },
 ]
 documents = [
-    { name = "pymupdf" },
+    { name = "pymupdf", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
 ]
 edge-tts = [
     { name = "edge-tts" },
@@ -2641,7 +2641,7 @@ requires-dist = [
     { name = "pyasn1", marker = "extra == 'google'", specifier = "==0.6.4" },
     { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = "==2.13.4" },
     { name = "pyjwt", extras = ["crypto"], marker = "python_full_version >= '3.14'", specifier = "==2.15.1" },
-    { name = "pymupdf", marker = "extra == 'documents'", specifier = "==1.27.2.3" },
+    { name = "pymupdf", marker = "(platform_machine != 'ARM64' and extra == 'documents') or (sys_platform != 'win32' and extra == 'documents')", specifier = "==1.27.2.3" },
     { name = "pyopen-wakeword", marker = "(platform_machine != 'ARM64' and platform_machine != 'x86_64' and extra == 'wake') or (platform_machine == 'ARM64' and sys_platform == 'darwin' and extra == 'wake') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'wake') or (sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'wake')", specifier = "==1.1.0" },
     { name = "pyopen-wakeword", marker = "(platform_machine != 'ARM64' and platform_machine != 'x86_64' and extra == 'wake-openwakeword') or (platform_machine == 'ARM64' and sys_platform == 'darwin' and extra == 'wake-openwakeword') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'wake-openwakeword') or (sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'wake-openwakeword')", specifier = "==1.1.0" },
     { name = "pypinyin", marker = "extra == 'wake'", specifier = "==0.55.0" },
