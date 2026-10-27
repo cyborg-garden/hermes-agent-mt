@@ -507,7 +507,7 @@ web = [
 # pymupdf is a self-contained wheel (bundles mupdf, no Python transitive deps),
 # so it's cheap to lazy-install; kept out of [all] per the lazy-first policy and
 # eager-baked into the production image via the Dockerfile (mirrors `voice`).
-documents = ["pymupdf==1.27.2.3"]
+documents = ["pymupdf==1.27.2.3; not (sys_platform == 'win32' and platform_machine == 'ARM64')"]
 all = [
   # Policy (2026-05-12): `[all]` includes only extras that genuinely
   # CAN'T be prepared on demand by PM — i.e. things every
