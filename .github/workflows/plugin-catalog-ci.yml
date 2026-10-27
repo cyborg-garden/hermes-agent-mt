@@ -44,13 +44,6 @@ jobs:
           python3 scripts/validate_plugin_catalog.py plugin-catalog/
 
   pinned-source-validate:
-    # Upstream-sync branches legitimately touch catalog files from upstream
-    # alongside hundreds of code files. The "data-only" admission gate is not
-    # meaningful for a merge commit; skip it so the check never fires as a
-    # false positive on upstream-sync PRs.
-    if: |
-      !startsWith(github.head_ref, 'upstream-sync-') &&
-      !contains(github.head_ref, '/upstream-sync-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
