@@ -739,6 +739,40 @@ def cache_image_from_bytes(data: bytes, ext: str = ".jpg") -> str:
     return str(filepath)
 
 
+def get_image_manifest_path() -> Path:
+    """Where cached images' original names are kept.
+
+    Beside the cache rather than inside it, because cleanup_image_cache deletes
+    every old file in the cache directory.
+    """
+    cache_dir = get_image_cache_dir()
+    return cache_dir.parent / f"{cache_dir.name}_manifest.jsonl"
+
+
+def record_image_origin(cached_path: str, filename: Any, message_id: Any) -> None:
+    """Append one line saying what a cached image was called when it was sent.
+
+    Best effort: losing a name must never lose the image. The name comes from
+    the sender, so it is reduced to a bare single-line file name.
+    """
+    try:
+        import json
+        from datetime import timezone
+
+        name = "".join(ch for ch in str(filename or "") if ch.isprintable())
+        name = name.replace("\\", "/").rsplit("/", 1)[-1][:255]
+        row = {
+            "path": str(cached_path),
+            "filename": name,
+            "message_id": str(message_id),
+            "time": datetime.now(timezone.utc).isoformat(),
+        }
+        with get_image_manifest_path().open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.warning("Could not record original image name: %s", exc)
+
+
 async def cache_image_from_url(url: str, ext: str = ".jpg", retries: int = 2) -> str:
     """
     Download an image from a URL and save it to the local cache.

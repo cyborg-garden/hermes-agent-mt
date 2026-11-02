@@ -116,6 +116,7 @@ from gateway.platforms.base import (
     SendResult,
     cache_image_from_url,
     cache_image_from_bytes,
+    record_image_origin,
     cache_audio_from_url,
     cache_audio_from_bytes,
     cache_document_from_bytes,
@@ -6898,6 +6899,7 @@ class DiscordAdapter(BasePlatformAdapter):
                     if ext not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
                         ext = ".jpg"
                     cached_path = await self._cache_discord_image(att, ext)
+                    record_image_origin(cached_path, att.filename, message.id)
                     media_urls.append(cached_path)
                     media_types.append(content_type)
                     print(f"[Discord] Cached user image: {cached_path}", flush=True)
