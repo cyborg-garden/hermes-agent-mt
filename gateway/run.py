@@ -7169,6 +7169,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if drained:
             logger.info("Drained %d inbound message(s) queued during startup restore", drained)
 
+    @staticmethod
+    def _transcript_shows_interrupted_work(transcript) -> bool:
+        """True only if the tail, under any observed chatter, is unfinished work.
+
+        Stricter than ``_resume_trigger_was_addressed``, which keeps resuming
+        anything it cannot classify. This decides whether to tell people a job
+        died, so an empty tail or a finished reply means nothing was lost.
+        """
+        for msg in reversed(transcript or []):
+            role = msg.get("role")
+            if role in {"system", "session_meta"}:
+                continue
+            if role == "user" and msg.get("observed"):
+                continue
+            return role in {"user", "tool"} or (
+                role == "assistant" and bool(msg.get("tool_calls"))
+            )
+        return False
+
     def _notify_skipped_resume(self, entry, adapter, source) -> None:
         """Say once in a shared thread that a job died with the restart.
 
@@ -7176,7 +7195,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         this tells a skipped owner nothing the skip was protecting. Only in a
         thread people are already reading: a skipped owner may have been removed
         from the allowlist, and a bot DM or main-channel line asking them to ask
-        again is something they cannot act on.
+        again is something they cannot act on. Only when the transcript shows
+        work was cut off: ``resume_pending`` can come from recent activity alone.
         """
         if not source.thread_id or source.chat_type in ("dm", "private"):
             return
@@ -7188,6 +7208,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         entry.resume_skip_notice_for = marker
 
         async def _send() -> None:
+            try:
+                transcript = await asyncio.to_thread(
+                    self.session_store.load_transcript,
+                    entry.session_id,
+                    repair_alternation=False,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Could not read transcript for skipped-resume notice %s: %s",
+                    entry.session_key, exc,
+                )
+                entry.resume_skip_notice_for = None
+                return
+            if not self._transcript_shows_interrupted_work(transcript):
+                return
             delivered = False
             try:
                 result = await adapter.send(

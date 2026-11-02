@@ -1975,7 +1975,9 @@ def _revoked_entry(source, marked_at):
 
 async def _run_skip_pass(runner):
     scheduled = runner._schedule_resume_pending_sessions()
-    for _ in range(3):
+    # The notice reads the transcript off the event loop, in a background task.
+    while runner._background_tasks:
+        await asyncio.gather(*list(runner._background_tasks), return_exceptions=True)
         await asyncio.sleep(0)
     return scheduled
 
@@ -1991,7 +1993,104 @@ def _skipped_runner(entry):
     runner.session_store._entries = {entry.session_key: entry}
     adapter.handle_message = AsyncMock()
     adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="1"))
+    runner.session_store.load_transcript = MagicMock(return_value=_INTERRUPTED_TAIL)
     return runner, adapter
+
+
+_OBSERVED = {"role": "user", "content": "[other] chatter", "observed": True}
+_FINISHED = {"role": "assistant", "content": "All done."}
+_ASKED = {"role": "user", "content": "[owner] build the thing"}
+_CALLED = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}],
+}
+_TOOL_ROW = {"role": "tool", "tool_call_id": "c1", "content": "output"}
+_INTERRUPTED_TAIL = [_ASKED]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        pytest.param([_OBSERVED, _OBSERVED], id="only-observed-chatter"),
+        pytest.param([_ASKED, _FINISHED], id="reply-already-finished"),
+        pytest.param([_ASKED, _FINISHED, _OBSERVED], id="chatter-after-finished-reply"),
+        pytest.param([], id="empty-transcript"),
+    ],
+)
+async def test_skipped_resume_says_nothing_when_no_job_was_running(transcript):
+    """A recently active thread is not a thread where a job died."""
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    entry.resume_reason = "restart_interrupted"
+    runner, adapter = _skipped_runner(entry)
+    runner.session_store.load_transcript = MagicMock(return_value=transcript)
+
+    assert await _run_skip_pass(runner) == 0
+
+    adapter.send.assert_not_called()
+    adapter.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        pytest.param([_ASKED], id="unanswered-user"),
+        pytest.param([_ASKED, _CALLED], id="pending-tool-calls"),
+        pytest.param([_ASKED, _CALLED, _TOOL_ROW], id="tool-row"),
+        pytest.param([_ASKED, _CALLED, _TOOL_ROW, _OBSERVED], id="work-under-chatter"),
+    ],
+)
+async def test_skipped_resume_speaks_when_the_tail_shows_interrupted_work(transcript):
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+    runner.session_store.load_transcript = MagicMock(return_value=transcript)
+
+    await _run_skip_pass(runner)
+
+    adapter.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skip_notice_stays_silent_when_the_transcript_cannot_be_read_then_retries():
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+    runner.session_store.load_transcript = MagicMock(side_effect=RuntimeError("db locked"))
+
+    await _run_skip_pass(runner)
+    adapter.send.assert_not_called()
+
+    runner.session_store.load_transcript = MagicMock(return_value=_INTERRUPTED_TAIL)
+    await _run_skip_pass(runner)
+    adapter.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows,expect_sends",
+    [
+        pytest.param([_ASKED, _FINISHED, _OBSERVED, _OBSERVED], 0, id="chatter-only"),
+        # Replay repair merges this ask into the observed row before it, which
+        # would hide the one thing this check is looking for.
+        pytest.param([_ASKED, _FINISHED, _OBSERVED, _ASKED, _OBSERVED], 1, id="ask-between-chatter"),
+    ],
+)
+async def test_skip_notice_reads_a_real_stored_transcript(tmp_path, rows, expect_sends):
+    """The observed flag has to survive the real store for this check to work."""
+    store = _make_store(tmp_path)
+    stored = store.get_or_create_session(_make_source())
+    for row in rows:
+        store.append_to_transcript(stored.session_id, dict(row))
+
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    entry.session_id = stored.session_id
+    runner, adapter = _skipped_runner(entry)
+    runner.session_store.load_transcript = store.load_transcript
+
+    await _run_skip_pass(runner)
+
+    assert adapter.send.await_count == expect_sends
 
 
 @pytest.mark.asyncio
