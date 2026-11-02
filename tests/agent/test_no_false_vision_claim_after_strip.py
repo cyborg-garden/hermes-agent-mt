@@ -63,6 +63,49 @@ def test_server_rejection_leaves_a_user_who_typed_the_words_alone():
     assert messages[0]["content"][0]["text"] == NATIVE_VISION_ACK
 
 
+def test_anthropic_image_cap_drops_the_claim_from_evicted_results():
+    """Only the newest three tool images go to native Anthropic."""
+    from agent.anthropic_adapter import convert_messages_to_anthropic
+
+    messages = [{"role": "user", "content": "look"}]
+    for index in range(5):
+        call_id = f"t{index}"
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": call_id, "type": "function", "function": {"name": "vision_analyze", "arguments": "{}"}}
+                ],
+            }
+        )
+        envelope = _build_native_vision_tool_result(
+            "/tmp/door.png", QUESTION, "data:image/png;base64,AAAA", 4
+        )
+        messages.append({"role": "tool", "tool_call_id": call_id, "content": envelope["content"]})
+    messages.append({"role": "user", "content": "ok"})
+
+    _, converted = convert_messages_to_anthropic(messages)
+
+    results = [
+        block
+        for msg in converted
+        if isinstance(msg["content"], list)
+        for block in msg["content"]
+        if block.get("type") == "tool_result"
+    ]
+    assert len(results) == 5
+    for block in results[:2]:
+        assert not any(part["type"] == "image" for part in block["content"])
+        assert NATIVE_VISION_ACK not in str(block["content"])
+        assert "[screenshot removed to save context]" in str(block["content"])
+        assert QUESTION in str(block["content"])
+    # A result that still holds its image keeps the sentence, which is true there.
+    for block in results[2:]:
+        assert any(part["type"] == "image" for part in block["content"])
+        assert NATIVE_VISION_ACK in str(block["content"])
+
+
 def test_old_screenshot_prune_drops_the_claim_and_does_not_mutate():
     original = _tool_message()["content"]
     before = copy.deepcopy(original)

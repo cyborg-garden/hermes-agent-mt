@@ -2388,11 +2388,13 @@ def _evict_old_screenshots(result: List[Dict[str, Any]]) -> None:
                 continue
             _image_count += 1
             if _image_count > _MAX_KEEP_IMAGES:
-                block["content"] = [
+                from agent.context_compressor import _without_native_vision_claim
+
+                block["content"] = _without_native_vision_claim([
                     b if b.get("type") != "image"
                     else {"type": "text", "text": "[screenshot removed to save context]"}
                     for b in inner
-                ]
+                ])
 
 
 def convert_messages_to_anthropic(
