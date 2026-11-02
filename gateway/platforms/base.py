@@ -1505,11 +1505,13 @@ _MEDIA_EXT_ALTERNATION = "|".join(
 # consumer so both behave identically.
 # Path anchors: ``~/`` (Unix home-relative), ``/`` (Unix absolute),
 # ``X:\\`` or ``X:/`` (Windows drive-letter absolute — #34632).
+# Models also wrap the tag in markdown emphasis (``**MEDIA:/x.png**``), which is
+# accepted and removed with the tag.
 MEDIA_TAG_CLEANUP_RE = re.compile(
-    r'''[`"']?MEDIA:\s*'''
+    r'''\*{0,3}[`"']?MEDIA:\s*'''
     r'''(?P<path>`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|'''
     r'''(?:~/|/|[A-Za-z]:[/\\])\S+(?:[^\S\n]+\S+)*?\.(?:''' + _MEDIA_EXT_ALTERNATION + r'''))'''
-    r'''(?=[\s`"',;:)\]}]|$)[`"']?''',
+    r'''(?=[\s`"',;:)\]}*]|$)[`"']?\*{0,3}''',
     re.IGNORECASE,
 )
 
@@ -1524,7 +1526,7 @@ MEDIA_TAG_CLEANUP_RE = re.compile(
 # prompt-injection paths that do not validate are left visible instead of
 # silently dropped.
 MEDIA_EXTENSIONLESS_TAG_RE = re.compile(
-    r'''[`"']?MEDIA:\s*'''
+    r'''\*{0,3}[`"']?MEDIA:\s*'''
     r'''(?P<path>`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|'''
     r'''(?:~/|/|[A-Za-z]:[/\\])[^\s\n`"']+)'''
     r'''[`"']?\s*''',
@@ -1536,7 +1538,7 @@ def _normalize_media_tag_path(raw: str) -> str:
     path = str(raw or "").strip()
     if len(path) >= 2 and path[0] == path[-1] and path[0] in "`\"'":
         path = path[1:-1].strip()
-    return path.lstrip("`\"'").rstrip("`\"',.;:)}]")
+    return path.lstrip("`\"'").rstrip("`\"',.;:)}]*")
 
 
 def _path_lacks_deliverable_extension(path: str) -> bool:
