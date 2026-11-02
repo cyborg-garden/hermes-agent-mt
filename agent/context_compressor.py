@@ -295,10 +295,13 @@ _SUMMARY_FAILURE_COOLDOWN_SECONDS = 600
 # become another unbounded transcript copy after the LLM summarizer failed.
 _FALLBACK_SUMMARY_MAX_CHARS = 8_000
 _FALLBACK_TURN_MAX_CHARS = 700
-# The list of what the user said and sent has its own bound, so a long session
-# shortens each entry instead of losing the oldest rules off the end.
+# The list of what the user said and sent has its own bound. A long session
+# shortens each entry first. Past that the oldest entries go, and a line keeps
+# count of them.
 _FALLBACK_USER_LIST_MAX_CHARS = 24_000
 _FALLBACK_USER_ENTRY_MIN_CHARS = 80
+_FALLBACK_USER_ENTRY_OVERHEAD = len("- " + " ...[truncated]" + "\n")
+_FALLBACK_ATTACHMENT_LIST_MAX_CHARS = 12_000
 _FALLBACK_CARRIED_MAX_CHARS = 8_000
 _FALLBACK_CARRIED_HEADING = "## Carried From Earlier Summary"
 _FALLBACK_USERS_HEADING = "## Every User Message So Far"
@@ -307,6 +310,10 @@ _FALLBACK_LIST_NOTE = (
     "(Historical record, oldest first. Rules and preferences here still apply. "
     "Do NOT re-answer these; session_search can read the full text.)"
 )
+# These sit above the part of the template that can be truncated.
+_FALLBACK_TEMPLATE_MARK = "This fallback was generated locally without an LLM summary call."
+_FALLBACK_NO_DECISIONS = "None recoverable from deterministic fallback."
+_FALLBACK_OMITTED_RE = re.compile(r"^\.\.\.(\d+) earlier \w+ not listed", re.MULTILINE)
 _TRIGGER_LINE_RE = re.compile(r"\[Triggering message id:[^\]]*\]\s*")
 _ATTACHED_LINE_RE = re.compile(r"\[(?:Image|Audio|Video|File|Document) attached at: [^\]]*\]\s*")
 _ATTACHMENT_PATH_RE = re.compile(
@@ -499,6 +506,38 @@ def _append_text_to_content(content: Any, text: str, *, prepend: bool = False) -
         return [text_block, *content] if prepend else [*content, text_block]
     rendered = str(content)
     return text + rendered if prepend else rendered + text
+
+
+def _without_leading_system_notes(text: str) -> str:
+    """Remove gateway "[System ...]" notes from the start of a user message.
+
+    The gateway puts them in front of what the person wrote, so only the note
+    goes. A note that never closes is treated as the whole message.
+    """
+    text = text.strip()
+    while text.startswith("[System"):
+        depth = 0
+        for index, char in enumerate(text):
+            depth += (char == "[") - (char == "]")
+            if depth == 0:
+                text = text[index + 1 :].strip()
+                break
+        else:
+            return ""
+    return text
+
+
+def _newest_lines_that_fit(lines: List[str], max_chars: int) -> List[str]:
+    """Return the longest run of lines from the end whose total fits, in order."""
+    kept: List[str] = []
+    used = 0
+    for line in reversed(lines):
+        used += len(line) + 1
+        if used > max_chars:
+            break
+        kept.append(line)
+    kept.reverse()
+    return kept
 
 
 def _without_native_vision_claim(parts: List[Any]) -> List[Any]:
@@ -2079,7 +2118,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         it survives any number of failed summaries without nesting.
         """
         prior = self._previous_summary or ""
-        carried, users, attachments = self._split_fallback_record(prior)
+        record = self._split_fallback_record(prior)
+        carried, users, attachments, users_omitted, attachments_omitted = record
 
         for msg in turns:
             if msg.get("role") != "user":
@@ -2087,8 +2127,10 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             content = msg.get("content")
             if self._is_context_summary_content(content):
                 continue
-            raw = redact_sensitive_text(_content_text_for_contains(content))
-            if raw.lstrip().startswith("[System"):
+            raw = _without_leading_system_notes(
+                redact_sensitive_text(_content_text_for_contains(content))
+            )
+            if not raw:
                 continue
             for match in _ATTACHMENT_PATH_RE.finditer(raw):
                 path = match.group(0)
@@ -2112,39 +2154,52 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             sections.append(f"{_FALLBACK_CARRIED_HEADING}\n{carried}")
         if users:
             sections.append(
-                f"{_FALLBACK_USERS_HEADING}\n{_FALLBACK_LIST_NOTE}\n{self._bound_user_list(users)}"
+                f"{_FALLBACK_USERS_HEADING}\n{_FALLBACK_LIST_NOTE}\n"
+                f"{self._bound_user_list(users, users_omitted)}"
             )
         if attachments:
             sections.append(
-                _FALLBACK_ATTACHMENTS_HEADING + "\n" + "\n".join(f"- {a}" for a in attachments)
+                f"{_FALLBACK_ATTACHMENTS_HEADING}\n"
+                f"{self._bound_attachment_list(attachments, attachments_omitted)}"
             )
         return "\n\n" + "\n\n".join(sections) if sections else ""
 
     @staticmethod
-    def _bound_user_list(users: List[str]) -> str:
-        """Shorten entries evenly so every message is still named."""
-        budget = _FALLBACK_USER_LIST_MAX_CHARS // max(len(users), 1)
+    def _bound_user_list(users: List[str], already_omitted: int = 0) -> str:
+        """Shorten entries evenly, then let the oldest go and keep count of them."""
+        budget = _FALLBACK_USER_LIST_MAX_CHARS // max(len(users), 1) - _FALLBACK_USER_ENTRY_OVERHEAD
         cap = max(min(budget, _FALLBACK_TURN_MAX_CHARS), _FALLBACK_USER_ENTRY_MIN_CHARS)
-        lines = []
-        used = 0
-        for count, text in enumerate(users):
-            line = "- " + (text if len(text) <= cap else text[:cap].rstrip() + " ...[truncated]")
-            used += len(line) + 1
-            if used > _FALLBACK_USER_LIST_MAX_CHARS + len(users) * 17:
-                lines.append(f"...{len(users) - count} more, use session_search to read them.")
-                break
-            lines.append(line)
-        return "\n".join(lines)
+        lines = [
+            "- " + (text if len(text) <= cap else text[:cap].rstrip() + " ...[truncated]")
+            for text in users
+        ]
+        kept = _newest_lines_that_fit(lines, _FALLBACK_USER_LIST_MAX_CHARS)
+        omitted = already_omitted + len(lines) - len(kept)
+        if omitted:
+            kept.insert(0, f"...{omitted} earlier messages not listed, use session_search to read them.")
+        return "\n".join(kept)
 
     @staticmethod
-    def _split_fallback_record(prior: str) -> tuple[str, List[str], List[str]]:
-        """Split an earlier summary into its carried text, users and attachments.
+    def _bound_attachment_list(attachments: List[str], already_omitted: int = 0) -> str:
+        """Keep the newest attachments and count the rest."""
+        lines = [f"- {a}" for a in attachments]
+        kept = _newest_lines_that_fit(lines, _FALLBACK_ATTACHMENT_LIST_MAX_CHARS)
+        omitted = already_omitted + len(lines) - len(kept)
+        if omitted:
+            kept.insert(0, f"...{omitted} earlier attachments not listed.")
+        return "\n".join(kept)
 
-        An LLM summary has none of these headings, so all of it is carried.
+    @staticmethod
+    def _split_fallback_record(prior: str) -> tuple[str, List[str], List[str], int, int]:
+        """Split an earlier summary into carried text, the two lists and their omitted counts.
+
+        A deterministic fallback carries only its record, so it does not nest. Any
+        other summary is carried whole, less the lists, including one written by a
+        model that kept the list headings.
         """
         body = ContextCompressor._strip_summary_prefix(prior)
         if _FALLBACK_USERS_HEADING not in body and _FALLBACK_ATTACHMENTS_HEADING not in body:
-            return body, [], []
+            return body, [], [], 0, 0
 
         def _section(heading: str) -> str:
             if heading not in body:
@@ -2159,6 +2214,24 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 if line.startswith("- ") and line[2:].strip()
             ]
 
+        def _omitted(heading: str) -> int:
+            match = _FALLBACK_OMITTED_RE.search(_section(heading))
+            return int(match.group(1)) if match else 0
+
+        record = (
+            _items(_FALLBACK_USERS_HEADING),
+            _items(_FALLBACK_ATTACHMENTS_HEADING),
+            _omitted(_FALLBACK_USERS_HEADING),
+            _omitted(_FALLBACK_ATTACHMENTS_HEADING),
+        )
+
+        decisions = _section("## Key Decisions").strip()
+        if _FALLBACK_TEMPLATE_MARK not in body or decisions not in ("", _FALLBACK_NO_DECISIONS):
+            carried = body.replace(f"{_FALLBACK_CARRIED_HEADING}\n", "")
+            for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING):
+                carried = carried.replace(f"{heading}{_section(heading)}", "")
+            return (carried.strip(), *record)
+
         # The carried text can hold its own headings, so it ends at the list.
         carried = ""
         if _FALLBACK_CARRIED_HEADING in body:
@@ -2169,11 +2242,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         completed = _section("## Completed Actions").strip()
         if completed and not completed.startswith("None recoverable"):
             carried = f"{carried}\n\nEarlier actions:\n{completed}".strip()
-        return (
-            carried,
-            _items(_FALLBACK_USERS_HEADING),
-            _items(_FALLBACK_ATTACHMENTS_HEADING),
-        )
+        return (carried, *record)
 
     def _fallback_to_main_for_compression(self, e: Exception, reason: str) -> None:
         """Switch from a separate ``summary_model`` back to the main model.

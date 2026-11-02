@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 import pytest
@@ -169,6 +170,168 @@ def test_a_later_real_summary_is_told_about_the_list():
     with patch("agent.context_compressor.call_llm", side_effect=_call):
         _compressor().compress(messages, current_tokens=90_000, force=True)
     assert "no music for the dream sequences" in seen["prompt"]
+
+
+class _Reply:
+    """A summariser reply shaped like the real client's response."""
+
+    def __init__(self, text):
+        message = type("M", (), {"content": text})
+        choice = type("C", (), {"message": message, "finish_reason": "stop"})
+        self.choices = [choice]
+        self.usage = None
+
+
+def _compact_with_working_summariser(messages, text):
+    with patch("agent.context_compressor.call_llm", return_value=_Reply(text)):
+        return _compressor().compress(messages, current_tokens=90_000, force=True)
+
+
+REAL_SUMMARY_KEEPING_THE_LIST = (
+    "## Active Task\nBUILD_THE_HOSPITAL\n\n"
+    "## Key Decisions\nDECISION_NO_MUSIC\n\n"
+    "## Every User Message So Far\n- kept rule one\n- kept rule two\n\n"
+    "## Every Attachment So Far\n- /opt/data/image_cache/kept.png\n\n"
+    "## Remaining Work\nFINISH_THE_STAIRS"
+)
+
+
+def test_a_real_summary_that_kept_the_list_heading_survives_a_dead_pass():
+    """Dead, working, dead again must not lose what the real summary said."""
+    messages = [{"role": "user", "content": "head"}, {"role": "assistant", "content": "ok"}]
+    messages += _filler("a")
+    messages = _compact_with_dead_summariser(messages)
+    messages += _filler("b", n=8)
+    messages = _compact_with_working_summariser(messages, REAL_SUMMARY_KEEPING_THE_LIST)
+    messages += _filler("c", n=8)
+
+    text = _summary_text(_compact_with_dead_summariser(messages))
+
+    assert "BUILD_THE_HOSPITAL" in text
+    assert "DECISION_NO_MUSIC" in text
+    assert "FINISH_THE_STAIRS" in text
+    # The kept list is merged into the live one, not carried as a second copy.
+    assert text.count("## Every User Message So Far") == 1
+    assert text.count("## Every Attachment So Far") == 1
+    assert text.count("kept rule one") == 1
+    assert "/opt/data/image_cache/kept.png" in text
+
+
+def test_a_real_summary_with_the_list_survives_many_dead_passes():
+    c = _compressor()
+    c._previous_summary = REAL_SUMMARY_KEEPING_THE_LIST
+    for _ in range(4):
+        summary = c._build_static_fallback_summary(
+            [{"role": "user", "content": "go on"}], reason="down"
+        )
+        c._previous_summary = c._strip_summary_prefix(summary)
+    assert "DECISION_NO_MUSIC" in summary
+    assert summary.count("DECISION_NO_MUSIC") == 1
+    assert summary.count("## Carried From Earlier Summary") == 1
+
+
+def test_previous_summary_is_set_after_a_fallback():
+    """The same compressor must build its next pass on the fallback's record."""
+    messages = [{"role": "user", "content": "head"}, {"role": "assistant", "content": "ok"}]
+    messages += [{"role": "user", "content": "[sam] the only rule"}, {"role": "assistant", "content": "ok"}]
+    messages += _filler("a")
+    c = _compressor()
+    with patch(
+        "agent.context_compressor.call_llm", side_effect=RuntimeError("Error code: 500 boom")
+    ):
+        c.compress(messages, current_tokens=90_000, force=True)
+    assert "[sam] the only rule" in (c._previous_summary or "")
+    assert not (c._previous_summary or "").startswith(SUMMARY_PREFIX)
+
+
+def _long_messages(start, count):
+    return [
+        {"role": "user", "content": f"msg{i:04d} " + "x" * 600}
+        for i in range(start, start + count)
+    ]
+
+
+def test_when_the_list_overflows_the_newest_messages_stay():
+    summary = _compressor()._build_static_fallback_summary(
+        _long_messages(0, 450), reason="down"
+    )
+    assert "msg0449" in summary
+    assert "msg0000" not in summary
+    assert "earlier messages not listed" in summary
+
+
+def test_the_count_of_unlisted_messages_is_not_lost_on_the_next_pass():
+    c = _compressor()
+    first = c._build_static_fallback_summary(_long_messages(0, 450), reason="down")
+    omitted = int(re.search(r"\.\.\.(\d+) earlier messages not listed", first).group(1))
+    assert omitted > 0
+
+    c._previous_summary = c._strip_summary_prefix(first)
+    second = c._build_static_fallback_summary(
+        [{"role": "user", "content": "one more"}], reason="down"
+    )
+    now = int(re.search(r"\.\.\.(\d+) earlier messages not listed", second).group(1))
+    assert now >= omitted
+    assert "one more" in second
+    listed = second.split("## Every User Message So Far", 1)[1].count("\n- ")
+    assert listed + now == 451
+
+
+def test_attachment_list_is_bounded_and_keeps_the_newest():
+    turns = [
+        {"role": "user", "content": f"[sam] sheet\n\n[Image attached at: /opt/data/image_cache/img_{i:05d}.png]"}
+        for i in range(2000)
+    ]
+    summary = _compressor()._build_static_fallback_summary(turns, reason="down")
+    attachments = summary.split("## Every Attachment So Far", 1)[1]
+    assert len(attachments) < 13_000
+    assert "img_01999.png" in attachments
+    assert "img_00000.png" not in attachments
+    assert "earlier attachments not listed" in attachments
+
+
+def test_attachment_count_is_not_lost_on_the_next_pass():
+    c = _compressor()
+    turns = [
+        {"role": "user", "content": f"[sam] s\n\n[Image attached at: /opt/data/image_cache/img_{i:05d}.png]"}
+        for i in range(2000)
+    ]
+    first = c._build_static_fallback_summary(turns, reason="down")
+    omitted = int(re.search(r"\.\.\.(\d+) earlier attachments not listed", first).group(1))
+    c._previous_summary = c._strip_summary_prefix(first)
+    second = c._build_static_fallback_summary(
+        [{"role": "user", "content": "[Image attached at: /opt/data/image_cache/new.png]"}],
+        reason="down",
+    )
+    assert "/opt/data/image_cache/new.png" in second
+    now = int(re.search(r"\.\.\.(\d+) earlier attachments not listed", second).group(1))
+    assert now > omitted
+
+
+def test_user_words_after_a_gateway_system_note_are_kept():
+    wrapped = (
+        "[System note: A new message has arrived. The conversation history contains pending "
+        "tool outputs from an interrupted turn. IGNORE those pending results. Address the "
+        "user's NEW message below FIRST. Do NOT re-execute old tool calls from the history.]"
+        "\n\n[sam] NEVER_USE_MUSIC_RULE please"
+    )
+    summary = _compressor()._build_static_fallback_summary(
+        [{"role": "user", "content": wrapped}], reason="down"
+    )
+    listed = summary.split("## Every User Message So Far", 1)[1]
+    assert "NEVER_USE_MUSIC_RULE" in listed
+    assert "IGNORE those pending results" not in listed
+
+
+def test_a_system_note_with_no_user_words_is_still_left_out():
+    summary = _compressor()._build_static_fallback_summary(
+        [
+            {"role": "user", "content": "[System: Your previous response was truncated.]"},
+            {"role": "user", "content": "[System note: The auto-resumed task [x] was stopped.]"},
+        ],
+        reason="down",
+    )
+    assert "## Every User Message So Far" not in summary
 
 
 def test_secrets_in_a_user_message_stay_redacted():
