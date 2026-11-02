@@ -501,6 +501,28 @@ def _append_text_to_content(content: Any, text: str, *, prepend: bool = False) -
     return text + rendered if prepend else rendered + text
 
 
+def _without_native_vision_claim(parts: List[Any]) -> List[Any]:
+    """Drop the "you can see it" sentence from parts that no longer hold an image.
+
+    Returns new part dicts for anything changed, and never mutates the input.
+    """
+    from tools.vision_tools import NATIVE_VISION_ACK
+
+    kept: List[Any] = []
+    for part in parts:
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and NATIVE_VISION_ACK in str(part.get("text") or "")
+        ):
+            text = part["text"].replace(NATIVE_VISION_ACK, "").strip()
+            if not text:
+                continue
+            part = {**part, "text": text}
+        kept.append(part)
+    return kept
+
+
 def _strip_image_parts_from_parts(parts: Any) -> Any:
     """Strip image parts from an OpenAI-style content-parts list.
 
@@ -523,7 +545,7 @@ def _strip_image_parts_from_parts(parts: Any) -> Any:
             out.append({"type": "text", "text": "[screenshot removed to save context]"})
         else:
             out.append(part)
-    return out if had_image else None
+    return _without_native_vision_claim(out) if had_image else None
 
 
 def _truncate_tool_call_args_json(args: str, head_chars: int = 200) -> str:
@@ -620,7 +642,7 @@ def _strip_images_from_content(content: Any) -> Any:
             })
         else:
             new_parts.append(p)
-    return new_parts
+    return _without_native_vision_claim(new_parts)
 
 
 def _strip_historical_media(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

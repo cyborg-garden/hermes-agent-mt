@@ -384,6 +384,22 @@ def _sanitize_tools_non_ascii(tools: list) -> bool:
     return _sanitize_structure_non_ascii(tools)
 
 
+def _correct_native_vision_claim(parts: list) -> list:
+    """Swap the "you can see it" sentence for the truth, once the pixels are gone."""
+    from tools.vision_tools import NATIVE_VISION_ACK, NO_IMAGE_SEEN
+
+    corrected = []
+    for part in parts:
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and NATIVE_VISION_ACK in str(part.get("text") or "")
+        ):
+            part = {**part, "text": part["text"].replace(NATIVE_VISION_ACK, NO_IMAGE_SEEN)}
+        corrected.append(part)
+    return corrected
+
+
 def _strip_images_from_messages(messages: list) -> bool:
     """Remove image_url content parts from all messages in-place.
 
@@ -418,7 +434,7 @@ def _strip_images_from_messages(messages: list) -> bool:
                 new_parts.append(part)
         if len(new_parts) < len(content):
             if new_parts:
-                msg["content"] = new_parts
+                msg["content"] = _correct_native_vision_claim(new_parts)
             elif msg.get("role") == "tool":
                 # Preserve tool_call_id linkage — providers require every
                 # assistant tool_call to have a matching tool response.
