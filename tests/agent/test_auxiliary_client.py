@@ -61,6 +61,11 @@ class _FakeAnthropicStream:
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     """Strip provider env vars so each test starts clean."""
+    # Earlier files in one pytest process can leave a runtime behind: an agent
+    # fallback records one. These tests read the config-based default.
+    from agent.auxiliary_client import clear_runtime_main
+
+    clear_runtime_main()
     for key in (
         "OPENROUTER_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
         "OPENAI_MODEL", "LLM_MODEL", "NOUS_INFERENCE_BASE_URL",
