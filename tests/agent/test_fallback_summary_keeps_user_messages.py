@@ -230,6 +230,21 @@ def test_a_real_summary_with_the_list_survives_many_dead_passes():
     assert summary.count("## Carried From Earlier Summary") == 1
 
 
+def test_a_truncated_fallback_is_still_recognised_as_a_fallback():
+    """Its own Key Decisions line can be cut, leaving only the carried summary's."""
+    prior = (
+        "## Constraints & Preferences\n"
+        "- This fallback was generated locally without an LLM summary call.\n"
+        "...[fallback summary truncated]\n\n"
+        "## Carried From Earlier Summary\n## Key Decisions\nDECISION_NO_MUSIC\n\n"
+        "## Every User Message So Far\n- a rule"
+    )
+    carried, users, _, _, _ = ContextCompressor._split_fallback_record(prior)
+    assert "DECISION_NO_MUSIC" in carried
+    assert "generated locally" not in carried
+    assert users == ["a rule"]
+
+
 def test_previous_summary_is_set_after_a_fallback():
     """The same compressor must build its next pass on the fallback's record."""
     messages = [{"role": "user", "content": "head"}, {"role": "assistant", "content": "ok"}]

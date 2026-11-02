@@ -2225,8 +2225,12 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             _omitted(_FALLBACK_ATTACHMENTS_HEADING),
         )
 
-        decisions = _section("## Key Decisions").strip()
-        if _FALLBACK_TEMPLATE_MARK not in body or decisions not in ("", _FALLBACK_NO_DECISIONS):
+        # Look only above the carried text, which can hold a heading of the same name.
+        own = body.split(_FALLBACK_CARRIED_HEADING, 1)[0]
+        decisions = re.split(r"\n## ", own.split("## Key Decisions", 1)[-1], maxsplit=1)[0].strip()
+        if "## Key Decisions" not in own:
+            decisions = ""
+        if _FALLBACK_TEMPLATE_MARK not in own or decisions not in ("", _FALLBACK_NO_DECISIONS):
             carried = body.replace(f"{_FALLBACK_CARRIED_HEADING}\n", "")
             for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING):
                 carried = carried.replace(f"{heading}{_section(heading)}", "")
