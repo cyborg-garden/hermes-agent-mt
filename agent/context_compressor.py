@@ -527,6 +527,36 @@ def _without_leading_system_notes(text: str) -> str:
     return text
 
 
+def _merged_tail_words(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a message merged into a summary as it was before the merge.
+
+    Any other message comes back unchanged, and the input is never mutated.
+    """
+    content = msg.get("content")
+    if _MERGED_SUMMARY_DELIMITER not in _content_text_for_contains(content):
+        return msg
+
+    def _before_delimiter(text: str) -> str:
+        return (
+            text.split(_MERGED_SUMMARY_DELIMITER, 1)[0]
+            .replace(_MERGED_PRIOR_CONTEXT_HEADER, "", 1)
+            .strip()
+        )
+
+    if isinstance(content, str):
+        return {**msg, "content": _before_delimiter(content)}
+    kept: List[Any] = []
+    for part in content if isinstance(content, list) else []:
+        text = part.get("text") if isinstance(part, dict) and part.get("type") == "text" else None
+        if text is None:
+            kept.append(part)
+            continue
+        words = _before_delimiter(text)
+        if words:
+            kept.append({**part, "text": words})
+    return {**msg, "content": kept}
+
+
 def _newest_lines_that_fit(lines: List[str], max_chars: int) -> List[str]:
     """Return the longest run of lines from the end whose total fits, in order."""
     kept: List[str] = []
@@ -1920,6 +1950,7 @@ class ContextCompressor(ContextEngine):
         self,
         turns_to_summarize: List[Dict[str, Any]],
         reason: str | None = None,
+        earlier_turns: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Build a deterministic handoff when the LLM summarizer is unavailable.
 
@@ -2109,29 +2140,37 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         summary = self._with_summary_prefix(redact_sensitive_text(body.strip()))
         if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
             summary = summary[: _FALLBACK_SUMMARY_MAX_CHARS - 42].rstrip() + "\n...[fallback summary truncated]"
-        return summary + self._build_fallback_user_record(turns_to_summarize)
+        return summary + self._build_fallback_user_record(turns_to_summarize, earlier_turns)
 
-    def _build_fallback_user_record(self, turns: List[Dict[str, Any]]) -> str:
+    def _build_fallback_user_record(
+        self,
+        turns: List[Dict[str, Any]],
+        earlier_turns: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """Carry the prior summary and list every user message and attachment.
 
         The list is rebuilt from the prior fallback's own list on every pass, so
         it survives any number of failed summaries without nesting.
+
+        ``earlier_turns`` are the rows this pass drops up to and including the
+        latest summary. They are in no earlier list: a protected head that has
+        just decayed, and any user message merged into that summary.
         """
         prior = self._previous_summary or ""
         record = self._split_fallback_record(prior)
         carried, users, attachments, users_omitted, attachments_omitted = record
 
-        for msg in turns:
+        def _note(msg: Dict[str, Any], users: List[str], attachments: List[str]) -> None:
             if msg.get("role") != "user":
-                continue
+                return
             content = msg.get("content")
             if self._is_context_summary_content(content):
-                continue
+                return
             raw = _without_leading_system_notes(
                 redact_sensitive_text(_content_text_for_contains(content))
             )
             if not raw:
-                continue
+                return
             for match in _ATTACHMENT_PATH_RE.finditer(raw):
                 path = match.group(0)
                 if path not in attachments:
@@ -2146,6 +2185,21 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             text = re.sub(r"\s+", " ", text).strip()
             if text and text not in users:
                 users.append(text)
+
+        # The list is oldest first. Rows before the summary predate everything
+        # on it, and a row merged into the summary comes right after it.
+        earlier = [
+            _merged_tail_words(msg) if self._is_context_summary_content(msg.get("content")) else msg
+            for msg in earlier_turns or []
+        ]
+        older_users: List[str] = []
+        older_attachments: List[str] = []
+        for msg in earlier[:-1]:
+            _note(msg, older_users, older_attachments)
+        for msg in [*earlier[-1:], *turns]:
+            _note(msg, users, attachments)
+        users = older_users + [u for u in users if u not in older_users]
+        attachments = older_attachments + [a for a in attachments if a not in older_attachments]
 
         sections = []
         if carried:
@@ -3443,6 +3497,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             return messages
 
         turns_to_summarize = messages[compress_start:compress_end]
+        earlier_turns: List[Dict[str, Any]] = []
         # A persisted handoff summary can sit in the protected head after a
         # resume (commonly immediately after the system prompt). Search from
         # the first non-system message through the compression window so we can
@@ -3460,6 +3515,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             if summary_body and not self._previous_summary:
                 self._previous_summary = summary_body
             turns_to_summarize = messages[max(compress_start, summary_idx + 1):compress_end]
+            earlier_turns = messages[compress_start:summary_idx + 1]
         elif self._previous_summary:
             # No handoff summary found in the current messages, but
             # _previous_summary is non-empty — it was set by a different
@@ -3579,6 +3635,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = self._build_static_fallback_summary(
                 turns_to_summarize,
                 reason=self._last_summary_error,
+                earlier_turns=earlier_turns,
             )
             # The next pass, real or fallback, builds on this record.
             self._previous_summary = self._strip_summary_prefix(summary)

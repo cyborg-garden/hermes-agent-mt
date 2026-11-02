@@ -353,3 +353,111 @@ def test_secrets_in_a_user_message_stay_redacted():
     turns = [{"role": "user", "content": "my key is ghp_abcdefghijklmnopqrstuvwxyz0123456789"}]
     summary = _compressor()._build_static_fallback_summary(turns, reason="down")
     assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in summary
+
+
+def _mare_compressor():
+    with patch("agent.context_compressor.get_model_context_length", return_value=100_000):
+        return ContextCompressor(
+            model="test/model", protect_first_n=3, protect_last_n=20, quiet_mode=True
+        )
+
+
+def _dead_pass(compressor, messages):
+    with patch(
+        "agent.context_compressor.call_llm", side_effect=RuntimeError("Error code: 500 boom")
+    ):
+        return compressor.compress(messages, current_tokens=90_000, force=True)
+
+
+def _opening_turns():
+    return [
+        {"role": "user", "content": f"[sam] opening rule, no cutscenes\n\n[Image attached at: {SHEET}]"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "[sam] second opening rule, keep the music out"},
+    ]
+
+
+def test_same_agent_keeps_the_first_messages_after_the_head_stops_being_protected():
+    """In-loop compaction reuses one compressor, so the head decays after pass one."""
+    compressor = _mare_compressor()
+    messages = _opening_turns() + _filler("a", n=20)
+    for round_no in range(5):
+        messages = _dead_pass(compressor, messages)
+        text = "\n".join(str(m.get("content")) for m in messages)
+        assert "opening rule, no cutscenes" in text, round_no
+        assert "second opening rule, keep the music out" in text, round_no
+        assert SHEET in text, round_no
+        messages += _filler(f"r{round_no}", n=15)
+
+
+def test_first_messages_are_listed_once_and_first():
+    compressor = _mare_compressor()
+    messages = _opening_turns() + _filler("a", n=20)
+    for round_no in range(3):
+        messages = _dead_pass(compressor, messages)
+        messages += _filler(f"r{round_no}", n=15)
+    text = _summary_text(_dead_pass(compressor, messages))
+    listed = text.split("## Every User Message So Far", 1)[1]
+    assert listed.count("opening rule, no cutscenes") == 1
+    assert listed.index("opening rule, no cutscenes") < listed.index("request a-0")
+
+
+def test_messages_still_live_in_a_protected_head_are_not_listed():
+    """Only rows this pass actually drops belong on the list."""
+    compressor = _mare_compressor()
+    messages = _opening_turns() + _filler("a", n=20)
+    first = _dead_pass(compressor, messages)
+    summary = _summary_text(first)
+    assert "second opening rule" in str(first[2]["content"])
+    assert "opening rule, no cutscenes" not in summary.split("## Every User Message So Far", 1)[1]
+
+
+def _merged_after_one_pass(words, content=None):
+    """A head ending in an assistant row and a tail starting with a user row force a merge."""
+    messages = [
+        {"role": "user", "content": "head ask"},
+        {"role": "assistant", "content": "head reply"},
+        *_filler("a", n=20),
+        {"role": "user", "content": content if content is not None else words},
+        {"role": "assistant", "content": "got it"},
+    ]
+    with patch("agent.context_compressor.get_model_context_length", return_value=100_000):
+        compressor = ContextCompressor(
+            model="test/model", protect_first_n=2, protect_last_n=2, quiet_mode=True
+        )
+    with patch.object(compressor, "_find_tail_cut_by_tokens", return_value=len(messages) - 2):
+        merged = _dead_pass(compressor, messages)
+    assert any(
+        "END OF PRIOR CONTEXT" in str(m.get("content")) and words in str(m.get("content"))
+        for m in merged
+    )
+    return merged
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        [
+            {"type": "text", "text": "[sam] merged tail ask"},
+            {"type": "image_url", "image_url": {"url": "https://cdn.example/m.png"}},
+        ],
+    ],
+    ids=["text", "multimodal"],
+)
+def test_a_user_message_merged_into_a_summary_survives_the_next_pass(content):
+    words = "[sam] merged tail ask"
+    merged = _merged_after_one_pass(words, content)
+    merged += _filler("b", n=20)
+    with patch("agent.context_compressor.get_model_context_length", return_value=100_000):
+        next_compressor = ContextCompressor(
+            model="test/model", protect_first_n=2, protect_last_n=2, quiet_mode=True
+        )
+    after = _dead_pass(next_compressor, merged)
+    text = _summary_text(after)
+    listed = text.split("## Every User Message So Far", 1)[1]
+    assert listed.count(words) == 1
+    assert "PRIOR CONTEXT" not in listed
+    assert "END OF PRIOR" not in listed
+    if content is not None:
+        assert "https://cdn.example/m.png" in text
