@@ -16382,6 +16382,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             resolved_provider = (provider or "").strip()
             resolved_model = (model or "").strip()
 
+            # A session whose primary keeps failing ran its last turn on a
+            # fallback. Route on that model, not the one it will first retry:
+            # the worst case is one described image on a recovered primary.
+            if session_key and not resolved_provider and not resolved_model:
+                _cache_lock = getattr(self, "_agent_cache_lock", None)
+                if _cache_lock is not None:
+                    with _cache_lock:
+                        _cached = self._agent_cache.get(session_key)
+                    _live = _cached[0] if isinstance(_cached, tuple) else _cached
+                    if getattr(_live, "_fallback_activated", False) is True:
+                        resolved_provider = str(getattr(_live, "provider", "") or "").strip()
+                        resolved_model = str(getattr(_live, "model", "") or "").strip()
+
             needs_session_runtime = not resolved_provider or not resolved_model
             has_session_identity = source is not None or session_key
             if needs_session_runtime and has_session_identity:

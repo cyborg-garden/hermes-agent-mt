@@ -1551,7 +1551,14 @@ async def _handle_vision_analyze(args: Dict[str, Any], **kw: Any) -> str:
 
         _provider = _read_main_provider()
         _model = _read_main_model()
-        _native_ok = _supports_media_in_tool_results(_provider, _model)
+        # An aggregator accepts images for some models and not others, so the
+        # provider check alone would hand pixels to a model that drops them.
+        from agent.image_routing import _lookup_supports_vision
+        from hermes_cli.config import load_config
+
+        _native_ok = _supports_media_in_tool_results(_provider, _model) and (
+            _lookup_supports_vision(_provider, _model, load_config()) is not False
+        )
     except Exception as exc:
         logger.debug("Vision routing check failed: %s", exc)
 

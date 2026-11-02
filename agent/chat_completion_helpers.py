@@ -1746,6 +1746,19 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # answering, so "what model are you?" doesn't report the primary.
         rewrite_prompt_model_identity(agent, fb_model, fb_provider)
 
+        # Tools read this runtime to decide things like native image routing.
+        # It was set for the primary at the start of the turn.
+        from agent.auxiliary_client import set_runtime_main
+
+        set_runtime_main(
+            fb_provider,
+            fb_model,
+            base_url=agent.base_url or "",
+            api_key=agent.api_key or "",
+            api_mode=agent.api_mode or "",
+            auth_mode=getattr(agent, "auth_mode", "") or "",
+        )
+
         agent._buffer_status(
             f"🔄 Primary model failed — switching to fallback: "
             f"{fb_model} via {fb_provider}"
