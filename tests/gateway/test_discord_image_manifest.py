@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -104,3 +106,65 @@ async def test_a_manifest_write_failure_does_not_lose_the_image(monkeypatch):
     monkeypatch.setattr("gateway.platforms.base.get_image_manifest_path", _boom)
     event = await _upload(monkeypatch, _attachment("Crono.png"))
     assert Path(event.media_urls[0]).exists()
+
+
+def _record(name, age_hours=0):
+    from gateway.platforms.base import get_image_cache_dir, record_image_origin
+
+    cached = get_image_cache_dir() / name
+    cached.write_bytes(b"x")
+    if age_hours:
+        stamp = time.time() - age_hours * 3600
+        os.utime(cached, (stamp, stamp))
+    record_image_origin(str(cached), name, "1")
+    return cached
+
+
+def test_cleanup_drops_rows_for_the_images_it_deleted():
+    from gateway.platforms.base import cleanup_image_cache
+
+    old = _record("old.png", age_hours=48)
+    fresh = _record("fresh.png")
+
+    assert cleanup_image_cache(max_age_hours=24) == 1
+
+    assert not old.exists() and fresh.exists()
+    assert [r["filename"] for r in _rows()] == ["fresh.png"]
+
+
+def test_cleanup_with_no_manifest_creates_none():
+    from gateway.platforms.base import cleanup_image_cache, get_image_manifest_path
+
+    cleanup_image_cache(max_age_hours=24)
+    assert not get_image_manifest_path().exists()
+
+
+def test_cleanup_does_not_rewrite_a_manifest_with_nothing_to_drop():
+    from gateway.platforms.base import cleanup_image_cache, get_image_manifest_path
+
+    _record("fresh.png")
+    before = get_image_manifest_path().stat().st_mtime_ns
+    cleanup_image_cache(max_age_hours=24)
+    assert get_image_manifest_path().stat().st_mtime_ns == before
+
+
+def test_cleanup_drops_rows_it_cannot_read_and_keeps_the_rest():
+    from gateway.platforms.base import cleanup_image_cache, get_image_manifest_path
+
+    _record("fresh.png")
+    with get_image_manifest_path().open("a", encoding="utf-8") as fh:
+        fh.write("not json\n")
+    cleanup_image_cache(max_age_hours=24)
+    assert [r["filename"] for r in _rows()] == ["fresh.png"]
+
+
+def test_a_manifest_prune_failure_does_not_stop_cleanup(monkeypatch):
+    from gateway.platforms.base import cleanup_image_cache
+
+    def _boom():
+        raise OSError("read only")
+
+    old = _record("old.png", age_hours=48)
+    monkeypatch.setattr("gateway.platforms.base.get_image_manifest_path", _boom)
+    assert cleanup_image_cache(max_age_hours=24) == 1
+    assert not old.exists()

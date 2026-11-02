@@ -15,6 +15,7 @@ import re
 import socket as _socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -749,6 +750,9 @@ def get_image_manifest_path() -> Path:
     return cache_dir.parent / f"{cache_dir.name}_manifest.jsonl"
 
 
+_IMAGE_MANIFEST_LOCK = threading.Lock()
+
+
 def record_image_origin(cached_path: str, filename: Any, message_id: Any) -> None:
     """Append one line saying what a cached image was called when it was sent.
 
@@ -767,8 +771,9 @@ def record_image_origin(cached_path: str, filename: Any, message_id: Any) -> Non
             "message_id": str(message_id),
             "time": datetime.now(timezone.utc).isoformat(),
         }
-        with get_image_manifest_path().open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with _IMAGE_MANIFEST_LOCK:
+            with get_image_manifest_path().open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception as exc:
         logger.warning("Could not record original image name: %s", exc)
 
@@ -854,7 +859,34 @@ def cleanup_image_cache(max_age_hours: int = 24) -> int:
                 removed += 1
             except OSError:
                 pass
+    _prune_image_manifest()
     return removed
+
+
+def _prune_image_manifest() -> None:
+    """Forget the names of images that are gone. Best effort, like the writes."""
+    try:
+        import json
+
+        path = get_image_manifest_path()
+        with _IMAGE_MANIFEST_LOCK:
+            if not path.exists():
+                return
+            lines = path.read_text(encoding="utf-8").splitlines()
+            kept = []
+            for line in lines:
+                try:
+                    if Path(json.loads(line)["path"]).exists():
+                        kept.append(line)
+                except (ValueError, KeyError, TypeError):
+                    pass
+            if len(kept) == len(lines):
+                return
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+            os.replace(tmp, path)
+    except Exception as exc:
+        logger.warning("Could not prune the image manifest: %s", exc)
 
 
 # ---------------------------------------------------------------------------
