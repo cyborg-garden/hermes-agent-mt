@@ -73,6 +73,6 @@ def test_tool_call_validation_accepts_dict_arguments(monkeypatch):
     # The conversation hits max_iterations=3 (3 tool turns then forced summary).
     # PR #34470 adds an explainer suffix to abnormal turn endings so users
     # understand why the response is short instead of seeing a blank reply.
-    # The exact suffix wording is owned by conversation_loop; this test only
-    # cares that the model's actual text ('done') survives at the start.
-    assert result["final_response"].startswith("done")
+    # The step-limit reply now opens with the stop. This test only cares that
+    # the model's actual text ('done') survives.
+    assert "done" in result["final_response"]

@@ -302,6 +302,8 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
         string.  Indicates a previous-turn write that ran but stored
         nothing (silent persistence bug).  Always warns.
       * ``present`` — row exists with a usable prompt → reused verbatim.
+      * ``compacted`` — a helper agent compacted the session and marked the
+        prompt. Rebuilt once with current memory, not a new session.
 
     Read or write failures against the session DB log at WARNING (not
     DEBUG) so persistent issues (disk full, schema drift, lock contention)
