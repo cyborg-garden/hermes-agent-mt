@@ -3870,14 +3870,15 @@ class TestHandleMaxIterations:
         assert len(result) > 0
         assert "summary" in result.lower()
 
-    def test_api_failure_returns_error(self, agent):
+    def test_api_failure_says_so_without_raw_error_text(self, agent, caplog):
         agent.client.chat.completions.create.side_effect = Exception("API down")
         agent._cached_system_prompt = "You are helpful."
         messages = [{"role": "user", "content": "do stuff"}]
         result = agent._handle_max_iterations(messages, 60)
         assert isinstance(result, str)
-        assert "error" in result.lower()
-        assert "API down" in result
+        assert "couldn't write a summary" in result
+        assert "API down" not in result
+        assert any("API down" in r.getMessage() for r in caplog.records)
 
     def test_summary_skips_reasoning_for_unsupported_openrouter_model(self, agent):
         agent.base_url = "https://openrouter.ai/api/v1"
@@ -3889,7 +3890,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations(messages, 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert "reasoning" not in kwargs.get("extra_body", {})
 
@@ -3910,7 +3911,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations(messages, 120)
 
-        assert result == "Summary of work done."
+        assert "Summary of work done." in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         sent_msgs = kwargs.get("messages", [])
         orphan_ids = [
@@ -3933,7 +3934,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations(messages, 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         sent_msgs = kwargs.get("messages", [])
         stub_ids = [
@@ -3965,7 +3966,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations(messages, 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         sent_msgs = agent.client.chat.completions.create.call_args.kwargs.get("messages", [])
         for m in sent_msgs:
             assert "tool_name" not in m, m
@@ -3986,7 +3987,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert "provider" not in kwargs.get("extra_body", {})
 
@@ -4000,7 +4001,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert kwargs["extra_body"]["provider"]["only"] == ["Anthropic"]
 
@@ -4018,7 +4019,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         from agent.portal_tags import nous_portal_tags
 
@@ -4042,7 +4043,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         from agent.portal_tags import nous_portal_tags
 
@@ -4060,7 +4061,7 @@ class TestHandleMaxIterations:
 
         result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
 
-        assert result == "Summary"
+        assert "Summary" in result
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert "sort" not in kwargs.get("extra_body", {}).get("provider", {})
 
@@ -4099,7 +4100,7 @@ class TestHandleMaxIterations:
         with patch.object(agent, "_run_codex_stream", side_effect=fake_run_codex_stream):
             result = agent._handle_max_iterations(messages, 90)
 
-        assert result == "Summary"
+        assert "Summary" in result
         input_items = captured["input"]
         assert not any(
             item.get("type") == "function_call_output"

@@ -1787,14 +1787,46 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 
 
 
+_WORK_REMAINING_RE = re.compile(r"^\W*work remaining\W*:\W*(.*)$", re.IGNORECASE | re.MULTILINE)
+
+
 def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
-    """Request a summary when max iterations are reached. Returns the final response text."""
+    """Stop at the step limit and tell the user so, in code rather than by request.
+
+    The model writes the summary, but the facts the user needs do not depend on
+    it: the work stopped because of a limit, and nothing runs until they reply.
+    """
+    summary = _request_iteration_summary(agent, messages, api_call_count)
+
+    parts = [f"I stopped here because I hit my step limit ({agent.max_iterations} steps in one go)."]
+    if summary:
+        parts.append(summary)
+    else:
+        parts.append("I also couldn't write a summary of what I did.")
+    stated = _WORK_REMAINING_RE.findall(summary or "")
+    finished = bool(stated) and stated[-1].strip(" .*_`").lower() in {"none", "nothing"}
+    if not stated:
+        parts.append("I can't say whether any work is left, so assume some is.")
+    if not finished:
+        parts.append("Nothing is running now. Send a reply if you want me to carry on.")
+    reply = "\n\n".join(parts)
+
+    if summary and messages and messages[-1] == {"role": "assistant", "content": summary}:
+        messages[-1] = {"role": "assistant", "content": reply}
+    else:
+        messages.append({"role": "assistant", "content": reply})
+    return reply
+
+
+def _request_iteration_summary(agent, messages: list, api_call_count: int) -> str:
+    """Ask for a summary without tools. Returns it, or "" if none could be had."""
     print(f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary...")
 
     summary_request = (
         "You've reached the maximum number of tool-calling iterations allowed. "
         "Please provide a final response summarizing what you've found and accomplished so far, "
-        "without calling any more tools."
+        "without calling any more tools. End with one line: 'Work remaining: none' if nothing "
+        "is left, or 'Work remaining: ' and a short list of what is."
     )
     messages.append({"role": "user", "content": summary_request})
 
@@ -1975,7 +2007,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             if final_response:
                 messages.append({"role": "assistant", "content": final_response})
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = ""
         else:
             # Retry summary generation
             if agent.api_mode == "codex_responses":
@@ -2018,13 +2050,13 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 if final_response:
                     messages.append({"role": "assistant", "content": final_response})
                 else:
-                    final_response = "I reached the iteration limit and couldn't generate a summary."
+                    final_response = ""
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = ""
 
     except Exception as e:
         logger.warning(f"Failed to get summary response: {e}")
-        final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
+        final_response = ""
 
     return final_response
 
