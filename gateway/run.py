@@ -7200,8 +7200,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if not delivered:
                 entry.resume_skip_notice_for = None
                 return
-            with self.session_store._lock:  # noqa: SLF001
-                self.session_store._save()  # noqa: SLF001
+            await self.async_session_store._save()
 
         task = asyncio.create_task(_send())
         self._background_tasks.add(task)
