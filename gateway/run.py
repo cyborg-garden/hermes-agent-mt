@@ -7169,6 +7169,44 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if drained:
             logger.info("Drained %d inbound message(s) queued during startup restore", drained)
 
+    def _notify_skipped_resume(self, entry, adapter, source) -> None:
+        """Say once in the thread that a job died with the restart.
+
+        A fixed line, with no agent turn and nothing from the session in it, so
+        this tells a skipped owner nothing the skip was protecting.
+        """
+        marked = entry.last_resume_marked_at or entry.updated_at
+        marker = marked.isoformat() if marked else ""
+        if entry.resume_skip_notice_for == marker:
+            return
+        # Set before the task runs, so a reconnect pass cannot post it twice.
+        entry.resume_skip_notice_for = marker
+
+        async def _send() -> None:
+            delivered = False
+            try:
+                result = await adapter.send(
+                    source.chat_id,
+                    "I restarted and this job was lost. Nothing is running now. "
+                    "Ask again if you still want it.",
+                    metadata=self._thread_metadata_for_source(source),
+                )
+                delivered = getattr(result, "success", True) is not False
+            except Exception as exc:
+                logger.warning(
+                    "Could not post skipped-resume notice for %s: %s",
+                    entry.session_key, exc,
+                )
+            if not delivered:
+                entry.resume_skip_notice_for = None
+                return
+            with self.session_store._lock:  # noqa: SLF001
+                self.session_store._save()  # noqa: SLF001
+
+        task = asyncio.create_task(_send())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     def _schedule_resume_pending_sessions(self, platform=None) -> int:
         """Auto-continue fresh restart-interrupted sessions after startup.
 
@@ -7263,6 +7301,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "longer authorized under the current allowlist",
                         entry.session_key,
                     )
+                    self._notify_skipped_resume(entry, adapter, source)
                     continue
             except Exception as exc:
                 logger.warning(

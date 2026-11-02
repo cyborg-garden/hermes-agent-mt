@@ -736,6 +736,9 @@ class SessionEntry:
     resume_pending: bool = False
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
+    # Which resume marker the "this job was lost" line was posted for, so a
+    # skipped session gets one line per lost job, across restarts.
+    resume_skip_notice_for: Optional[str] = None
 
     # Session-scoped /model override (model/provider/base_url ONLY — never
     # credentials).  ``_session_model_overrides`` in the gateway runner is
@@ -772,6 +775,7 @@ class SessionEntry:
                 if self.last_resume_marked_at
                 else None
             ),
+            "resume_skip_notice_for": self.resume_skip_notice_for,
             "is_fresh_reset": self.is_fresh_reset,
             "was_auto_reset": self.was_auto_reset,
             "auto_reset_reason": self.auto_reset_reason,
@@ -848,6 +852,7 @@ class SessionEntry:
             resume_pending=data.get("resume_pending", False),
             resume_reason=data.get("resume_reason"),
             last_resume_marked_at=last_resume_marked_at,
+            resume_skip_notice_for=data.get("resume_skip_notice_for"),
             is_fresh_reset=data.get("is_fresh_reset", False),
             was_auto_reset=data.get("was_auto_reset", False),
             auto_reset_reason=data.get("auto_reset_reason"),

@@ -1956,3 +1956,105 @@ async def test_auto_resume_runs_agent_exactly_once_through_full_path():
     # No leaked sentinel and no orphaned queued event.
     assert session_key not in runner._running_agents
     assert session_key not in getattr(adapter, "_pending_messages", {})
+
+
+def _revoked_entry(source, marked_at):
+    return SessionEntry(
+        session_key="agent:main:discord:thread:revoked",
+        session_id="sid",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        origin=source,
+        platform=Platform.TELEGRAM,
+        chat_type="thread",
+        resume_pending=True,
+        resume_reason="restart_timeout",
+        last_resume_marked_at=marked_at,
+    )
+
+
+async def _run_skip_pass(runner):
+    scheduled = runner._schedule_resume_pending_sessions()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    return scheduled
+
+
+def _skipped_runner(entry):
+    runner, adapter = make_restart_runner()
+    runner._is_user_authorized = lambda _source: False
+    runner._persist_active_agents = MagicMock()
+    runner.session_store._entries = {entry.session_key: entry}
+    adapter.handle_message = AsyncMock()
+    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="1"))
+    return runner, adapter
+
+
+@pytest.mark.asyncio
+async def test_skipped_auto_resume_posts_one_plain_line_in_the_thread():
+    source = make_restart_source(chat_id="revoked-chat")
+    source.thread_id = "thread-9"
+    entry = _revoked_entry(source, datetime.now())
+    runner, adapter = _skipped_runner(entry)
+
+    assert await _run_skip_pass(runner) == 0
+
+    adapter.send.assert_awaited_once()
+    args, kwargs = adapter.send.await_args
+    assert args[0] == "revoked-chat"
+    assert kwargs["metadata"]["thread_id"] == "thread-9"
+    assert "lost" in args[1] and "\n" not in args[1]
+    # Authorization is unchanged: no agent turn, no slot.
+    adapter.handle_message.assert_not_called()
+    assert entry.session_key not in runner._running_agents
+
+
+@pytest.mark.asyncio
+async def test_skipped_auto_resume_notice_is_not_repeated_for_the_same_job():
+    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+
+    await _run_skip_pass(runner)
+    await _run_skip_pass(runner)
+    assert adapter.send.await_count == 1
+
+    # The next boot reloads the entry from disk and must remember too.
+    reloaded = SessionEntry.from_dict(entry.to_dict())
+    runner.session_store._entries = {reloaded.session_key: reloaded}
+    await _run_skip_pass(runner)
+    assert adapter.send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_skipped_auto_resume_notice_fires_again_for_a_new_lost_job():
+    marked = datetime.now() - timedelta(minutes=5)
+    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), marked)
+    runner, adapter = _skipped_runner(entry)
+
+    await _run_skip_pass(runner)
+    entry.last_resume_marked_at = datetime.now()
+    await _run_skip_pass(runner)
+    assert adapter.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_skip_notice_is_retried_on_the_next_pass():
+    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+    adapter.send = AsyncMock(side_effect=RuntimeError("not connected"))
+
+    await _run_skip_pass(runner)
+    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="1"))
+    await _run_skip_pass(runner)
+    adapter.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authorized_resume_posts_no_skip_notice():
+    entry = _revoked_entry(make_restart_source(chat_id="ok-chat"), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+    runner._is_user_authorized = lambda _source: True
+    runner._run_startup_resume_event = AsyncMock()
+
+    assert await _run_skip_pass(runner) == 1
+    adapter.send.assert_not_called()
