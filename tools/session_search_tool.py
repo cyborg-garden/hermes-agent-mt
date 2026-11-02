@@ -300,6 +300,18 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str
         return tool_error(f"Failed to list recent sessions: {e}", success=False)
 
 
+def _is_compacted_away(db, message_id: Any) -> bool:
+    """True for a row compaction archived, so it is no longer in live context."""
+    try:
+        row = db._conn.execute(
+            "SELECT active, compacted FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+    except Exception as e:
+        logging.debug("compacted-row lookup failed: %s", e, exc_info=True)
+        return False
+    return bool(row) and row[0] == 0 and row[1] == 1
+
+
 def _scroll(
     db,
     session_id: str,
@@ -331,8 +343,8 @@ def _scroll(
     window = max(1, min(window, 20))
 
     # Reject scrolling inside the active session lineage — those messages are
-    # already in context.
-    if current_session_id:
+    # already in context. Rows compaction archived are not, so they stay readable.
+    if current_session_id and not _is_compacted_away(db, around_message_id):
         a_root = _resolve_to_parent(db, session_id)
         c_root = _resolve_to_parent(db, current_session_id)
         if a_root and c_root and a_root == c_root:
@@ -557,10 +569,13 @@ def _discover(
             break
         raw_sid = r["session_id"]
         resolved_sid = _resolve_to_parent(db, raw_sid)
-        # Skip the current session lineage
-        if current_lineage_root and resolved_sid == current_lineage_root:
-            continue
-        if current_session_id and raw_sid == current_session_id:
+        # Skip the current session lineage, except rows compaction archived:
+        # those have left the live context.
+        in_current = (
+            (current_lineage_root and resolved_sid == current_lineage_root)
+            or (current_session_id and raw_sid == current_session_id)
+        )
+        if in_current and not _is_compacted_away(db, r.get("id")):
             continue
         if resolved_sid not in seen_sessions:
             row = dict(r)

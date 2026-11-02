@@ -638,3 +638,73 @@ class TestCronDemotion:
         # Interactive rows first, in original relative order; cron last, in
         # original relative order.
         assert [r["id"] for r in ordered] == [2, 4, 5, 1, 3]
+
+
+class TestArchivedRowsOfCurrentSession:
+    """Compaction moves rows out of context. They must stay reachable."""
+
+    SID = "s_live"
+
+    def _compacted_session(self, db):
+        db.create_session(self.SID, source="discord")
+        rule_id = db.append_message(
+            self.SID, role="user", content="no zanzibar music in the dream scenes"
+        )
+        db.append_message(self.SID, role="assistant", content="understood")
+        db.archive_and_compact(
+            self.SID,
+            [
+                {"role": "user", "content": "[CONTEXT COMPACTION] nothing recoverable"},
+                {"role": "user", "content": "live zanzibarlive message"},
+            ],
+        )
+        return rule_id
+
+    def test_scroll_reads_an_archived_row(self, db):
+        rule_id = self._compacted_session(db)
+        result = json.loads(session_search(
+            session_id=self.SID, around_message_id=rule_id, db=db,
+            current_session_id=self.SID,
+        ))
+        assert result["success"] is True
+        assert any("zanzibar music" in m["content"] for m in result["messages"])
+
+    def test_scroll_still_rejects_a_row_in_live_context(self, db):
+        self._compacted_session(db)
+        live_id = db._conn.execute(
+            "SELECT id FROM messages WHERE session_id = ? AND active = 1 ORDER BY id DESC",
+            (self.SID,),
+        ).fetchone()[0]
+        result = json.loads(session_search(
+            session_id=self.SID, around_message_id=live_id, db=db,
+            current_session_id=self.SID,
+        ))
+        assert result["success"] is False
+        assert "current session" in result.get("error", "").lower()
+
+    def test_discovery_finds_an_archived_row(self, db):
+        rule_id = self._compacted_session(db)
+        result = json.loads(session_search(
+            query="zanzibar", db=db, current_session_id=self.SID,
+        ))
+        assert result["count"] == 1
+        assert result["results"][0]["session_id"] == self.SID
+        assert result["results"][0]["match_message_id"] == rule_id
+
+    def test_discovery_still_skips_a_row_in_live_context(self, db):
+        self._compacted_session(db)
+        result = json.loads(session_search(
+            query="zanzibarlive", db=db, current_session_id=self.SID,
+        ))
+        assert result["count"] == 0
+
+    def test_rewound_rows_stay_hidden(self, db):
+        db.create_session(self.SID, source="discord")
+        taken_back = db.append_message(self.SID, role="user", content="take this back")
+        db._conn.execute("UPDATE messages SET active = 0 WHERE id = ?", (taken_back,))
+        db._conn.commit()
+        result = json.loads(session_search(
+            session_id=self.SID, around_message_id=taken_back, db=db,
+            current_session_id=self.SID,
+        ))
+        assert result["success"] is False
