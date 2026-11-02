@@ -28,7 +28,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from agent.codex_responses_adapter import _summarize_user_message_for_log
-from agent.conversation_compression import conversation_history_after_compression
+from agent.conversation_compression import REBUILD_PROMPT_MARK, conversation_history_after_compression
 from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
 from agent.iteration_budget import IterationBudget
@@ -332,12 +332,23 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 agent.session_id, exc,
             )
 
-    if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
+    rebuild_after_compaction = bool(stored_prompt) and REBUILD_PROMPT_MARK in stored_prompt
+    if (
+        stored_prompt
+        and not rebuild_after_compaction
+        and _stored_prompt_matches_runtime(agent, stored_prompt)
+    ):
         # Continuing session — reuse the exact system prompt from the
         # previous turn so the Anthropic cache prefix matches.
         agent._cached_system_prompt = stored_prompt
         return
-    if stored_prompt:
+    if rebuild_after_compaction:
+        stored_state = "compacted"
+        logger.info(
+            "Rebuilding system prompt for session %s after a helper compaction.",
+            agent.session_id,
+        )
+    elif stored_prompt:
         stored_state = "stale_runtime"
         logger.info(
             "Stored system prompt for session %s has stale runtime identity or lost its memory or skills block; "
@@ -367,16 +378,18 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     # Plugin hook: on_session_start — fired once when a brand-new
     # session is created (not on continuation).  Plugins can use this
     # to initialise session-scoped state (e.g. warm a memory cache).
-    try:
-        from hermes_cli.plugins import invoke_hook as _invoke_hook
-        _invoke_hook(
-            "on_session_start",
-            session_id=agent.session_id,
-            model=agent.model,
-            platform=getattr(agent, "platform", None) or "",
-        )
-    except Exception as exc:
-        logger.warning("on_session_start hook failed: %s", exc)
+    # A rebuild after compaction continues the same session.
+    if not rebuild_after_compaction:
+        try:
+            from hermes_cli.plugins import invoke_hook as _invoke_hook
+            _invoke_hook(
+                "on_session_start",
+                session_id=agent.session_id,
+                model=agent.model,
+                platform=getattr(agent, "platform", None) or "",
+            )
+        except Exception as exc:
+            logger.warning("on_session_start hook failed: %s", exc)
 
     # Cold-start credits seed (L3) — fallback for the first-turn path. The TUI/
     # desktop build seeds at session OPEN (see seed_credits_at_session_start in

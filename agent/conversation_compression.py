@@ -40,6 +40,10 @@ from typing import Any, Optional, Tuple
 
 from agent.model_metadata import estimate_request_tokens_rough
 
+# Appended to a stored system prompt by a helper agent that compacted the session.
+# The next real turn sees it and rebuilds the prompt, which removes it.
+REBUILD_PROMPT_MARK = "\n\n<!-- rebuild this prompt on the next turn -->"
+
 logger = logging.getLogger(__name__)
 
 # Stable marker the gateway matches on to re-tag the auto-compaction lifecycle
@@ -961,10 +965,18 @@ def compress_context(
                 # refresh the stored system prompt and reset the flush cursor so the
                 # next turn re-bases its append diff. A gateway helper agent
                 # (skip_memory=True, memory toolset only) opts out: its prompt has
-                # no memory, user or skills blocks, and the next real turn restores
-                # whatever is stored here.
+                # no memory, user or skills blocks. It marks the stored prompt
+                # instead, so the next real turn rebuilds with current memory, as
+                # an in-loop compaction does above.
                 if getattr(agent, "_persist_compaction_prompt", True) is not False:
                     agent._session_db.update_system_prompt(agent.session_id, new_system_prompt)
+                else:
+                    _row = agent._session_db.get_session(agent.session_id) or {}
+                    _stored = _row.get("system_prompt")
+                    if _stored and REBUILD_PROMPT_MARK not in _stored:
+                        agent._session_db.update_system_prompt(
+                            agent.session_id, _stored + REBUILD_PROMPT_MARK
+                        )
                 agent._last_flushed_db_idx = 0
             except Exception as e:
                 # If the rotation rolled back to the parent (orphan-avoidance

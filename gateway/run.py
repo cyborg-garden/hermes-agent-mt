@@ -12253,7 +12253,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                     # the guard below preserves the transcript.
                                     _hyg_agent.compression_in_place = True
                                     # This helper's own prompt lacks memory and
-                                    # skills; keep the session's stored one.
+                                    # skills; never store it on the session row.
                                     _hyg_agent._persist_compaction_prompt = False
                                     _bind_hyg_state = getattr(
                                         getattr(_hyg_agent, "context_compressor", None),
@@ -12427,9 +12427,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                             )
                                 finally:
                                     # Evict the cached agent so the next turn
-                                    # reloads the compacted transcript. Its system
-                                    # prompt is restored from the session row, which
-                                    # hygiene leaves untouched; it is not rebuilt.
+                                    # reloads the compacted transcript. Hygiene marked
+                                    # the session row, so that turn rebuilds the system
+                                    # prompt from current SOUL.md, memory and skills.
                                     self._evict_cached_agent(session_key)
                                     await self._cleanup_agent_resources_off_loop(
                                         _hyg_agent, context="session hygiene"

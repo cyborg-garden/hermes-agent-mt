@@ -3,7 +3,8 @@
 Hygiene and /compress build a throwaway AIAgent with skip_memory=True and only
 the memory toolset. The next real turn restores whatever prompt the session row
 holds, so writing the helper's prompt there strips the memory, user profile and
-skills blocks from every later turn of that session.
+skills blocks from every later turn of that session. They mark the stored prompt
+instead, and the next real turn rebuilds it with current memory.
 """
 
 import importlib
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent.context_compressor import ContextCompressor
+from agent.conversation_compression import REBUILD_PROMPT_MARK
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import MessageEvent, SendResult
 from gateway.session import SessionEntry, SessionSource
@@ -134,6 +136,47 @@ async def test_hygiene_leaves_memory_and_skills_in_stored_prompt(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_next_real_turn_after_hygiene_gets_notes_saved_earlier(monkeypatch, tmp_path):
+    """Compaction removes the saved note from context, so the prompt must hold it."""
+    from agent.conversation_loop import _restore_or_build_system_prompt
+
+    (tmp_path / "config.yaml").write_text(
+        "compression:\n  enabled: true\n  threshold: 0.85\n  hygiene_hard_message_limit: 10\n"
+    )
+    gateway_run = importlib.import_module("gateway.run")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(ContextCompressor, "compress", _fake_compress)
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length", lambda *a, **k: 1_000_000
+    )
+    db, history = _seed_db(tmp_path)
+    runner = _runner(gateway_run, db, history)
+
+    await runner._handle_message(MessageEvent(text="hello", source=_source(), message_id="1"))
+
+    rebuilt = FULL_PROMPT.replace("no music in dreams", "the note saved this session")
+    next_turn = SimpleNamespace(
+        session_id=SESSION_ID,
+        _session_db=db,
+        _cached_system_prompt=None,
+        model="test/model",
+        provider="openrouter",
+        platform="telegram",
+        _build_system_prompt=lambda _message: rebuilt,
+    )
+    conversation = [{"role": "user", "content": "go on"}]
+    _restore_or_build_system_prompt(next_turn, None, conversation)
+    assert "the note saved this session" in next_turn._cached_system_prompt
+    assert db.get_session(SESSION_ID)["system_prompt"] == rebuilt
+
+    # Once only: the turn after that reuses the same bytes.
+    next_turn._build_system_prompt = lambda _message: "must not be rebuilt"
+    next_turn._cached_system_prompt = None
+    _restore_or_build_system_prompt(next_turn, None, conversation)
+    assert next_turn._cached_system_prompt == rebuilt
+
+
+@pytest.mark.asyncio
 async def test_compress_command_leaves_memory_and_skills_in_stored_prompt(monkeypatch, tmp_path):
     (tmp_path / "config.yaml").write_text("compression:\n  in_place: true\n")
     gateway_run = importlib.import_module("gateway.run")
@@ -157,5 +200,5 @@ async def test_compress_command_leaves_memory_and_skills_in_stored_prompt(monkey
     # row empty, in which case the next real agent builds a full prompt.
     session_id = runner.session_store.get_or_create_session.return_value.session_id
     child = db.get_session(session_id)["system_prompt"]
-    assert stored == FULL_PROMPT
-    assert child in (FULL_PROMPT, None)
+    assert stored.replace(REBUILD_PROMPT_MARK, "") == FULL_PROMPT
+    assert child is None or child.replace(REBUILD_PROMPT_MARK, "") == FULL_PROMPT

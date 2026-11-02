@@ -331,3 +331,52 @@ class TestStoredPromptLostBlocks:
         )
         _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
         assert agent._cached_system_prompt == self.STRIPPED
+
+
+# ---------------------------------------------------------------------------
+# Rebuild after a helper agent compacted the session
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildAfterHelperCompaction:
+    """Helper compaction leaves a mark, so the next real turn gets fresh memory."""
+
+    FULL = (
+        "You are Hermes Agent.\n\n<available_skills>\nx\n</available_skills>\n\n"
+        "MEMORY (your personal notes) [1%]\nold note\n\nModel: test-model\nProvider: openrouter"
+    )
+    REBUILT = FULL.replace("old note", "new note")
+
+    def _agent(self, stored):
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        return _make_agent(session_db=db, prebuilt_prompt=self.REBUILT), db
+
+    def test_marked_prompt_is_rebuilt_and_the_mark_is_gone(self, caplog):
+        from agent.conversation_loop import REBUILD_PROMPT_MARK
+
+        agent, db = self._agent(self.FULL + REBUILD_PROMPT_MARK)
+        with caplog.at_level(logging.WARNING, logger="agent.conversation_loop"):
+            _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.REBUILT
+        db.update_system_prompt.assert_called_once_with(agent.session_id, self.REBUILT)
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_marked_prompt_rebuild_is_not_a_new_session(self, monkeypatch):
+        """on_session_start runs BOOT.md and warms caches. A compaction is no new session."""
+        from agent.conversation_loop import REBUILD_PROMPT_MARK
+
+        fired = []
+        monkeypatch.setattr(
+            "hermes_cli.plugins.invoke_hook", lambda name, **_kw: fired.append(name)
+        )
+        agent, _ = self._agent(self.FULL + REBUILD_PROMPT_MARK)
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert "on_session_start" not in fired
+
+    def test_unmarked_prompt_is_still_reused(self):
+        agent, db = self._agent(self.FULL)
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.FULL
+        agent._build_system_prompt.assert_not_called()
+        db.update_system_prompt.assert_not_called()
