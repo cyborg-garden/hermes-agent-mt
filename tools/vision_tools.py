@@ -859,6 +859,20 @@ def _should_use_native_vision_fast_path() -> bool:
         return False
 
 
+# Sits next to the pixels in the tool result. Only true while they travel with it.
+NATIVE_VISION_ACK = (
+    "Image loaded into your context — you can see it natively now. "
+    "Use your built-in vision to answer the user."
+)
+# What the model gets instead when the pixels were dropped before reaching it.
+NO_IMAGE_SEEN = (
+    "Vision failed: no image reached you, you have not seen it. "
+    "The model you are running on right now could not take it. "
+    "Do not describe the image or say you checked it. "
+    "Tell the user plainly that you cannot see it."
+)
+
+
 def _build_native_vision_tool_result(
     image_url: str,
     question: str,
@@ -878,26 +892,19 @@ def _build_native_vision_tool_result(
         "meta": {"image_url": ..., "size_bytes": N},
       }
 
-    The text part exists for two reasons: (1) it gives the model an
-    instruction to act on now that the pixels are in context, and
-    (2) providers that don't support multimodal tool results can fall back
-    to ``text_summary``.
+    The text part gives the model an instruction to act on now that the pixels
+    are in context. When the pixels are dropped before reaching the model, the
+    agent loop sends ``undelivered_text`` instead.
     """
     # The tool-result text part is intentionally minimal. The model already
     # has the user's original question in context; this just acknowledges
     # the image is now visible and reminds it what it was asked.
-    text_part = (
-        "Image loaded into your context — you can see it natively now. "
-        "Use your built-in vision to answer the user."
-    )
+    text_part = NATIVE_VISION_ACK
     if isinstance(question, str) and question.strip():
         text_part += f"\n\nQuestion: {question.strip()}"
 
-    summary = (
-        f"Image attached natively for the main model "
-        f"({image_size_bytes / 1024:.1f} KB). "
-        "Answer using built-in vision."
-    )
+    # For logs and previews. It must not claim the model saw anything.
+    summary = f"vision_analyze loaded an image ({image_size_bytes / 1024:.1f} KB)."
 
     return {
         "_multimodal": True,
@@ -906,6 +913,7 @@ def _build_native_vision_tool_result(
             {"type": "image_url", "image_url": {"url": image_data_url}},
         ],
         "text_summary": summary,
+        "undelivered_text": NO_IMAGE_SEEN,
         "meta": {
             "image_url": image_url[:200],
             "size_bytes": image_size_bytes,

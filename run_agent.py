@@ -5188,9 +5188,10 @@ class AIAgent:
                 vision_analyze_tool(image_url=vision_source, user_prompt=analysis_prompt)
             )
             result = json.loads(result_json) if isinstance(result_json, str) else {}
-            description = (result.get("analysis") or "").strip()
+            if result.get("success") is not False:
+                description = (result.get("analysis") or "").strip()
         except Exception as e:
-            description = f"Image analysis failed: {e}"
+            logger.warning("Could not describe image for a text-only model: %s", e)
         finally:
             if cleanup_path and cleanup_path.exists():
                 try:
@@ -5198,10 +5199,12 @@ class AIAgent:
                 except OSError:
                     pass
 
-        if not description:
-            description = "Image analysis failed."
+        if description:
+            note = f"[The {role_label} attached an image. Here's what it contains:\n{description}]"
+        else:
+            from tools.vision_tools import NO_IMAGE_SEEN
 
-        note = f"[The {role_label} attached an image. Here's what it contains:\n{description}]"
+            note = f"[The {role_label} attached an image. {NO_IMAGE_SEEN}]"
         if vision_source and not str(image_url or "").startswith("data:"):
             note += (
                 f"\n[If you need a closer look, use vision_analyze with image_url: {vision_source}]"
@@ -5268,6 +5271,12 @@ class AIAgent:
             ptype = part.get("type")
             if ptype in {"text", "input_text"}:
                 text = str(part.get("text", "") or "").strip()
+                if text:
+                    from tools.vision_tools import NATIVE_VISION_ACK
+
+                    # The pixels are being swapped for a note, so the claim that
+                    # the model can see them no longer holds.
+                    text = text.replace(NATIVE_VISION_ACK, "").strip()
                 if text:
                     text_parts.append(text)
                 continue
@@ -5400,7 +5409,7 @@ class AIAgent:
                     "content — sending text summary",
                     tool_name, getattr(self, "provider", ""),
                 )
-                return _multimodal_text_summary(result)
+                return result.get("undelivered_text") or _multimodal_text_summary(result)
             key = (
                 (getattr(self, "provider", "") or "").strip().lower(),
                 (getattr(self, "model", "") or "").strip(),
@@ -5412,7 +5421,7 @@ class AIAgent:
                     "content this session — sending text summary",
                     tool_name, key[0], key[1],
                 )
-                return _multimodal_text_summary(result)
+                return result.get("undelivered_text") or _multimodal_text_summary(result)
             return content
 
         summary = _multimodal_text_summary(result)
@@ -5434,7 +5443,7 @@ class AIAgent:
             self.provider,
             self.model,
         )
-        return summary
+        return result.get("undelivered_text") or summary
 
     def _try_shrink_image_parts_in_messages(
         self,
@@ -5514,6 +5523,11 @@ class AIAgent:
                     text = str(part.get("text") or "").strip()
                     if text:
                         text_parts.append(text)
+
+            if had_image:
+                from tools.vision_tools import NATIVE_VISION_ACK, NO_IMAGE_SEEN
+
+                text_parts = [t.replace(NATIVE_VISION_ACK, NO_IMAGE_SEEN) for t in text_parts]
 
             if not had_image:
                 # List-type content but no image parts — leave alone (some
