@@ -7170,11 +7170,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.info("Drained %d inbound message(s) queued during startup restore", drained)
 
     def _notify_skipped_resume(self, entry, adapter, source) -> None:
-        """Say once in the thread that a job died with the restart.
+        """Say once in a shared thread that a job died with the restart.
 
         A fixed line, with no agent turn and nothing from the session in it, so
-        this tells a skipped owner nothing the skip was protecting.
+        this tells a skipped owner nothing the skip was protecting. Only in a
+        thread people are already reading: a skipped owner may have been removed
+        from the allowlist, and a bot DM or main-channel line asking them to ask
+        again is something they cannot act on.
         """
+        if not source.thread_id or source.chat_type in ("dm", "private"):
+            return
         marked = entry.last_resume_marked_at or entry.updated_at
         marker = marked.isoformat() if marked else ""
         if entry.resume_skip_notice_for == marker:

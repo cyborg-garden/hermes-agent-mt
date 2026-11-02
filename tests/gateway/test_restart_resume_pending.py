@@ -1980,6 +1980,10 @@ async def _run_skip_pass(runner):
     return scheduled
 
 
+def _thread_source():
+    return make_restart_source(chat_id="revoked-chat", chat_type="thread", thread_id="thread-9")
+
+
 def _skipped_runner(entry):
     runner, adapter = make_restart_runner()
     runner._is_user_authorized = lambda _source: False
@@ -1992,9 +1996,7 @@ def _skipped_runner(entry):
 
 @pytest.mark.asyncio
 async def test_skipped_auto_resume_posts_one_plain_line_in_the_thread():
-    source = make_restart_source(chat_id="revoked-chat")
-    source.thread_id = "thread-9"
-    entry = _revoked_entry(source, datetime.now())
+    entry = _revoked_entry(_thread_source(), datetime.now())
     runner, adapter = _skipped_runner(entry)
 
     assert await _run_skip_pass(runner) == 0
@@ -2011,24 +2013,56 @@ async def test_skipped_auto_resume_posts_one_plain_line_in_the_thread():
 
 @pytest.mark.asyncio
 async def test_skipped_auto_resume_notice_is_not_repeated_for_the_same_job():
-    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), datetime.now())
+    entry = _revoked_entry(_thread_source(), datetime.now())
     runner, adapter = _skipped_runner(entry)
 
     await _run_skip_pass(runner)
     await _run_skip_pass(runner)
     assert adapter.send.await_count == 1
 
-    # The next boot reloads the entry from disk and must remember too.
+
+@pytest.mark.asyncio
+async def test_skipped_auto_resume_notice_is_remembered_by_the_next_boot(monkeypatch):
+    # The restart-loop guard would stop a third pass on its own, which would
+    # pass this test with the saved field removed. Keep it out of the way.
+    from gateway import restart_loop_guard
+
+    monkeypatch.setattr(restart_loop_guard, "check_and_record", lambda *_a, **_k: False)
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+
+    await _run_skip_pass(runner)
+    assert adapter.send.await_count == 1
+    assert entry.resume_skip_notice_for
+
     reloaded = SessionEntry.from_dict(entry.to_dict())
+    assert reloaded.resume_skip_notice_for == entry.resume_skip_notice_for
     runner.session_store._entries = {reloaded.session_key: reloaded}
     await _run_skip_pass(runner)
     assert adapter.send.await_count == 1
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_type,thread_id",
+    [("dm", None), ("group", None), ("channel", None), ("dm", "topic-1")],
+)
+async def test_skipped_auto_resume_stays_silent_outside_a_shared_thread(chat_type, thread_id):
+    """A person off the allowlist must not get a bot DM they cannot act on."""
+    source = make_restart_source(chat_id="revoked-chat", chat_type=chat_type, thread_id=thread_id)
+    entry = _revoked_entry(source, datetime.now())
+    runner, adapter = _skipped_runner(entry)
+
+    assert await _run_skip_pass(runner) == 0
+
+    adapter.send.assert_not_called()
+    adapter.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_skipped_auto_resume_notice_fires_again_for_a_new_lost_job():
     marked = datetime.now() - timedelta(minutes=5)
-    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), marked)
+    entry = _revoked_entry(_thread_source(), marked)
     runner, adapter = _skipped_runner(entry)
 
     await _run_skip_pass(runner)
@@ -2039,7 +2073,7 @@ async def test_skipped_auto_resume_notice_fires_again_for_a_new_lost_job():
 
 @pytest.mark.asyncio
 async def test_failed_skip_notice_is_retried_on_the_next_pass():
-    entry = _revoked_entry(make_restart_source(chat_id="revoked-chat"), datetime.now())
+    entry = _revoked_entry(_thread_source(), datetime.now())
     runner, adapter = _skipped_runner(entry)
     adapter.send = AsyncMock(side_effect=RuntimeError("not connected"))
 
