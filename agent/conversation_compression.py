@@ -959,8 +959,12 @@ def compress_context(
                 # Shared post-write steps (both modes target agent.session_id, which
                 # in-place keeps and rotation has already reassigned to the new id):
                 # refresh the stored system prompt and reset the flush cursor so the
-                # next turn re-bases its append diff.
-                agent._session_db.update_system_prompt(agent.session_id, new_system_prompt)
+                # next turn re-bases its append diff. A gateway helper agent
+                # (skip_memory=True, memory toolset only) opts out: its prompt has
+                # no memory, user or skills blocks, and the next real turn restores
+                # whatever is stored here.
+                if getattr(agent, "_persist_compaction_prompt", True) is not False:
+                    agent._session_db.update_system_prompt(agent.session_id, new_system_prompt)
                 agent._last_flushed_db_idx = 0
             except Exception as e:
                 # If the rotation rolled back to the parent (orphan-avoidance

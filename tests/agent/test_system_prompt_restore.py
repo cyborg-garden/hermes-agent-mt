@@ -263,3 +263,71 @@ class TestPromptStabilityInvariant:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Rows overwritten by a skip_memory helper agent
+# ---------------------------------------------------------------------------
+
+
+class TestStoredPromptLostBlocks:
+    """A prompt without memory or skills blocks is repaired once, then reused."""
+
+    STRIPPED = "You are Hermes Agent.\n\nModel: test-model\nProvider: openrouter"
+    FULL = (
+        "You are Hermes Agent.\n\n<available_skills>\nx\n</available_skills>\n\n"
+        "MEMORY (your personal notes) [1%]\nnote\n\nModel: test-model\nProvider: openrouter"
+    )
+
+    def _agent_with_memory(self, stored):
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db, prebuilt_prompt=self.FULL)
+        agent._memory_enabled = True
+        agent._user_profile_enabled = False
+        agent._memory_store.format_for_system_prompt.return_value = (
+            "MEMORY (your personal notes) [1%]\nnote"
+        )
+        agent.valid_tool_names = {"memory"}
+        return agent, db
+
+    def test_prompt_missing_memory_block_is_rebuilt(self):
+        agent, db = self._agent_with_memory(self.STRIPPED)
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.FULL
+        db.update_system_prompt.assert_called_once_with(agent.session_id, self.FULL)
+
+    def test_repaired_prompt_is_reused_on_the_next_turn(self):
+        agent, db = self._agent_with_memory(self.FULL)
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.FULL
+        agent._build_system_prompt.assert_not_called()
+        db.update_system_prompt.assert_not_called()
+
+    def test_empty_memory_store_does_not_force_a_rebuild(self):
+        agent, db = self._agent_with_memory(self.STRIPPED)
+        agent._memory_store.format_for_system_prompt.return_value = None
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.STRIPPED
+        agent._build_system_prompt.assert_not_called()
+
+    def test_prompt_missing_skills_block_is_rebuilt(self, monkeypatch):
+        agent, db = self._agent_with_memory(self.STRIPPED)
+        agent._memory_store = None
+        agent.valid_tool_names = {"skill_view"}
+        monkeypatch.setattr(
+            "agent.prompt_builder.build_skills_system_prompt",
+            lambda **_kw: "<available_skills>x</available_skills>",
+        )
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.FULL
+
+    def test_no_skills_installed_does_not_force_a_rebuild(self, monkeypatch):
+        agent, db = self._agent_with_memory(self.STRIPPED)
+        agent._memory_store = None
+        agent.valid_tool_names = {"skill_view"}
+        monkeypatch.setattr(
+            "agent.prompt_builder.build_skills_system_prompt", lambda **_kw: ""
+        )
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+        assert agent._cached_system_prompt == self.STRIPPED

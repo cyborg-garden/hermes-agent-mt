@@ -3443,6 +3443,9 @@ class GatewaySlashCommandsMixin:
             )
             try:
                 tmp_agent._print_fn = lambda *a, **kw: None
+                # This helper's own prompt lacks memory and skills; never let it
+                # replace the session's stored prompt.
+                tmp_agent._persist_compaction_prompt = False
                 # Prevent close() from ending the newly rotated session —
                 # the gateway session entry now points at the new id and
                 # must remain open for the next user turn.

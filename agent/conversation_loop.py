@@ -340,7 +340,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     if stored_prompt:
         stored_state = "stale_runtime"
         logger.info(
-            "Stored system prompt for session %s has stale runtime identity; "
+            "Stored system prompt for session %s has stale runtime identity or lost its memory or skills block; "
             "rebuilding for model=%s provider=%s.",
             agent.session_id,
             getattr(agent, "model", "") or "",
@@ -407,8 +407,42 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
             )
 
 
+def _stored_prompt_lost_blocks(agent, prompt: str) -> bool:
+    """True when the prompt lacks a memory or skills block this agent would add.
+
+    Repairs rows already overwritten by a skip_memory helper agent. A rebuild
+    adds the missing block, so a row trips this at most once per missing block.
+    """
+    store = getattr(agent, "_memory_store", None)
+    for enabled, target, header in (
+        (getattr(agent, "_memory_enabled", False), "memory", "MEMORY (your personal notes)"),
+        (getattr(agent, "_user_profile_enabled", False), "user", "USER PROFILE (who the user is)"),
+    ):
+        if store is None or enabled is not True or header in prompt:
+            continue
+        block = store.format_for_system_prompt(target)
+        if isinstance(block, str) and block:
+            return True
+
+    tool_names = getattr(agent, "valid_tool_names", None)
+    if (
+        isinstance(tool_names, (set, frozenset, list, tuple))
+        and "skill_view" in tool_names
+        and "<available_skills>" not in prompt
+    ):
+        from agent.prompt_builder import build_skills_system_prompt
+
+        return bool(build_skills_system_prompt(available_tools=tool_names))
+    return False
+
+
 def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
-    """Return False when the persisted Model/Provider lines are stale."""
+    """Return False when the persisted prompt is stale for this agent."""
+    try:
+        if _stored_prompt_lost_blocks(agent, prompt):
+            return False
+    except Exception as exc:
+        logger.debug("Stored prompt block check skipped: %s", exc)
 
     def line_value(label: str) -> str:
         prefix = f"{label}:"
