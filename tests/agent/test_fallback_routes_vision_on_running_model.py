@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent.auxiliary_client import _read_main_model, _read_main_provider, set_runtime_main
+from agent.auxiliary_client import (
+    _read_main_model,
+    _read_main_provider,
+    clear_runtime_main,
+    set_runtime_main,
+)
 
 VISION_MODEL = "claude-opus-5-5"
 BLIND_MODEL = "z-ai/glm-5.3"
@@ -23,6 +28,9 @@ def _capability(_provider, model, _cfg=None):
 def _known_capabilities(monkeypatch):
     monkeypatch.setattr("agent.image_routing._lookup_supports_vision", _capability)
     monkeypatch.setattr("hermes_cli.config.load_config", lambda: {})
+    yield
+    # These tests set the runtime, and it would outlive them in one pytest process.
+    clear_runtime_main()
 
 
 def _fallback_agent():
