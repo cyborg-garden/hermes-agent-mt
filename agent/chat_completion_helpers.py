@@ -1790,6 +1790,14 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 _WORK_REMAINING_RE = re.compile(r"^\W*work remaining\W*:\W*(.*)$", re.IGNORECASE | re.MULTILINE)
 
 
+def _a_person_can_reply(agent) -> bool:
+    """False for cron jobs and subagents, whose reply goes where no one can answer it."""
+    depth = getattr(agent, "_delegate_depth", 0)
+    if isinstance(depth, int) and depth > 0:
+        return False
+    return getattr(agent, "platform", None) not in {"cron", "subagent"}
+
+
 def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     """Stop at the step limit and tell the user so, in code rather than by request.
 
@@ -1808,7 +1816,9 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     if not stated:
         parts.append("I can't say whether any work is left, so assume some is.")
     if not finished:
-        parts.append("Nothing is running now. Send a reply if you want me to carry on.")
+        parts.append("Nothing is running now.")
+        if _a_person_can_reply(agent):
+            parts[-1] += " Send a reply if you want me to carry on."
     reply = "\n\n".join(parts)
 
     if summary and messages and messages[-1] == {"role": "assistant", "content": summary}:

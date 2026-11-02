@@ -99,3 +99,29 @@ def test_stored_reply_matches_what_the_user_got():
     messages = _messages()
     reply = agent._handle_max_iterations(messages, 60)
     assert messages[-1] == {"role": "assistant", "content": reply}
+
+
+def test_cron_job_is_not_told_to_reply():
+    """A cron job's reply goes to its delivery target. Nobody can answer it."""
+    agent, _ = _agent()
+    agent.platform = "cron"
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "step limit" in reply
+    assert "Nothing is running now." in reply
+    assert "Send a reply" not in reply
+
+
+def test_subagent_is_not_told_to_reply():
+    agent, _ = _agent()
+    agent.platform = "discord"
+    agent._delegate_depth = 1
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "Nothing is running now." in reply
+    assert "Send a reply" not in reply
+
+
+def test_a_person_on_a_platform_is_still_told_to_reply():
+    agent, _ = _agent()
+    agent.platform = "discord"
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "Send a reply" in reply
