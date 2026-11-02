@@ -7478,7 +7478,8 @@ def call_llm(
                     task, resolved_provider or "auto", reason=reason)
                 if fb_client is None:
                     fb_client, fb_model, fb_label = _try_main_fallback_chain(
-                        task, resolved_provider or "auto", reason=reason)
+                        task, resolved_provider or "auto", reason=reason,
+                        same_provider_ok=_model_refused)
                 if fb_client is None:
                     fb_client, fb_model, fb_label = _try_payment_fallback(
                         resolved_provider, task, reason=reason)

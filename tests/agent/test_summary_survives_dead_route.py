@@ -181,3 +181,27 @@ def test_blocked_configured_route_walks_the_fallback_chain_without_a_main_client
 
     assert summary is not None
     assert "real summary from the working route" in summary
+
+
+def test_refused_main_model_on_auto_tries_other_models_on_the_same_provider(monkeypatch):
+    """The whole chain can sit on one aggregator, as it does on this fleet."""
+    blocked = _client("https://openrouter.ai/api/v1", fails_with=_ApiError(404, DATA_POLICY_404))
+    working = _client("https://openrouter.ai/api/v1")
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config",
+        lambda: {"fallback_providers": [{"provider": "openrouter", "model": "deepseek/flash"}]},
+    )
+    with patch(
+        "agent.auxiliary_client._resolve_task_provider_model",
+        return_value=("auto", None, None, None, None),
+    ), patch(
+        "agent.auxiliary_client._get_cached_client", return_value=(blocked, "kimi")
+    ), patch(
+        "agent.auxiliary_client.resolve_provider_client", return_value=(working, "deepseek/flash")
+    ), patch(
+        "agent.auxiliary_client._read_main_provider", return_value="openrouter"
+    ):
+        summary = _compressor("openrouter", "kimi")._generate_summary(TURNS)
+
+    assert summary is not None
+    assert "real summary from the working route" in summary
