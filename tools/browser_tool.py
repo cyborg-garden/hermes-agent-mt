@@ -4194,6 +4194,7 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
                 f"{native_result.get('text_summary', '')} "
                 f"Screenshot path: {screenshot_path}"
             ).strip()
+            native_result["undelivered_text"] += f" Screenshot path: {screenshot_path}"
             return native_result
 
         vision_prompt = (

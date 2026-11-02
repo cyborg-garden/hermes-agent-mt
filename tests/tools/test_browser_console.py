@@ -477,6 +477,8 @@ class TestBrowserVisionConfig:
         assert result["meta"]["annotations"] == annotations
         assert any(p.get("type") == "image_url" for p in result["content"])
         assert f"Screenshot path: {screenshot}" in result["text_summary"]
+        # A model that never gets the pixels still needs the path to retry.
+        assert f"Screenshot path: {screenshot}" in result["undelivered_text"]
         mock_get_vision_model.assert_not_called()
         mock_llm.assert_not_called()
 
