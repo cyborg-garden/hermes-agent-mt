@@ -295,6 +295,25 @@ _SUMMARY_FAILURE_COOLDOWN_SECONDS = 600
 # become another unbounded transcript copy after the LLM summarizer failed.
 _FALLBACK_SUMMARY_MAX_CHARS = 8_000
 _FALLBACK_TURN_MAX_CHARS = 700
+# The list of what the user said and sent has its own bound, so a long session
+# shortens each entry instead of losing the oldest rules off the end.
+_FALLBACK_USER_LIST_MAX_CHARS = 24_000
+_FALLBACK_USER_ENTRY_MIN_CHARS = 80
+_FALLBACK_CARRIED_MAX_CHARS = 8_000
+_FALLBACK_CARRIED_HEADING = "## Carried From Earlier Summary"
+_FALLBACK_USERS_HEADING = "## Every User Message So Far"
+_FALLBACK_ATTACHMENTS_HEADING = "## Every Attachment So Far"
+_FALLBACK_LIST_NOTE = (
+    "(Historical record, oldest first. Rules and preferences here still apply. "
+    "Do NOT re-answer these; session_search can read the full text.)"
+)
+_TRIGGER_LINE_RE = re.compile(r"\[Triggering message id:[^\]]*\]\s*")
+_ATTACHED_LINE_RE = re.compile(r"\[(?:Image|Audio|Video|File|Document) attached at: [^\]]*\]\s*")
+_ATTACHMENT_PATH_RE = re.compile(
+    r"(?:~/|/)[^\s\]\"'`]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|pdf|mp3|wav|ogg|m4a|flac"
+    r"|mp4|mov|webm|mkv|zip|csv|docx?|xlsx?|pptx?)\b",
+    re.IGNORECASE,
+)
 _AUTO_FOCUS_MAX_TURNS = 3
 _AUTO_FOCUS_TURN_MAX_CHARS = 260
 _AUTO_FOCUS_MAX_CHARS = 700
@@ -1972,8 +1991,9 @@ class ContextCompressor(ContextEngine):
         previous_summary_note = ""
         if self._previous_summary:
             previous_summary_note = (
-                "\n\nPrevious compaction summary was present and should still be treated as "
-                "background continuity context, but the latest LLM summary update failed."
+                "\n\nThe previous compaction summary is carried below and should still be "
+                "treated as background continuity context, but the latest LLM summary update "
+                "failed."
             )
 
         reason_text = f" Summary failure reason: {reason}." if reason else ""
@@ -2028,7 +2048,110 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         summary = self._with_summary_prefix(redact_sensitive_text(body.strip()))
         if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
             summary = summary[: _FALLBACK_SUMMARY_MAX_CHARS - 42].rstrip() + "\n...[fallback summary truncated]"
-        return summary
+        return summary + self._build_fallback_user_record(turns_to_summarize)
+
+    def _build_fallback_user_record(self, turns: List[Dict[str, Any]]) -> str:
+        """Carry the prior summary and list every user message and attachment.
+
+        The list is rebuilt from the prior fallback's own list on every pass, so
+        it survives any number of failed summaries without nesting.
+        """
+        prior = self._previous_summary or ""
+        carried, users, attachments = self._split_fallback_record(prior)
+
+        for msg in turns:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if self._is_context_summary_content(content):
+                continue
+            raw = redact_sensitive_text(_content_text_for_contains(content))
+            if raw.lstrip().startswith("[System"):
+                continue
+            for match in _ATTACHMENT_PATH_RE.finditer(raw):
+                path = match.group(0)
+                if path not in attachments:
+                    attachments.append(path)
+            if isinstance(content, list):
+                for part in content:
+                    image = part.get("image_url") if isinstance(part, dict) else None
+                    url = image.get("url", "") if isinstance(image, dict) else str(image or "")
+                    if url and not url.startswith("data:") and url not in attachments:
+                        attachments.append(redact_sensitive_text(url))
+            text = _ATTACHED_LINE_RE.sub("", _TRIGGER_LINE_RE.sub("", raw))
+            text = re.sub(r"\s+", " ", text).strip()
+            if text and text not in users:
+                users.append(text)
+
+        sections = []
+        if carried:
+            if len(carried) > _FALLBACK_CARRIED_MAX_CHARS:
+                carried = carried[:_FALLBACK_CARRIED_MAX_CHARS].rstrip() + " ...[truncated]"
+            sections.append(f"{_FALLBACK_CARRIED_HEADING}\n{carried}")
+        if users:
+            sections.append(
+                f"{_FALLBACK_USERS_HEADING}\n{_FALLBACK_LIST_NOTE}\n{self._bound_user_list(users)}"
+            )
+        if attachments:
+            sections.append(
+                _FALLBACK_ATTACHMENTS_HEADING + "\n" + "\n".join(f"- {a}" for a in attachments)
+            )
+        return "\n\n" + "\n\n".join(sections) if sections else ""
+
+    @staticmethod
+    def _bound_user_list(users: List[str]) -> str:
+        """Shorten entries evenly so every message is still named."""
+        budget = _FALLBACK_USER_LIST_MAX_CHARS // max(len(users), 1)
+        cap = max(min(budget, _FALLBACK_TURN_MAX_CHARS), _FALLBACK_USER_ENTRY_MIN_CHARS)
+        lines = []
+        used = 0
+        for count, text in enumerate(users):
+            line = "- " + (text if len(text) <= cap else text[:cap].rstrip() + " ...[truncated]")
+            used += len(line) + 1
+            if used > _FALLBACK_USER_LIST_MAX_CHARS + len(users) * 17:
+                lines.append(f"...{len(users) - count} more, use session_search to read them.")
+                break
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _split_fallback_record(prior: str) -> tuple[str, List[str], List[str]]:
+        """Split an earlier summary into its carried text, users and attachments.
+
+        An LLM summary has none of these headings, so all of it is carried.
+        """
+        body = ContextCompressor._strip_summary_prefix(prior)
+        if _FALLBACK_USERS_HEADING not in body and _FALLBACK_ATTACHMENTS_HEADING not in body:
+            return body, [], []
+
+        def _section(heading: str) -> str:
+            if heading not in body:
+                return ""
+            rest = body.split(heading, 1)[1]
+            return re.split(r"\n## ", rest, maxsplit=1)[0]
+
+        def _items(heading: str) -> List[str]:
+            return [
+                line[2:].strip()
+                for line in _section(heading).splitlines()
+                if line.startswith("- ") and line[2:].strip()
+            ]
+
+        # The carried text can hold its own headings, so it ends at the list.
+        carried = ""
+        if _FALLBACK_CARRIED_HEADING in body:
+            carried = body.split(_FALLBACK_CARRIED_HEADING, 1)[1]
+            for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING):
+                carried = carried.split(heading, 1)[0]
+            carried = carried.strip()
+        completed = _section("## Completed Actions").strip()
+        if completed and not completed.startswith("None recoverable"):
+            carried = f"{carried}\n\nEarlier actions:\n{completed}".strip()
+        return (
+            carried,
+            _items(_FALLBACK_USERS_HEADING),
+            _items(_FALLBACK_ATTACHMENTS_HEADING),
+        )
 
     def _fallback_to_main_for_compression(self, e: Exception, reason: str) -> None:
         """Switch from a separate ``summary_model`` back to the main model.
@@ -3362,6 +3485,8 @@ This compaction should PRIORITISE preserving all information related to the focu
                 turns_to_summarize,
                 reason=self._last_summary_error,
             )
+            # The next pass, real or fallback, builds on this record.
+            self._previous_summary = self._strip_summary_prefix(summary)
 
         _merge_summary_into_tail = False
         last_head_role = messages[compress_start - 1].get("role", "user") if compress_start > 0 else "user"

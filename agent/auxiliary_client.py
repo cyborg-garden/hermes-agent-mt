@@ -3045,6 +3045,10 @@ def _is_payment_error(exc: Exception) -> bool:
     if status == 402:
         return True
     err_lower = str(exc).lower()
+    # Anthropic reports an empty balance as a 400. Other 400s stay out: their
+    # bodies can mention billing or credits without being about money.
+    if status == 400 and "credit balance" in err_lower:
+        return True
     # OpenRouter and other providers include "credits" or "afford" in 402 bodies,
     # but sometimes wrap them in 429 or other codes.
     # Daily quota exhaustion from Bedrock, Vertex AI, and similar providers
@@ -3379,6 +3383,18 @@ def _is_model_incompatible_error(exc: Exception) -> bool:
         "does not support this model",
         "unsupported model",
     ))
+
+
+def _is_data_policy_refusal(exc: Exception) -> bool:
+    """OpenRouter refused because the account's data policy excludes this model.
+
+    Another model on the same account may be fine, so this is about the model,
+    not the provider.
+    """
+    return (
+        getattr(exc, "status_code", None) in {404, None}
+        and "guardrail restrictions and data policy" in str(exc).lower()
+    )
 
 
 def _is_invalid_aux_response_error(exc: Exception) -> bool:
@@ -4025,6 +4041,7 @@ def _try_main_agent_model_fallback(
     failed_provider: str,
     task: str = None,
     reason: str = "error",
+    same_provider_ok: bool = False,
 ) -> Tuple[Optional[Any], Optional[str], str]:
     """Last-resort fallback to the user's main agent provider + model.
 
@@ -4034,7 +4051,8 @@ def _try_main_agent_model_fallback(
     main chat model before giving up.
 
     Skips when the failed provider already IS the main provider (no point
-    retrying the same backend that just failed).
+    retrying the same backend that just failed), unless ``same_provider_ok``
+    says the failure was about the model, not the provider.
 
     Returns:
         (client, model, provider_label) or (None, None, "") if no fallback.
@@ -4045,7 +4063,7 @@ def _try_main_agent_model_fallback(
         return None, None, ""
 
     skip = (failed_provider or "").lower().strip()
-    if main_provider.lower() == skip:
+    if main_provider.lower() == skip and not same_provider_ok:
         # The thing that failed IS the main model — nothing to fall back to.
         return None, None, ""
     if _is_provider_unhealthy(main_provider):
@@ -4278,6 +4296,7 @@ def _try_main_fallback_chain(
     task: Optional[str],
     failed_provider: str = "",
     reason: str = "error",
+    same_provider_ok: bool = False,
 ) -> Tuple[Optional[Any], Optional[str], str]:
     """Try the top-level main-agent fallback chain for an auxiliary call.
 
@@ -4301,7 +4320,7 @@ def _try_main_fallback_chain(
 
     failed_norm = (failed_provider or "").strip().lower()
     main_norm = (_read_main_provider() or "").strip().lower()
-    skip = {p for p in (failed_norm, main_norm, "auto") if p}
+    skip = {"auto"} if same_provider_ok else {p for p in (failed_norm, main_norm, "auto") if p}
     tried: List[str] = []
     min_ctx = _task_minimum_context_length(task)
 
@@ -7387,11 +7406,17 @@ def call_llm(
         # auxiliary task on the floor (silent compression failure /
         # message loss). Auth is NOT a capacity error: it only bypasses
         # the explicit-provider gate when the user is in auto mode.
+        # A vision task stays out: the next candidate could be a model that
+        # cannot see, and it might answer anyway.
+        _model_refused = task != "vision" and (
+            _is_data_policy_refusal(first_err) or _is_model_incompatible_error(first_err)
+        )
         should_fallback = (
             _is_auth_error(first_err)
             or _is_payment_error(first_err)
             or _is_connection_error(first_err)
             or _is_rate_limit_error(first_err)
+            or _model_refused
             or _is_model_incompatible_error(first_err)
             or _is_invalid_aux_response_error(first_err)
         )
@@ -7415,6 +7440,7 @@ def call_llm(
             _is_payment_error(first_err)
             or _is_connection_error(first_err)
             or _is_rate_limit_error(first_err)
+            or _model_refused
             or _is_model_incompatible_error(first_err)
             or _is_invalid_aux_response_error(first_err)
         )
@@ -7432,7 +7458,7 @@ def call_llm(
                 )
             elif _is_rate_limit_error(first_err):
                 reason = "rate limit"
-            elif _is_model_incompatible_error(first_err):
+            elif _model_refused or _is_model_incompatible_error(first_err):
                 reason = "model incompatible with route"
             elif _is_invalid_aux_response_error(first_err):
                 reason = "invalid provider response"
@@ -7459,9 +7485,16 @@ def call_llm(
             else:
                 fb_client, fb_model, fb_label = _try_configured_fallback_chain(
                     task, resolved_provider or "auto", reason=reason)
+                # A model this route cannot serve says nothing about the rest
+                # of the provider, so its other models are still candidates.
                 if fb_client is None:
                     fb_client, fb_model, fb_label = _try_main_agent_model_fallback(
-                        resolved_provider, task, reason=reason)
+                        resolved_provider, task, reason=reason,
+                        same_provider_ok=_model_refused)
+                if fb_client is None and _model_refused:
+                    fb_client, fb_model, fb_label = _try_main_fallback_chain(
+                        task, resolved_provider or "auto", reason=reason,
+                        same_provider_ok=True)
 
             if fb_client is not None:
                 fb_resp = _call_fallback_candidate_sync(
