@@ -221,7 +221,9 @@ def split_history_for_partial_compress(
 
     An *exchange* is counted by ``user``-role messages: keeping N
     exchanges means keeping everything from the Nth-most-recent ``user``
-    message onward. This guarantees the tail starts on a ``user`` turn,
+    message onward. Observed group chatter is not an exchange: nobody said
+    it to the agent, so it never starts a tail. This guarantees the tail
+    starts on a ``user`` turn,
     so when the caller rejoins ``compressed_head + tail`` the
     user↔assistant alternation stays valid (the compressed head's
     trailing content is followed by a fresh user turn).
@@ -242,7 +244,7 @@ def split_history_for_partial_compress(
     # user-message starts. The tail begins at the earliest such index.
     user_starts: List[int] = []
     for idx in range(n - 1, -1, -1):
-        if history[idx].get("role") == "user":
+        if history[idx].get("role") == "user" and not history[idx].get("observed"):
             user_starts.append(idx)
             if len(user_starts) >= keep_last:
                 break
@@ -286,7 +288,10 @@ def rejoin_compressed_head_and_tail(
     rejoined list never violates provider role-alternation rules.
 
     ``tool`` messages are left alone — consecutive ``tool`` entries are
-    the one legal repetition (parallel tool results).
+    the one legal repetition (parallel tool results). So are rows on either
+    side of the ``observed`` flag: observed rows leave replay, so the pair is
+    legal, and a fold would put chatter in a person's mouth or a person's
+    words in chatter.
     """
     if not tail:
         return list(compressed_head)
@@ -301,7 +306,11 @@ def rejoin_compressed_head_and_tail(
     last_role = last.get("role")
     first_role = first.get("role")
 
-    if last_role == first_role and last_role in ("user", "assistant"):
+    if (
+        last_role == first_role
+        and last_role in ("user", "assistant")
+        and bool(last.get("observed")) == bool(first.get("observed"))
+    ):
         # Illegal adjacency. Merge the tail's first message text into the
         # head's last message so alternation is preserved. Only string
         # contents are merged inline; structured/multimodal contents fall

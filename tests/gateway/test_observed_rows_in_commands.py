@@ -180,3 +180,41 @@ async def test_compress_here_in_place_stores_the_kept_tail(tmp_path, monkeypatch
     assert len(active) < len(rows)
     archived = store._db.get_messages("s", include_inactive=True)
     assert any(m["content"] == "[sam] r0" for m in archived)
+
+
+@pytest.mark.asyncio
+async def test_compress_here_keeps_the_owner_when_chatter_followed(tmp_path, monkeypatch):
+    rows = _long_history() + [
+        {"role": "user", "content": OWNER},
+        {"role": "assistant", "content": "noted"},
+        {"role": "user", "content": STRANGER, "observed": True},
+    ]
+    store = _store(tmp_path, monkeypatch, "s", rows)
+    gw, _ = _compress_runner(store, "s")
+
+    await _compress_here(gw)
+
+    active = store._db.get_messages_as_conversation("s")
+    assert [m["content"] for m in active[-3:]] == [OWNER, "noted", STRANGER]
+    assert [bool(m.get("observed")) for m in active[-3:]] == [False, False, True]
+
+
+@pytest.mark.asyncio
+async def test_compress_preview_counts_exchanges_like_the_real_run(tmp_path, monkeypatch):
+    rows = _long_history() + [
+        {"role": "user", "content": OWNER},
+        {"role": "assistant", "content": "noted"},
+        {"role": "user", "content": STRANGER, "observed": True},
+    ]
+    store = _store(tmp_path, monkeypatch, "s", rows)
+    gw, _ = _compress_runner(store, "s")
+
+    result = await gw._handle_compress_command(
+        MessageEvent(
+            text="/compress here 1 --preview",
+            message_type=MessageType.TEXT,
+            source=_group_source(),
+        )
+    )
+
+    assert f"Would compress {len(rows) - 3} of {len(rows)}" in result
