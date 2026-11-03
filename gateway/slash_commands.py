@@ -4085,6 +4085,7 @@ class GatewaySlashCommandsMixin:
                     reasoning_details=msg.get("reasoning_details"),
                     codex_reasoning_items=msg.get("codex_reasoning_items"),
                     codex_message_items=msg.get("codex_message_items"),
+                    observed=bool(msg.get("observed")),
                 )
             except Exception:
                 pass  # Best-effort copy
