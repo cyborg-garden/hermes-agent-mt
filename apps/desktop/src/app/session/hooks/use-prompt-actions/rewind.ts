@@ -97,7 +97,9 @@ export function planReload(messages: ChatMessage[], parentId: null | string): nu
   const parentIndex = parentId ? messages.findIndex(m => m.id === parentId) : messages.length - 1
 
   const userBack =
-    parentIndex >= 0 ? [...messages.slice(0, parentIndex + 1)].reverse().findIndex(m => m.role === 'user') : -1
+    parentIndex >= 0
+      ? [...messages.slice(0, parentIndex + 1)].reverse().findIndex(m => m.role === 'user' && !m.observed)
+      : -1
 
   if (userBack < 0) {
     return null
@@ -172,7 +174,7 @@ export function planRestore(messages: ChatMessage[], messageId: string, target?:
   const sourceIndex = idIndex >= 0 ? idIndex : fallbackIndex
   const source = messages[sourceIndex]
 
-  if (!source || source.role !== 'user') {
+  if (!source || source.role !== 'user' || source.observed) {
     throw new Error('Could not find the message to restore.')
   }
 
@@ -214,7 +216,7 @@ export function planEdit(messages: ChatMessage[], edited: AppendMessage): EditPl
   const sourceIndex = messages.findIndex(m => m.id === sourceId)
   const source = messages[sourceIndex]
 
-  if (!source || source.role !== 'user' || chatMessageText(source).trim() === text) {
+  if (!source || source.role !== 'user' || source.observed || chatMessageText(source).trim() === text) {
     return null
   }
 

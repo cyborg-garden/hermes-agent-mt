@@ -46,7 +46,7 @@ function valid(sessionId: string | null | undefined): sessionId is string {
  * Derive the user-text ring (newest first) from session messages.
  * The caller is responsible for providing already-session-scoped messages.
  */
-export function deriveUserHistory<T extends { role: string }>(
+export function deriveUserHistory<T extends { observed?: boolean; role: string }>(
   messages: readonly T[],
   getText: (m: T) => string
 ): string[] {
@@ -55,7 +55,7 @@ export function deriveUserHistory<T extends { role: string }>(
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!
 
-    if (m.role !== 'user') {
+    if (m.role !== 'user' || m.observed) {
       continue
     }
 

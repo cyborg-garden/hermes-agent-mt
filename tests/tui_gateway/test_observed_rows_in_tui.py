@@ -189,3 +189,32 @@ def test_live_history_does_not_call_a_stranger_you(db):
 
     assert f"[Observed #1] {STRANGER}" in output
     assert f"[You #2] {OWNER}" in output
+
+
+def test_prompt_submit_truncate_ordinal_counts_only_the_persons_turns(db):
+    """Chatter rows merge on reload, so counting them points at the wrong turn."""
+    db.create_session("edit", source="discord")
+    rows = [
+        {"role": "user", "content": STRANGER, "observed": True},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": STRANGER, "observed": True},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    _live_session("e", "edit", [dict(row) for row in rows])
+    server._sessions["e"]["agent_ready"] = threading.Event()
+
+    with (
+        patch.object(server, "_get_db", return_value=db),
+        patch.object(server, "_start_agent_build"),
+        patch.object(server, "_wait_agent", return_value={"error": {"message": "stop here"}}),
+    ):
+        _call("prompt.submit", session_id="e", text="redo", truncate_before_user_ordinal=1)
+
+    assert [row["content"] for row in server._sessions["e"]["history"]] == [
+        STRANGER,
+        "first",
+        "ok",
+        STRANGER,
+    ]
