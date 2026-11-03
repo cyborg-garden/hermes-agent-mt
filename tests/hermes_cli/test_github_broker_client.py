@@ -459,3 +459,30 @@ def test_webhook_env_stays_inherited_off_the_broker(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert _webhook()._github_env(None) is None
+
+
+def test_review_pane_gh_gets_the_broker_token(hub_auth, broker, stub_gh, tmp_path):
+    from hermes_cli import web_git
+
+    ok, _out, err = web_git._gh(str(tmp_path), ["auth", "status"])
+    assert ok, err
+    assert stub_gh.read_text() == TOKEN
+
+
+def test_review_pane_gh_prefers_a_token_in_the_env(hub_auth, broker, stub_gh, tmp_path, monkeypatch):
+    from hermes_cli import web_git
+
+    monkeypatch.setenv("GH_TOKEN", "env-token-value")
+    assert web_git._gh(str(tmp_path), ["auth", "status"])[0]
+    assert stub_gh.read_text() == "env-token-value"
+    assert broker.requests == []
+
+
+def test_review_pane_gh_reports_gh_when_the_broker_is_down(hub_auth, broker, stub_gh, tmp_path):
+    from hermes_cli import web_git
+
+    broker.status = 502
+    ok, _out, err = web_git._gh(str(tmp_path), ["auth", "status"])
+    assert not ok
+    assert "gh auth login" in err
+
