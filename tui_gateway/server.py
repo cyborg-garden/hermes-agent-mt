@@ -12885,12 +12885,14 @@ def _(rid, params: dict) -> dict:
         # Walk backwards to find the last user message
         last_user_idx = None
         for i in range(len(history) - 1, -1, -1):
-            if history[i].get("role") == "user":
+            if history[i].get("role") == "user" and not history[i].get("observed"):
                 last_user_idx = i
                 break
         if last_user_idx is None:
             return _err(rid, 4018, "no previous user message to retry")
-        content = history[last_user_idx].get("content", "")
+        from agent.observed_context import without_observed_block
+
+        content = without_observed_block(history[last_user_idx].get("content", ""))
         if isinstance(content, list):
             content = " ".join(
                 p.get("text", "")

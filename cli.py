@@ -7276,7 +7276,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Walk backwards to find the last user message
         last_user_idx = None
         for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
+            msg = self.conversation_history[i]
+            if msg.get("role") == "user" and not msg.get("observed"):
                 last_user_idx = i
                 break
         
@@ -7285,7 +7286,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return None
         
         # Extract the message text and remove everything from that point forward
-        last_message = self.conversation_history[last_user_idx].get("content", "")
+        from agent.observed_context import without_observed_block
+
+        last_message = without_observed_block(self.conversation_history[last_user_idx].get("content", ""))
         self.conversation_history = self.conversation_history[:last_user_idx]
         
         print(f"(^_^)b Retrying: \"{last_message[:60]}{'...' if len(last_message) > 60 else ''}\"")
