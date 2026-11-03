@@ -574,6 +574,8 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             and msg.get("role") == "user"
             and isinstance(merged[-1], dict)
             and merged[-1].get("role") == "user"
+            # A merged row has one flag, so it would mislabel someone's words.
+            and bool(msg.get("observed")) == bool(merged[-1].get("observed"))
         ):
             prev = merged[-1]
             prev_content = prev.get("content", "")

@@ -2716,9 +2716,8 @@ class SessionStore:
         in spec 002 — pre-DB sessions on existing disks have already been
         migrated (their DB row holds the full message history).
 
-        Pass ``repair_alternation=False`` to classify individual rows: the
-        repair merges consecutive user rows, so one row's ``observed`` flag
-        ends up covering another's words.
+        Pass ``repair_alternation=False`` to see the rows as stored: the repair
+        merges consecutive user rows that share an ``observed`` flag.
         """
         if not self._db:
             return []
