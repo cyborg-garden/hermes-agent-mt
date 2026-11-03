@@ -46,6 +46,9 @@ def build_write_denied_paths(home: str) -> set[str]:
             # Top-level Anthropic PKCE credential store remains sensitive even
             # when a profile is active; default/non-profile sessions still read it.
             str(hermes_root / ".anthropic_oauth.json"),
+            # The agent's long-lived secret for the host-side GitHub token broker.
+            str(hermes_home / "github-broker.json"),
+            str(hermes_root / "github-broker.json"),
             os.path.join(home, ".netrc"),
             os.path.join(home, ".pgpass"),
             os.path.join(home, ".npmrc"),
