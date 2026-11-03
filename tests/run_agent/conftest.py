@@ -44,3 +44,12 @@ def _fast_retry_backoff(monkeypatch):
         monkeypatch.setattr(_conv_loop, "jittered_backoff", lambda *a, **k: 0.0)
     except ImportError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_runtime_main_after_test():
+    """Fallback tests run outside a turn, so no turn scope clears what they record."""
+    yield
+    from agent.auxiliary_client import clear_runtime_main
+
+    clear_runtime_main()
