@@ -11,8 +11,10 @@ so nothing is persisted into the installed checkout.
 Resolution order for an ``https://`` URL:
 
 1. ``GITHUB_TOKEN`` / ``GH_TOKEN`` (profile-scoped, GitHub hosts only).
-2. ``gh auth token`` (GitHub hosts only; the gh CLI's own login).
-3. ``git credential fill`` against the user's configured credential helpers (any host: GitLab,
+2. The host token broker, if this home is on it (GitHub hosts only). The gateway needs this: its
+   ``gh`` can't see the login under ``home/``, and a brokered ``.env`` holds no GitHub token.
+3. ``gh auth token`` (GitHub hosts only; the gh CLI's own login).
+4. ``git credential fill`` against the user's configured credential helpers (any host: GitLab,
    Bitbucket, self-hosted) with prompting disabled, so a stored credential is returned and a
    missing one fails in ~100 ms instead of asking.
 
@@ -57,6 +59,21 @@ def _env_github_token() -> Optional[str]:
     from agent.secret_scope import get_secret
 
     return get_secret("GITHUB_TOKEN") or get_secret("GH_TOKEN") or None
+
+
+def _broker_token() -> Optional[str]:
+    from hermes_constants import get_hermes_home
+    from hermes_cli.github_app_token import get_installation_token_detail, read_broker_config
+
+    home = get_hermes_home()
+    if read_broker_config(home) is None:
+        return None
+    try:
+        detail = get_installation_token_detail(home)
+    except Exception as e:
+        logger.warning("No git credential from the token broker (%s)", type(e).__name__)
+        return None
+    return detail.token if detail else None
 
 
 def _gh_cli_token() -> Optional[str]:
@@ -125,6 +142,7 @@ def iter_git_basic_auth(url: str) -> Iterator[tuple[str, tuple[str, str]]]:
     sources = []
     if urllib.parse.urlsplit(origin).hostname in _GITHUB_HOSTS:
         sources += [("GITHUB_TOKEN/GH_TOKEN", lambda: _token_pair(_env_github_token())),
+                    ("token broker", lambda: _token_pair(_broker_token())),
                     ("gh auth token", lambda: _token_pair(_gh_cli_token()))]
     sources.append(("git credential helper", lambda: _credential_fill(origin)))
     for source, lookup in sources:

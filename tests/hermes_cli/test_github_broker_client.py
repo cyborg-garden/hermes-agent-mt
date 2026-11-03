@@ -333,3 +333,34 @@ def test_skills_hub_moves_on_when_github_rejects_the_broker_token(hub_auth, brok
     hub_auth.reject(TOKEN)
     assert hub_auth.auth_method() == "anonymous"
     assert hub_auth.rejected == ["the token broker"]
+
+
+# ---- Hermes's own git clones (plugins, MCP, profile repos), in the gateway ---
+
+
+def test_private_clones_get_a_broker_token_in_the_gateway(hub_auth, broker, monkeypatch):
+    """Same gateway as above: no token in the env, and gh can't see its login."""
+    from hermes_cli import git_credentials as gc
+
+    monkeypatch.setattr(gc, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(gc, "_credential_fill", lambda origin: None)
+    assert list(gc.iter_git_basic_auth("https://github.com/cyborg-garden/private.git")) == [
+        ("token broker", ("x-access-token", TOKEN))
+    ]
+
+
+def test_private_clones_send_the_broker_token_only_to_github(hub_auth, broker, monkeypatch):
+    from hermes_cli import git_credentials as gc
+
+    monkeypatch.setattr(gc, "_credential_fill", lambda origin: None)
+    assert list(gc.iter_git_basic_auth("https://gitlab.com/someone/repo.git")) == []
+    assert broker.requests == []
+
+
+def test_private_clones_move_on_when_the_broker_is_down(hub_auth, broker, monkeypatch):
+    from hermes_cli import git_credentials as gc
+
+    broker.status = 502
+    monkeypatch.setattr(gc, "_gh_cli_token", lambda: "gh-login-value")
+    monkeypatch.setattr(gc, "_credential_fill", lambda origin: None)
+    assert [source for source, _ in gc.iter_git_basic_auth("https://github.com/a/b.git")] == ["gh auth token"]
