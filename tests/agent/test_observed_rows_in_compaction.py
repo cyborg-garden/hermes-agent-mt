@@ -540,3 +540,20 @@ def test_window_of_only_chatter_needs_no_summariser_during_a_cooldown():
     llm.assert_not_called()
     assert compressor._last_summary_fallback_used is False
     assert _summary_rows(out)
+
+
+def test_memory_providers_get_no_chatter_on_turn_sync():
+    received = {}
+
+    class Provider:
+        name = "recording"
+
+        def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
+            received["messages"] = messages
+
+    manager = MemoryManager()
+    manager._providers = [Provider()]
+    manager.sync_all("mine", "noted", messages=[_observed(STRANGER), {"role": "user", "content": OWNER}])
+    assert manager.flush_pending(timeout=5)
+
+    assert received["messages"] == [{"role": "user", "content": OWNER}]

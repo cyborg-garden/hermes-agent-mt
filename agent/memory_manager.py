@@ -659,6 +659,8 @@ class MemoryManager:
         if not clean_user_content:
             return
         user_content = clean_user_content
+        if messages is not None:
+            messages = without_observed_chatter(messages)
 
         def _run() -> None:
             for provider in providers:
