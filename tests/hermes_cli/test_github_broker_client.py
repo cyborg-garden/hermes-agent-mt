@@ -364,3 +364,98 @@ def test_private_clones_move_on_when_the_broker_is_down(hub_auth, broker, monkey
     monkeypatch.setattr(gc, "_gh_cli_token", lambda: "gh-login-value")
     monkeypatch.setattr(gc, "_credential_fill", lambda origin: None)
     assert [source for source, _ in gc.iter_git_basic_auth("https://github.com/a/b.git")] == ["gh auth token"]
+
+
+# ---- gh run by the gateway itself: webhook comments and the desktop review pane ---
+
+
+@pytest.fixture
+def stub_gh(tmp_path, monkeypatch):
+    """A gh on PATH that only writes down the token it was given. No real gh, no network."""
+    seen = tmp_path / "gh-saw-token"
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        f'printf %s "${{GH_TOKEN:-}}" > "{seen}"\n'
+        '[ -n "${GH_TOKEN:-}" ] || { echo "gh auth login" >&2; exit 4; }\n'
+        "echo posted\n"
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return seen
+
+
+def _webhook():
+    from gateway.platforms.webhook import WebhookAdapter
+
+    return WebhookAdapter.__new__(WebhookAdapter)
+
+
+def _comment(profile=None):
+    return _webhook()._deliver_github_comment(
+        "hi", {"deliver_extra": {"repo": "cyborg-garden/x", "pr_number": "1"}, "profile": profile}
+    )
+
+
+@pytest.mark.asyncio
+async def test_webhook_comment_posts_with_a_broker_token(hub_auth, broker, stub_gh):
+    result = await _comment()
+    assert result.success, result.error
+    assert stub_gh.read_text() == TOKEN
+
+
+@pytest.mark.asyncio
+async def test_webhook_comment_on_a_routed_profile_uses_the_broker(hub_auth, broker, stub_gh, agent_home):
+    (agent_home / "profiles" / "p").mkdir(parents=True)
+    result = await _comment("p")
+    assert result.success, result.error
+    assert stub_gh.read_text() == TOKEN
+    assert (agent_home / "profiles" / "p" / "home" / ".cache" / "hermes" / "github_broker_token.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_webhook_comment_prefers_a_token_in_the_env(hub_auth, broker, stub_gh, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "env-token-value")
+    result = await _comment()
+    assert result.success, result.error
+    assert stub_gh.read_text() == "env-token-value"
+    assert broker.requests == []
+
+
+@pytest.mark.asyncio
+async def test_webhook_comment_reports_gh_when_the_broker_is_down(hub_auth, broker, stub_gh):
+    broker.status = 502
+    result = await _comment()
+    assert not result.success
+    assert "gh auth login" in result.error
+
+
+@pytest.mark.asyncio
+async def test_webhook_comment_does_not_hold_the_loop_while_asking_the_broker(hub_auth, stub_gh, monkeypatch):
+    import asyncio
+    import time
+
+    from hermes_cli import git_credentials as gc
+
+    monkeypatch.setattr(gc, "_broker_token", lambda: (time.sleep(0.5), TOKEN)[1])
+    ticks = []
+
+    async def ticker():
+        while True:
+            ticks.append(1)
+            await asyncio.sleep(0.02)
+
+    task = asyncio.create_task(ticker())
+    result = await _comment()
+    task.cancel()
+    assert result.success, result.error
+    assert len(ticks) >= 5
+
+
+def test_webhook_env_stays_inherited_off_the_broker(tmp_path, monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert _webhook()._github_env(None) is None

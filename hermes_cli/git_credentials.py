@@ -76,6 +76,22 @@ def _broker_token() -> Optional[str]:
     return detail.token if detail else None
 
 
+def add_broker_gh_token(env: dict) -> bool:
+    """Give a ``gh`` child the broker token. True when it added one.
+
+    The gateway runs with HOME=/opt/data, so its ``gh`` can't see the login boot wrote under
+    ``home/``, and a brokered ``.env`` holds no GitHub token. A token already in ``env`` wins, as
+    it does for git clones. Asks the broker on a miss, so call it off the event loop.
+    """
+    if env.get("GH_TOKEN") or env.get("GITHUB_TOKEN"):
+        return False
+    token = _broker_token()
+    if not token:
+        return False
+    env["GH_TOKEN"] = token
+    return True
+
+
 def _gh_cli_token() -> Optional[str]:
     gh = shutil.which("gh")
     if not gh:
