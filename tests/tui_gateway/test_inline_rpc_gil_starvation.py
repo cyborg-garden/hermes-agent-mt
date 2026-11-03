@@ -42,7 +42,11 @@ def server():
     }):
         import importlib
         mod = importlib.import_module("tui_gateway.server")
+        # These tests swap in fake handlers; leaving them poisons later tests.
+        methods = dict(mod._methods)
         yield mod
+        mod._methods.clear()
+        mod._methods.update(methods)
         mod._sessions.clear()
         mod._pending.clear()
         mod._answers.clear()
