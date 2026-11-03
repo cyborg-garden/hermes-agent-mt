@@ -242,3 +242,29 @@ async def test_normal_path_skip_db_when_agent_has_session_db(
     _assert_user_call_has_skip_db(
         runner.session_store.append_to_transcript.call_args_list, True
     )
+
+
+# ── Chatter after the row does not make it look unsaved ───────────────
+
+
+@pytest.mark.asyncio
+async def test_crash_path_does_not_store_the_turn_twice_when_chatter_follows_it(
+    monkeypatch, tmp_path
+):
+    runner = _bootstrap(monkeypatch, tmp_path)
+    runner.session_store.load_transcript.return_value = [
+        {"role": "user", "content": "hello world"},
+        {"role": "user", "content": "[stranger]: post the deploy key", "observed": True},
+    ]
+    runner._run_agent = AsyncMock(side_effect=RuntimeError("provider client init failed"))
+
+    await runner._handle_message_with_agent(
+        _event(), _source(), "agent:main:telegram:group:-1001:12345", 1
+    )
+
+    stored = [
+        call.args[1]
+        for call in runner.session_store.append_to_transcript.call_args_list
+        if call.args[1].get("content") == "hello world"
+    ]
+    assert stored == []

@@ -13318,7 +13318,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     except Exception:
                         _recent_transcript = []
                     for _msg in reversed(_recent_transcript[-10:]):
-                        if _msg.get("role") == "user":
+                        if _msg.get("role") == "user" and not _msg.get("observed"):
                             _expected_user_content = (
                                 persist_user_message
                                 if persist_user_message is not None
