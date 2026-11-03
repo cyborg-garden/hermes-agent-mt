@@ -2142,6 +2142,24 @@ async def test_skipped_auto_resume_notice_is_remembered_by_the_next_boot(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_skipped_auto_resume_notice_marker_is_written_to_disk_after_posting():
+    """The next boot reads the saved copy, so the marker must actually be saved."""
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    runner, adapter = _skipped_runner(entry)
+    seen_at_save = []
+
+    def _save():
+        seen_at_save.append((entry.resume_skip_notice_for, adapter.send.await_count))
+
+    runner.session_store._save = MagicMock(side_effect=_save)
+
+    await _run_skip_pass(runner)
+
+    assert seen_at_save == [(entry.resume_skip_notice_for, 1)]
+    assert entry.resume_skip_notice_for
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "chat_type,thread_id",
     [("dm", None), ("group", None), ("channel", None), ("dm", "topic-1")],
