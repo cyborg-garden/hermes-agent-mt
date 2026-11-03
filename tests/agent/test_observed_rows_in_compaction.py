@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.agent_runtime_helpers import repair_message_sequence
@@ -557,3 +558,69 @@ def test_memory_providers_get_no_chatter_on_turn_sync():
     assert manager.flush_pending(timeout=5)
 
     assert received["messages"] == [{"role": "user", "content": OWNER}]
+
+
+def test_tool_result_survives_chatter_landing_before_it():
+    rows = [
+        {"role": "user", "content": OWNER},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
+        },
+        _observed(),
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ]
+
+    repair_message_sequence(SimpleNamespace(log_prefix="", _vprint=lambda *a, **k: None), rows)
+
+    assert any(row.get("tool_call_id") == "c1" for row in rows)
+
+
+def test_tail_anchor_keeps_the_owners_turn_when_chatter_follows_it():
+    compressor = _compressor()
+    compressor.tail_token_budget = 500
+    rows = [{"role": "user", "content": "[owner] start"}, {"role": "assistant", "content": "ok"}]
+    for index in range(12):
+        rows += [
+            {"role": "user", "content": f"[owner] filler {index}"},
+            {"role": "assistant", "content": f"reply {index}"},
+        ]
+    rows += [
+        {"role": "user", "content": OWNER},
+        {
+            "role": "assistant",
+            "content": "a",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "t" * 6000},
+        {"role": "assistant", "content": "w" * 6000},
+        {"role": "assistant", "content": "z" * 3000},
+        _observed(),
+    ]
+
+    message = SimpleNamespace(
+        content="## Active Task\nNone.",
+        tool_calls=None,
+        reasoning=None,
+        reasoning_content=None,
+    )
+    reply = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None, model="sim"
+    )
+    with patch("agent.context_compressor.call_llm", return_value=reply):
+        out = compressor.compress(rows, current_tokens=90_000, force=True)
+
+    assert any(SUMMARY_PREFIX in str(row["content"]) for row in out)
+    assert any(row["role"] == "user" and row["content"] == OWNER for row in out)
+
+
+def test_compaction_restores_the_owners_turn_not_chatter():
+    from agent.conversation_compression import _ensure_compressed_has_user_turn
+
+    original = [{"role": "user", "content": OWNER}, _observed()]
+    compressed = [{"role": "assistant", "content": "summary"}, _observed()]
+
+    _ensure_compressed_has_user_turn(original, compressed)
+
+    assert compressed[-1]["content"] == OWNER

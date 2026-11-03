@@ -558,7 +558,7 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             else:
                 repairs += 1
         else:
-            if role == "user":
+            if role == "user" and not msg.get("observed"):
                 # A user turn closes the tool-result run; subsequent
                 # tool messages without a fresh assistant tool_call
                 # are orphans.

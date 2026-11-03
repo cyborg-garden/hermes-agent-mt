@@ -486,12 +486,16 @@ def _ensure_compressed_has_user_turn(original_messages: list, compressed: list) 
     but kept as a defensive backstop), a minimal continuation marker is
     appended instead so strict templates still see a user message.
     """
-    if any(isinstance(msg, dict) and msg.get("role") == "user" for msg in compressed):
+    # Observed rows never reach the model, so they do not count as a user turn.
+    if any(
+        isinstance(msg, dict) and msg.get("role") == "user" and not msg.get("observed")
+        for msg in compressed
+    ):
         return
     from agent.context_compressor import _fresh_compaction_message_copy
 
     for msg in reversed(original_messages):
-        if not isinstance(msg, dict) or msg.get("role") != "user":
+        if not isinstance(msg, dict) or msg.get("role") != "user" or msg.get("observed"):
             continue
         compressed.append(_fresh_compaction_message_copy(msg))
         return

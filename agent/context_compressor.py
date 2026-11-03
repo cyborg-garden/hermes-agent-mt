@@ -3130,8 +3130,10 @@ This compaction should PRIORITISE preserving all information related to the focu
         """
         for i in range(len(messages) - 1, head_end - 1, -1):
             msg = messages[i]
-            if msg.get("role") == "user" and not self._is_context_summary_content(
-                msg.get("content")
+            if (
+                msg.get("role") == "user"
+                and not msg.get("observed")
+                and not self._is_context_summary_content(msg.get("content"))
             ):
                 return i
         return -1
