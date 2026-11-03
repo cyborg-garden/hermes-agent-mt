@@ -490,6 +490,33 @@ def convert_tools_to_converse(tools: List[Dict]) -> List[Dict]:
     return result
 
 
+def _tool_result_text(content) -> str:
+    """Text for a Converse tool result. Images do not travel in it.
+
+    Dumping an image part as JSON would send its base64 as text, next to a
+    sentence telling the model it can see the image.
+    """
+    if isinstance(content, str):
+        return content
+    has_image = isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") == "image_url" for part in content
+    )
+    if not has_image:
+        return json.dumps(content)
+
+    from agent.message_sanitization import _correct_native_vision_claim
+    from tools.vision_tools import NO_IMAGE_SEEN
+
+    texts = [
+        part["text"]
+        for part in _correct_native_vision_claim(content)
+        if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+    ]
+    if NO_IMAGE_SEEN not in texts:
+        texts.append(NO_IMAGE_SEEN)
+    return "\n".join(texts)
+
+
 def _convert_content_to_converse(content) -> List[Dict]:
     """Convert OpenAI message content (string or list) to Converse content blocks.
 
@@ -592,7 +619,7 @@ def convert_messages_to_converse(
         if role == "tool":
             # Tool result messages → merge into the preceding user turn
             tool_call_id = msg.get("tool_call_id", "")
-            result_content = content if isinstance(content, str) else json.dumps(content)
+            result_content = _tool_result_text(content)
             tool_result_block = {
                 "toolResult": {
                     "toolUseId": tool_call_id,

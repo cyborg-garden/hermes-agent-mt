@@ -511,3 +511,35 @@ def test_hermes_version_is_valid():
     assert _HERMES_VERSION != "0.0.0", (
         "Version should resolve from hermes_cli.__version__, not the fallback"
     )
+
+
+def test_tool_result_image_is_not_claimed_as_seen():
+    """The adapter keeps only a tool result's text, so the image never arrives."""
+    from agent.gemini_native_adapter import build_gemini_request
+    from tools.vision_tools import NATIVE_VISION_ACK, NO_IMAGE_SEEN
+
+    request = build_gemini_request(
+        messages=[
+            {"role": "user", "content": "look"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "vision_analyze", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "name": "vision_analyze",
+                "content": [
+                    {"type": "text", "text": NATIVE_VISION_ACK},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            },
+        ],
+    )
+
+    output = request["contents"][-1]["parts"][0]["functionResponse"]["response"]["output"]
+    assert NATIVE_VISION_ACK not in output
+    assert NO_IMAGE_SEEN in output

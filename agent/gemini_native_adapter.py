@@ -29,6 +29,7 @@ import httpx
 
 from agent.bounded_response import read_streaming_error_body
 from agent.gemini_schema import sanitize_gemini_tool_parameters
+from agent.message_sanitization import _correct_native_vision_claim
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,11 @@ def _translate_tool_result_to_gemini(
         or tool_call_id
         or "tool"
     )
-    content = _coerce_content_to_text(message.get("content"))
+    raw_content = message.get("content")
+    # Only the text survives this conversion, so no image reaches the model.
+    if isinstance(raw_content, list):
+        raw_content = _correct_native_vision_claim(raw_content)
+    content = _coerce_content_to_text(raw_content)
     try:
         parsed = json.loads(content) if content.strip().startswith(("{", "[")) else None
     except json.JSONDecodeError:

@@ -259,6 +259,56 @@ class TestConvertMessagesToConverse:
         assert tool_use_blocks[0]["toolUse"]["toolUseId"] == "call_123"
         assert tool_use_blocks[0]["toolUse"]["input"] == {"path": "/tmp/test.txt"}
 
+    def test_tool_result_image_is_neither_claimed_as_seen_nor_sent_as_text(self):
+        from agent.bedrock_adapter import convert_messages_to_converse
+        from tools.vision_tools import NATIVE_VISION_ACK, NO_IMAGE_SEEN
+
+        messages = [
+            {"role": "user", "content": "look"},
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": [
+                    {"type": "text", "text": NATIVE_VISION_ACK},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            },
+        ]
+        _, msgs = convert_messages_to_converse(messages)
+        text = msgs[-1]["content"][-1]["toolResult"]["content"][0]["text"]
+        assert NATIVE_VISION_ACK not in text
+        assert "AAAA" not in text
+        assert text == NO_IMAGE_SEEN
+
+    def test_tool_result_image_without_a_claim_still_says_none_arrived(self):
+        from agent.bedrock_adapter import convert_messages_to_converse
+        from tools.vision_tools import NO_IMAGE_SEEN
+
+        messages = [
+            {"role": "user", "content": "look"},
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": [
+                    {"type": "text", "text": "Screenshot taken."},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            },
+        ]
+        _, msgs = convert_messages_to_converse(messages)
+        text = msgs[-1]["content"][-1]["toolResult"]["content"][0]["text"]
+        assert text == f"Screenshot taken.\n{NO_IMAGE_SEEN}"
+
+    def test_tool_result_list_without_images_is_unchanged(self):
+        import json
+
+        from agent.bedrock_adapter import convert_messages_to_converse
+
+        content = [{"type": "text", "text": "plain"}]
+        messages = [{"role": "user", "content": "go"}, {"role": "tool", "tool_call_id": "c1", "content": content}]
+        _, msgs = convert_messages_to_converse(messages)
+        assert msgs[-1]["content"][-1]["toolResult"]["content"][0]["text"] == json.dumps(content)
+
     def test_tool_result_becomes_user_message(self):
         from agent.bedrock_adapter import convert_messages_to_converse
         messages = [
