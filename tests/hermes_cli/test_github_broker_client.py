@@ -284,3 +284,44 @@ def test_helper_with_a_refusing_broker_names_the_status(agent_home, broker):
     assert "Traceback" not in r.stderr
     assert "HTTP 502" in r.stderr
     assert SECRET not in r.stderr + r.stdout
+
+
+# ---- Skills Hub, in the gateway process ------------------------------------
+
+
+@pytest.fixture
+def hub_auth(agent_home, monkeypatch):
+    """A gateway under HOME=/opt/data: gh can't see home/, and no token in the env."""
+    from tools.skills_hub import GitHubAuth
+
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(agent_home))
+    monkeypatch.setenv("HOME", str(agent_home))
+    return GitHubAuth()
+
+
+def test_skills_hub_gets_a_broker_token_in_the_gateway(hub_auth, broker):
+    assert hub_auth.auth_method() == "github-broker"
+    assert hub_auth.get_headers()["Authorization"] == f"token {TOKEN}"
+
+
+def test_skills_hub_asks_again_once_its_token_is_near_expiry(hub_auth, broker):
+    hub_auth.get_headers()
+    hub_auth._app_token_expiry = 0
+    gat.cache_path(Path(os.environ["HERMES_HOME"]), "github_broker_token.json").unlink()
+    hub_auth.get_headers()
+    assert len(broker.requests) == 2
+
+
+def test_skills_hub_goes_anonymous_rather_than_failing_when_the_broker_is_down(hub_auth, broker, monkeypatch):
+    monkeypatch.setattr(hub_auth, "_try_gh_cli", lambda: None)
+    broker.status = 502
+    assert hub_auth.auth_method() == "anonymous"
+    assert "Authorization" not in hub_auth.get_headers()
+
+
+def test_skills_hub_prefers_a_token_in_the_env_while_an_agent_still_has_one(hub_auth, broker, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "env-token-value")
+    assert hub_auth.auth_method() == "pat"
+    assert broker.requests == []
