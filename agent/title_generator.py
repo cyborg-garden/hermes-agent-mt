@@ -351,7 +351,11 @@ def maybe_auto_title(
     # conversation_history includes the exchange that just happened,
     # so for a first exchange we expect exactly 1 user message
     # (or 2 counting system). Be generous: generate on first 2 exchanges.
-    user_msg_count = sum(1 for m in (conversation_history or []) if m.get("role") == "user")
+    user_msg_count = sum(
+        1
+        for m in (conversation_history or [])
+        if m.get("role") == "user" and not m.get("observed")
+    )
     if user_msg_count > 2:
         return
 

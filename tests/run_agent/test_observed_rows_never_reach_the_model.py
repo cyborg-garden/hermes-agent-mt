@@ -173,3 +173,41 @@ def test_trace_export_has_no_stranger_as_user(tmp_path):
 
     assert "dream scenes" in trace
     assert "deploy key" not in trace
+
+
+def _run_one_turn(agent, history):
+    with (
+        patch.object(agent, "_interruptible_api_call", lambda *_a, **_k: _reply("ok")),
+        patch.object(agent, "_interruptible_streaming_api_call", lambda *_a, **_k: _reply("ok")),
+    ):
+        agent.run_conversation("next", conversation_history=history)
+
+
+def test_turn_count_on_resume_leaves_out_chatter(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("group", source="discord")
+    for _ in range(5):
+        db.append_message("group", "user", STRANGER, observed=True)
+    db.append_message("group", "user", OWNER)
+    db.append_message("group", "assistant", "noted")
+    agent = _agent(db, "group")
+
+    _run_one_turn(agent, db.get_messages_as_conversation("group", repair_alternation=True))
+
+    # The owner's turn plus this one.
+    assert agent._user_turn_count == 2
+
+
+def test_first_exchange_title_check_leaves_out_chatter():
+    from agent.title_generator import maybe_auto_title
+
+    history = [{"role": "user", "content": STRANGER, "observed": True} for _ in range(4)]
+    history += [{"role": "user", "content": OWNER}, {"role": "assistant", "content": "noted"}]
+
+    with (
+        patch("agent.title_generator._auto_title_enabled", return_value=True),
+        patch("agent.title_generator.threading.Thread") as thread,
+    ):
+        maybe_auto_title(MagicMock(), "group", OWNER, "noted", history)
+
+    thread.assert_called_once()

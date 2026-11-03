@@ -308,7 +308,7 @@ def build_turn_context(
     # Hydrate per-session nudge counters from persisted history (issue #22357).
     if conversation_history and agent._user_turn_count == 0:
         prior_user_turns = sum(
-            1 for m in conversation_history if m.get("role") == "user"
+            1 for m in conversation_history if m.get("role") == "user" and not m.get("observed")
         )
         if prior_user_turns > 0:
             agent._user_turn_count = prior_user_turns
