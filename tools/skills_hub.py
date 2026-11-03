@@ -27,6 +27,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from hermes_constants import get_hermes_home
 from hermes_cli._subprocess_compat import windows_hide_flags
+from hermes_cli.github_app_token import (
+    REMINT_MARGIN_SECONDS,
+    get_installation_token_detail,
+    read_broker_config,
+)
 from agent.skill_utils import is_excluded_skill_path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunparse
@@ -340,9 +345,11 @@ class GitHubAuth:
     """
     GitHub API authentication. Tries methods in priority order:
       1. GITHUB_TOKEN / GH_TOKEN env var (PAT — the default)
-      2. `gh auth token` subprocess (if gh CLI is installed)
-      3. GitHub App JWT + installation token (if app credentials configured)
-      4. Unauthenticated (60 req/hr, public repos only)
+      2. Host token broker (if this home is on it). The gateway needs this: it runs
+         with HOME=/opt/data, so `gh` can't see the login under /opt/data/home.
+      3. `gh auth token` subprocess (if gh CLI is installed)
+      4. GitHub App JWT + installation token (if app credentials configured)
+      5. Unauthenticated (60 req/hr, public repos only)
     """
 
     def __init__(self):
@@ -362,14 +369,14 @@ class GitHubAuth:
         return self._resolve_token() is not None
 
     def auth_method(self) -> str:
-        """Return which auth method is active: 'pat', 'gh-cli', 'github-app', or 'anonymous'."""
+        """Return which auth method is active: 'pat', 'github-broker', 'gh-cli', 'github-app', or 'anonymous'."""
         self._resolve_token()
         return self._cached_method or "anonymous"
 
     def _resolve_token(self) -> Optional[str]:
         # Return cached token if still valid
         if self._cached_token:
-            if self._cached_method != "github-app" or time.time() < self._app_token_expiry:
+            if self._cached_method not in ("github-app", "github-broker") or time.time() < self._app_token_expiry:
                 return self._cached_token
 
         # 1. Environment variable
@@ -379,14 +386,21 @@ class GitHubAuth:
             self._cached_method = "pat"
             return token
 
-        # 2. gh CLI
+        # 2. Host token broker
+        token = self._try_broker()
+        if token:
+            self._cached_token = token
+            self._cached_method = "github-broker"
+            return token
+
+        # 3. gh CLI
         token = self._try_gh_cli()
         if token:
             self._cached_token = token
             self._cached_method = "gh-cli"
             return token
 
-        # 3. GitHub App
+        # 4. GitHub App
         token = self._try_github_app()
         if token:
             self._cached_token = token
@@ -396,6 +410,21 @@ class GitHubAuth:
 
         self._cached_method = "anonymous"
         return None
+
+    def _try_broker(self) -> Optional[str]:
+        """Try the host token broker. A failure drops to the next method, not an error."""
+        home = get_hermes_home()
+        if read_broker_config(home) is None:
+            return None
+        try:
+            detail = get_installation_token_detail(home)
+        except Exception as e:
+            logger.warning("Skills Hub got no token from the token broker (%s)", type(e).__name__)
+            return None
+        if detail is None:
+            return None
+        self._app_token_expiry = detail.expires_epoch - REMINT_MARGIN_SECONDS
+        return detail.token
 
     def _try_gh_cli(self) -> Optional[str]:
         """Try to get a token from the gh CLI."""

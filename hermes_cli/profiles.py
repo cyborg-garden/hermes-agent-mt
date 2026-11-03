@@ -214,6 +214,7 @@ _DEFAULT_EXPORT_EXCLUDE_ROOT = frozenset({
     "gateway.pid", "gateway_state.json", "processes.json",
     "auth.json",            # API keys, OAuth tokens, credential pools
     ".env",                 # API keys (dotenv)
+    "github-broker.json",   # this agent's secret for the host GitHub token broker
     "auth.lock", "active_profile", ".update_check",
     "errors.log",
     ".hermes_history",
@@ -1932,7 +1933,7 @@ def export_profile(name: str, output_path: str) -> Path:
     # Named profiles — stage a filtered copy to exclude credentials
     with tempfile.TemporaryDirectory() as tmpdir:
         staged = Path(tmpdir) / canon
-        _CREDENTIAL_FILES = {"auth.json", ".env"}
+        _CREDENTIAL_FILES = {"auth.json", ".env", "github-broker.json"}
         shutil.copytree(
             profile_dir,
             staged,

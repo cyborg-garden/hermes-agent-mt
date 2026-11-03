@@ -42,7 +42,7 @@ _EDIT_APPROVAL_REQUESTER: ContextVar[EditApprovalRequester | None] = ContextVar(
 _PERMISSION_REQUEST_IDS = count(1)
 
 
-SENSITIVE_AUTO_APPROVE_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
+SENSITIVE_AUTO_APPROVE_NAMES = {".env", ".env.local", ".env.production", "github-broker.json", "id_rsa", "id_ed25519"}
 AUTO_APPROVE_ASK = "ask"
 AUTO_APPROVE_WORKSPACE = "workspace_session"
 AUTO_APPROVE_SESSION = "session"

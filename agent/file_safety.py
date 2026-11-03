@@ -46,6 +46,9 @@ def build_write_denied_paths(home: str) -> set[str]:
             # Top-level Anthropic PKCE credential store remains sensitive even
             # when a profile is active; default/non-profile sessions still read it.
             str(hermes_root / ".anthropic_oauth.json"),
+            # The agent's long-lived secret for the host-side GitHub token broker.
+            str(hermes_home / "github-broker.json"),
+            str(hermes_root / "github-broker.json"),
             os.path.join(home, ".netrc"),
             os.path.join(home, ".pgpass"),
             os.path.join(home, ".npmrc"),
@@ -329,6 +332,8 @@ def get_read_block_error(path: str) -> Optional[str]:
         "auth.lock",
         ".anthropic_oauth.json",
         ".env",
+        # The agent's secret for the host-side GitHub token broker.
+        "github-broker.json",
         "webhook_subscriptions.json",
         os.path.join("auth", "google_oauth.json"),
         # Bitwarden Secrets Manager disk cache: stores plaintext secret values

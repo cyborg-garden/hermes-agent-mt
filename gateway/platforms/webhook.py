@@ -37,6 +37,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -1247,6 +1248,8 @@ class WebhookAdapter(BasePlatformAdapter):
             )
 
         try:
+            # Off the loop: it can ask the token broker over the network.
+            env = await asyncio.to_thread(self._github_env)
             result = subprocess.run(
                 [
                     "gh",
@@ -1261,6 +1264,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=env,
             )
             if result.returncode == 0:
                 logger.info(
@@ -1283,6 +1287,15 @@ class WebhookAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.error("[webhook] github_comment delivery error: %s", e)
             return SendResult(success=False, error=str(e))
+
+    def _github_env(self) -> Optional[dict]:
+        """``gh`` environment for a delivery. ``None`` (inherit) unless this home is on the
+        token broker: the gateway runs with HOME=/opt/data, so ``gh`` can't see the login
+        under ``home/``, and that ``.env`` holds no GitHub token."""
+        from hermes_cli.github_app_token import add_broker_gh_token
+
+        env = dict(os.environ)
+        return env if add_broker_gh_token(env) else None
 
     async def _deliver_cross_platform(
         self, platform_name: str, content: str, delivery: dict

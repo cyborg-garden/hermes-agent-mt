@@ -1353,6 +1353,8 @@ _SENSITIVE_MANAGED_FILE_BASENAMES = frozenset({
     "bws_cache.json",
     # git's credential-store helper cache (agent.file_safety blocks this too).
     ".git-credentials",
+    # The agent's secret for the host-side GitHub token broker.
+    "github-broker.json",
 })
 
 # Directory names whose entire subtree is credential material. Both canonical

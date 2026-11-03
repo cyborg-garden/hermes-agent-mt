@@ -30,6 +30,12 @@ class TestWriteDenyExactPaths:
         assert _is_write_denied(path) is True
 
 
+    def test_github_broker_secret(self):
+        # The agent's broker secret sits beside .env and gets the same guard.
+        from hermes_constants import get_hermes_home
+        path = str(get_hermes_home() / "github-broker.json")
+        assert _is_write_denied(path) is True
+
     def test_hermes_env(self):
         # ``.env`` under the active HERMES_HOME (profile-aware, not just
         # ``~/.hermes``) must be write-denied. The hermetic test conftest

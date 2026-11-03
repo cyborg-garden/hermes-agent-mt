@@ -356,6 +356,27 @@ async def test_blocks_sensitive_home_and_hermes_paths(tmp_path: Path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_blocks_github_broker_secret(tmp_path: Path, monkeypatch):
+    from agent.context_references import preprocess_context_references_async
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    secret = tmp_path / ".hermes" / "github-broker.json"
+    secret.parent.mkdir(parents=True)
+    secret.write_text('{"secret": "broker-secret-value"}\n', encoding="utf-8")
+
+    result = await preprocess_context_references_async(
+        "read @file:.hermes/github-broker.json",
+        cwd=tmp_path,
+        context_length=100000,
+        allowed_root=tmp_path,
+    )
+
+    assert "broker-secret-value" not in result.message
+    assert any("sensitive credential" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
 async def test_blocks_canonical_read_denylist_credential_stores(tmp_path: Path, monkeypatch):
     """@file expansion must honour the canonical read deny-list.
 

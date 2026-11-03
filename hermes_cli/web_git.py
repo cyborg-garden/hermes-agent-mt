@@ -19,6 +19,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from hermes_cli.github_app_token import add_broker_gh_token
+
 _GIT_TIMEOUT = 30
 _GH_TIMEOUT = 30
 _MAX_BUFFER = 32 * 1024 * 1024
@@ -419,9 +421,12 @@ def review_commit_context(cwd: str) -> dict:
 def _gh(cwd: str, args: list[str]) -> tuple[bool, str]:
     if not shutil.which("gh"):
         return False, ""
+    # The server runs with HOME=/opt/data, where gh can't see the login under home/.
+    env = dict(os.environ)
+    add_broker_gh_token(env)
     try:
         proc = subprocess.run(
-            ["gh", *args], cwd=cwd, capture_output=True, text=True, timeout=_GH_TIMEOUT
+            ["gh", *args], cwd=cwd, capture_output=True, text=True, timeout=_GH_TIMEOUT, env=env
         )
     except (OSError, subprocess.SubprocessError):
         return False, ""

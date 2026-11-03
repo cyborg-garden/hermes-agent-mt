@@ -459,6 +459,7 @@ class TestSecurity:
 
     def test_user_owned_exclude_covers_credentials(self):
         assert "auth.json" in USER_OWNED_EXCLUDE
+        assert "github-broker.json" in USER_OWNED_EXCLUDE
         assert ".env" in USER_OWNED_EXCLUDE
         assert "memories" in USER_OWNED_EXCLUDE
         assert "sessions" in USER_OWNED_EXCLUDE

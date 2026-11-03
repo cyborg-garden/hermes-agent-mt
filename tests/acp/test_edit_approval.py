@@ -267,3 +267,11 @@ def test_workspace_auto_approval_allows_workspace_and_tmp_but_not_sensitive(tmp_
         "session",
         str(tmp_path),
     )
+
+
+def test_workspace_auto_approval_never_covers_the_github_broker_secret(tmp_path):
+    assert not should_auto_approve_edit(
+        EditProposal("write_file", str(tmp_path / "github-broker.json"), None, "x", {}),
+        "workspace_session",
+        str(tmp_path),
+    )

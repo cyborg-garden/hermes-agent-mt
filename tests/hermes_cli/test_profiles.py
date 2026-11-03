@@ -1321,6 +1321,18 @@ class TestExportImport:
         assert "default/SOUL.md" in names
         assert "default/memories/MEMORY.md" in names
 
+    def test_export_leaves_out_the_github_broker_secret(self, profile_env, tmp_path):
+        """It is this agent's identity, on default and named profiles alike."""
+        create_profile("coder", no_alias=True)
+        for name in ("default", "coder"):
+            home = get_profile_dir(name)
+            (home / "config.yaml").write_text("ok")
+            (home / "github-broker.json").write_text('{"secret": "x"}')
+            output = tmp_path / f"{name}.tar.gz"
+            export_profile(name, str(output))
+            with tarfile.open(str(output), "r:gz") as tf:
+                assert f"{name}/github-broker.json" not in tf.getnames()
+
     def test_export_default_excludes_infrastructure(self, profile_env, tmp_path):
         """Repo checkout, worktrees, profiles, databases are excluded."""
         default_dir = get_profile_dir("default")
