@@ -6250,7 +6250,7 @@ class AIAgent:
         # which may be observed from another thread.
         with scoped_runtime_main({}):
             try:
-                return run_conversation(
+                result = run_conversation(
                     self,
                     user_message,
                     system_message,
@@ -6261,6 +6261,13 @@ class AIAgent:
                     persist_user_timestamp=persist_user_timestamp,
                     moa_config=moa_config,
                 )
+                # The loop's error and interrupt exits skip the finalizer, and a
+                # queued follow-up or cached agent replays what they leave behind.
+                if isinstance(result, dict):
+                    for rows in (result.get("messages"), self._session_messages):
+                        if isinstance(rows, list):
+                            self._apply_persist_user_message_override(rows)
+                return result
             finally:
                 reset_accounting_context(acct_token)
                 reset_conversation_context(token)

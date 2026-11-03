@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -211,3 +212,59 @@ def test_first_exchange_title_check_leaves_out_chatter():
         maybe_auto_title(MagicMock(), "group", OWNER, "noted", history)
 
     thread.assert_called_once()
+
+
+def _wrapped_owner_turn():
+    from gateway.run import _wrap_current_message_with_observed_context
+
+    return _wrap_current_message_with_observed_context("[owner] hi there", STRANGER)
+
+
+def test_a_turn_that_fails_early_hands_back_the_row_as_stored(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("group", source="discord")
+    agent = _agent(db, "group")
+
+    def _call(*_a, **_kw):
+        error = RuntimeError("bad request")
+        error.status_code = 400
+        raise error
+
+    with (
+        patch.object(agent, "_interruptible_api_call", _call),
+        patch.object(agent, "_interruptible_streaming_api_call", _call),
+    ):
+        result = agent.run_conversation(
+            _wrapped_owner_turn(), persist_user_message="[owner] hi there"
+        )
+
+    assert result["completed"] is False
+    assert result["error"]
+    assert [m["content"] for m in result["messages"] if m["role"] == "user"] == ["[owner] hi there"]
+    # A cached agent's live history can stand in for the transcript next turn.
+    assert "deploy key" not in str(agent._session_messages)
+
+
+def test_the_main_path_review_reads_the_row_as_stored():
+    agent = _agent()
+    agent._skill_nudge_interval = 1
+    agent._iters_since_skill = 1
+    agent.valid_tool_names = set(agent.valid_tool_names or set()) | {"skill_manage"}
+    snapshots = []
+
+    # Copy at the call so a later in-place clean cannot hide what was handed over.
+    def _spawn(messages_snapshot, **_kw):
+        snapshots.append(copy.deepcopy(messages_snapshot))
+
+    def _call(_api_kwargs, **_kw):
+        return _reply("ok")
+
+    with (
+        patch.object(agent, "_interruptible_api_call", _call),
+        patch.object(agent, "_interruptible_streaming_api_call", _call),
+        patch.object(agent, "_spawn_background_review", side_effect=_spawn),
+    ):
+        agent.run_conversation(_wrapped_owner_turn(), persist_user_message="[owner] hi there")
+
+    assert snapshots, "review did not fire"
+    assert [m["content"] for m in snapshots[0] if m["role"] == "user"] == ["[owner] hi there"]
