@@ -22,6 +22,7 @@ def build_exec_approval_view(discord, base, *, unauthorized):
         def __init__(
             self, session_key: str, allowed_user_ids: set, allowed_role_ids: Optional[set] = None,
             require_admin: bool = False, admin_user_ids: Optional[set] = None,
+            approver_roles: Optional[set] = None,
             allow_permanent: bool = True, allow_session: bool = True, smart_denied: bool = False,
             request_id: Optional[str] = None,
         ):
@@ -33,6 +34,8 @@ def build_exec_approval_view(discord, base, *, unauthorized):
             self._retire_lock = asyncio.Lock()
             self.require_admin = require_admin
             self.admin_user_ids = {str(a).strip() for a in (admin_user_ids or set()) if str(a).strip()}
+            # Fork: role IDs or names; a holder in the prompt's guild may also approve.
+            self.approver_roles = {str(r).strip() for r in (approver_roles or set()) if str(r).strip()}
             self._localize_buttons(
                 allow_once="gateway.exec_approval.action_once", allow_session="gateway.exec_approval.action_session",
                 allow_always="gateway.exec_approval.action_always", deny="gateway.exec_approval.action_deny")
@@ -44,7 +47,7 @@ def build_exec_approval_view(discord, base, *, unauthorized):
 
         def _check_auth(self, interaction: discord.Interaction) -> bool:
             """Base admission always required; with ``require_admin`` the clicker must
-            also be an admin. Fails closed (logged once) when no admins are configured."""
+            also be an admin or hold an approver role. Fails closed when nothing is configured."""
             if not super()._check_auth(interaction):
                 return False
             if not self.require_admin:
@@ -54,15 +57,25 @@ def build_exec_approval_view(discord, base, *, unauthorized):
                 uid = str(getattr(user, "id", "") or "")
             except Exception:
                 uid = ""
-            if uid and uid in self.admin_user_ids:
-                return True
-            if not self.admin_user_ids:
+            try:
+                from gateway.slash_access import admin_entries_match, approver_roles_match
+                from plugins.platforms.discord.adapter import _discord_platform_identity
+                identity = _discord_platform_identity(user, getattr(interaction, "guild", None))
+                if uid and admin_entries_match(self.admin_user_ids, uid, identity):
+                    return True
+                if approver_roles_match(self.approver_roles, identity):
+                    return True
+            except Exception:
+                # Fallback: plain uid check if slash_access or identity helpers are unavailable.
+                if uid and uid in self.admin_user_ids:
+                    return True
+            if not self.admin_user_ids and not self.approver_roles:
                 logger.warning(
                     "[Discord] require_admin_for_exec_approval is enabled but "
-                    "no admins are configured (allow_admin_from is empty) — "
-                    "exec approval buttons are disabled for everyone. Add "
-                    "admin user IDs under the discord platform's "
-                    "allow_admin_from, or disable the toggle."
+                    "no admins are configured (allow_admin_from and approver_roles are "
+                    "empty) — exec approval buttons are disabled for everyone. Add "
+                    "admin user IDs or usernames under allow_admin_from, an approver "
+                    "role under approver_roles, or disable the toggle."
                 )
             return False
 
