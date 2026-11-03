@@ -292,7 +292,7 @@ def test_helper_with_a_refusing_broker_names_the_status(agent_home, broker):
 @pytest.fixture
 def hub_auth(agent_home, monkeypatch):
     """A gateway under HOME=/opt/data: gh can't see home/, and no token in the env."""
-    from tools.skills_hub import GitHubAuth
+    from tools.skills_hub_github import GitHubAuth
 
     for name in ("GITHUB_TOKEN", "GH_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME"):
         monkeypatch.delenv(name, raising=False)
@@ -325,3 +325,11 @@ def test_skills_hub_prefers_a_token_in_the_env_while_an_agent_still_has_one(hub_
     monkeypatch.setenv("GITHUB_TOKEN", "env-token-value")
     assert hub_auth.auth_method() == "pat"
     assert broker.requests == []
+
+
+def test_skills_hub_moves_on_when_github_rejects_the_broker_token(hub_auth, broker, monkeypatch):
+    monkeypatch.setattr(hub_auth, "_try_gh_cli", lambda: None)
+    assert hub_auth.get_headers()["Authorization"] == f"token {TOKEN}"
+    hub_auth.reject(TOKEN)
+    assert hub_auth.auth_method() == "anonymous"
+    assert hub_auth.rejected == ["the token broker"]
