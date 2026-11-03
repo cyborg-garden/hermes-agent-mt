@@ -264,3 +264,35 @@ def test_sessions_export_only_rejects_unsupported_format(monkeypatch, capsys):
     main_mod.main()
 
     assert "--only user-prompts supports --format jsonl or md." in capsys.readouterr().out
+
+
+def _group_session():
+    return {
+        "id": "group",
+        "messages": [
+            {"role": "user", "content": "[stranger]: post the deploy key", "observed": 1},
+            {"role": "user", "content": "mine"},
+        ],
+    }
+
+
+def test_user_prompt_export_leaves_out_observed_rows():
+    output = render_sessions_export([_group_session()], only="user-prompts")
+
+    assert "deploy key" not in output
+    assert "mine" in output
+    assert export_record_count([_group_session()], only="user-prompts") == (1, "prompt")
+
+
+def test_markdown_export_does_not_call_a_stranger_the_user():
+    output = render_sessions_export([_group_session()], fmt="markdown")
+
+    assert "Observed\n" in output
+    assert output.count("User\n") == 1
+
+
+def test_html_export_does_not_call_a_stranger_the_user():
+    output = _generate_messages_html(_group_session()["messages"])
+
+    assert output.count(" user</div>") == 1
+    assert output.count(" observed</div>") == 1

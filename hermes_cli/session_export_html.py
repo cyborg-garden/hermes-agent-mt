@@ -699,7 +699,7 @@ def _generate_messages_html(messages: List[Dict[str, Any]]) -> str:
         #    so a crafted role can neither break out of the attribute nor split
         #    into several unintended classes. Real roles (user/assistant/system/
         #    tool) are unchanged, so the `.message-<role>` rules still match.
-        safe_role = _escape_html(role)
+        safe_role = "observed" if msg.get("observed") else _escape_html(role)
         role_class = "".join(c if c.isalnum() or c in "-_" else "-" for c in str(role).lower())
         msg_class = f"message message-{role_class} active"
         # Delay animation for initial items

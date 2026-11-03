@@ -47,7 +47,7 @@ def _frontmatter_line(key: str, value: Any) -> str:
 
 def _message_heading(message: dict[str, Any]) -> str:
     role = str(message.get("role") or "message")
-    label = role.capitalize()
+    label = "Observed" if message.get("observed") else role.capitalize()
     name = message.get("name") or message.get("tool_name")
     if role == "tool" and name:
         label = f"Tool — {name}"

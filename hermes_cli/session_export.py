@@ -79,7 +79,7 @@ def iter_user_prompt_records(
         session_id = str(session.get("id") or session.get("session_id") or "")
         index = 0
         for message in _messages(session):
-            if message.get("role") != "user":
+            if message.get("role") != "user" or message.get("observed"):
                 continue
             index += 1
             record: Dict[str, Any] = {
@@ -207,7 +207,7 @@ def _append_session_messages(
             continue
 
         label = {
-            "user": "User",
+            "user": "Observed" if message.get("observed") else "User",
             "assistant": "Assistant",
         }.get(role, role.title())
         lines.append(f"{marker} {label}{suffix}")
