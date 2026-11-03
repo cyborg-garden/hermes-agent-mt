@@ -55,7 +55,7 @@ def build_exec_approval_view(discord, base, *, unauthorized):
             user = getattr(interaction, "user", None)
             try:
                 uid = str(getattr(user, "id", "") or "")
-            except Exception:
+            except (AttributeError, TypeError):
                 uid = ""
             try:
                 from gateway.slash_access import admin_entries_match, approver_roles_match
