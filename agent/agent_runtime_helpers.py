@@ -86,7 +86,8 @@ def convert_to_trajectory_format(agent, messages: List[Dict[str, Any]], user_que
     # Normalize multimodal tool results — trajectories are text-only, so
     # replace image-bearing tool messages with their text_summary to avoid
     # embedding ~1MB base64 blobs into every saved trajectory.
-    messages = [_trajectory_normalize_msg(m) for m in messages]
+    # Observed chatter would read as the human's turn in a training example.
+    messages = [_trajectory_normalize_msg(m) for m in messages if not m.get("observed")]
     trajectory = []
     
     # Add system message with tool definitions

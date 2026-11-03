@@ -143,3 +143,33 @@ def test_routed_review_digest_leaves_the_stranger_out(tmp_path):
     assert "digest" in text
     assert "dream scenes" in text
     assert "deploy key" not in text
+
+
+def test_trajectory_export_has_no_stranger_as_human():
+    agent = _agent()
+    rows = [
+        {"role": "user", "content": OWNER},
+        {"role": "user", "content": STRANGER, "observed": True},
+        {"role": "assistant", "content": "noted"},
+    ]
+
+    trajectory = agent._convert_to_trajectory_format(rows, OWNER, True)
+
+    assert any(turn["from"] == "human" and "dream scenes" in turn["value"] for turn in trajectory)
+    assert not any("deploy key" in turn["value"] for turn in trajectory)
+
+
+def test_trace_export_has_no_stranger_as_user(tmp_path):
+    from agent.trace_upload import build_trace_jsonl
+
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("group", source="discord")
+    db.append_message("group", "user", STRANGER, observed=True)
+    db.append_message("group", "user", OWNER)
+
+    trace = build_trace_jsonl(
+        db.get_messages_as_conversation("group"), session_id="group", redact=False
+    )
+
+    assert "dream scenes" in trace
+    assert "deploy key" not in trace

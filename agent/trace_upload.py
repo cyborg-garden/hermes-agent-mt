@@ -184,7 +184,8 @@ def build_trace_jsonl(
 
     for msg in messages:
         role = msg.get("role")
-        if role == "system":
+        # A trace entry has no way to say a row was only overheard.
+        if role == "system" or msg.get("observed"):
             continue
         turn_uuid = str(uuid.uuid4())
 
