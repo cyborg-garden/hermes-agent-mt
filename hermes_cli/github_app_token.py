@@ -38,6 +38,7 @@ import argparse
 import base64
 import datetime as _dt
 import json
+import logging
 import os
 import re
 import sys
@@ -47,6 +48,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 
@@ -315,6 +318,36 @@ def get_installation_token(home_dir: Path, *, force: bool = False) -> Optional[s
     """Return a valid installation token string for ``home_dir``, minting if needed."""
     detail = get_installation_token_detail(home_dir, force=force)
     return detail.token if detail else None
+
+
+def _broker_token() -> Optional[str]:
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    if read_broker_config(home) is None:
+        return None
+    try:
+        detail = get_installation_token_detail(home)
+    except Exception as e:
+        logger.warning("No GitHub token from the token broker (%s)", type(e).__name__)
+        return None
+    return detail.token if detail else None
+
+
+def add_broker_gh_token(env: dict) -> bool:
+    """Give a ``gh`` child the broker token. True when it added one.
+
+    The gateway runs with HOME=/opt/data, so its ``gh`` can't see the login boot wrote under
+    ``home/``, and a brokered ``.env`` holds no GitHub token. A token already in ``env`` wins.
+    Asks the broker on a miss, so call it off the event loop.
+    """
+    if env.get("GH_TOKEN") or env.get("GITHUB_TOKEN"):
+        return False
+    token = _broker_token()
+    if not token:
+        return False
+    env["GH_TOKEN"] = token
+    return True
 
 
 # ---------------------------------------------------------------------------

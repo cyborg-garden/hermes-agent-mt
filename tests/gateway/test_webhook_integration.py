@@ -332,6 +332,7 @@ class TestGitHubCommentDelivery:
             capture_output=True,
             text=True,
             timeout=30,
+            env=None,
         )
         # Delivery info is retained after send() so interim status messages
         # don't strand the final response (TTL-based cleanup happens on POST).
