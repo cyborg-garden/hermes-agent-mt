@@ -127,7 +127,7 @@ def _count_visible_turns(
             continue
         role = msg.get("role")
         if role == "user":
-            users += 1
+            users += 0 if msg.get("observed") else 1
         elif role == "assistant":
             assistants += 1
         elif role == "tool":
@@ -139,7 +139,7 @@ def _latest_user_prompt(
     messages: Sequence[Mapping[str, Any]],
 ) -> Optional[str]:
     for msg in reversed(messages):
-        if isinstance(msg, Mapping) and msg.get("role") == "user":
+        if isinstance(msg, Mapping) and msg.get("role") == "user" and not msg.get("observed"):
             text = _coerce_text(msg.get("content")).strip()
             if text:
                 return text

@@ -11,7 +11,7 @@ Verifies that:
 
 import os
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -269,7 +269,9 @@ def test_branch_keeps_the_observed_flag(cli_instance, session_db):
         {"role": "assistant", "content": "hi"},
     ]
 
-    HermesCLI._handle_branch_command(cli_instance, "/branch")
+    with patch("cli._cprint") as cprint:
+        HermesCLI._handle_branch_command(cli_instance, "/branch")
 
     copied = session_db.get_messages_as_conversation(cli_instance.session_id)
     assert [bool(m.get("observed")) for m in copied] == [True, False, False]
+    assert any("(1 user message)" in str(call) for call in cprint.call_args_list)

@@ -176,3 +176,16 @@ def test_rollback_restore_removes_the_turn_not_the_chatter_after_it(db):
 
     assert result["history_removed"] == 3
     assert server._sessions["r"]["history"] == []
+
+
+def test_live_history_does_not_call_a_stranger_you(db):
+    db.create_session("live", source="discord")
+    db.append_message("live", "user", STRANGER, observed=True)
+    db.append_message("live", "user", OWNER)
+    _live_session("h", "live", [])
+
+    with patch.object(server, "_get_db", return_value=db):
+        output = server._format_live_history_output(server._sessions["h"])
+
+    assert f"[Observed #1] {STRANGER}" in output
+    assert f"[You #2] {OWNER}" in output

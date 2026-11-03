@@ -6933,7 +6933,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             content_text = "" if content is None else str(content)
 
             if role == "user":
-                _cli_visible_print(f"\n  [You #{visible_index}]{_ts_suffix(msg)}")
+                label = "Observed" if msg.get("observed") else "You"
+                _cli_visible_print(f"\n  [{label} #{visible_index}]{_ts_suffix(msg)}")
                 _cli_visible_print(
                     f"    {content_text[:preview_limit]}{'...' if len(content_text) > preview_limit else ''}"
                 )
@@ -12402,7 +12403,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         print()
         msg_count = len(self.conversation_history)
         if msg_count > 0:
-            user_msgs = len([m for m in self.conversation_history if m.get("role") == "user"])
+            user_msgs = len(
+                [m for m in self.conversation_history if m.get("role") == "user" and not m.get("observed")]
+            )
             tool_calls = len([m for m in self.conversation_history if m.get("role") == "tool" or m.get("tool_calls")])
             elapsed = datetime.now() - self.session_start
             hours, remainder = divmod(int(elapsed.total_seconds()), 3600)

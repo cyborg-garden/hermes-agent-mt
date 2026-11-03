@@ -822,7 +822,9 @@ class CLICommandsMixin:
                 pass
 
         title_part = f" \"{session_meta['title']}\"" if session_meta.get("title") else ""
-        msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
+        msg_count = len(
+            [m for m in self.conversation_history if m.get("role") == "user" and not m.get("observed")]
+        )
         if self.conversation_history:
             _cprint(
                 f"  ↻ Resumed session {target_id}{title_part}"
@@ -1004,7 +1006,9 @@ class CLICommandsMixin:
             except Exception:
                 pass
 
-        msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
+        msg_count = len(
+            [m for m in self.conversation_history if m.get("role") == "user" and not m.get("observed")]
+        )
         _cprint(
             f"  ⑂ Branched session \"{branch_title}\""
             f" ({msg_count} user message{'s' if msg_count != 1 else ''})"

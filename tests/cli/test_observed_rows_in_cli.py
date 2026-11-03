@@ -194,3 +194,44 @@ def test_compress_here_in_place_is_unchanged(tmp_path):
     stored = db.get_messages_as_conversation("cli")
     assert sum(OWNER in str(m["content"]) for m in stored) == 1
     assert len(stored) == len(cli.conversation_history)
+
+
+GROUP_ROWS = [
+    {"role": "user", "content": OWNER},
+    {"role": "assistant", "content": "noted"},
+    {"role": "user", "content": STRANGER, "observed": True},
+]
+
+
+def test_history_does_not_call_a_stranger_you(capsys):
+    cli = _make_cli()
+    cli.conversation_history = [dict(r) for r in GROUP_ROWS]
+
+    cli.show_history()
+
+    labels = capsys.readouterr().out
+    assert labels.count("[You #") == 1
+    assert labels.count("[Observed #") == 1
+
+
+def test_resume_recap_leaves_the_stranger_out():
+    cli = _make_cli()
+    cli.conversation_history = [dict(r) for r in GROUP_ROWS]
+    shown = []
+    cli.console = SimpleNamespace(print=lambda *args, **_kw: shown.extend(args))
+
+    cli._display_resumed_history()
+
+    text = "\n".join(str(getattr(item, "renderable", item)) for item in shown)
+    assert "dream scenes" in text
+    assert "deploy key" not in text
+
+
+def test_recap_leaves_the_stranger_out():
+    from hermes_cli.session_recap import build_recap
+
+    recap = build_recap([dict(r) for r in GROUP_ROWS])
+
+    assert "1 user turn " in recap
+    assert "dream scenes" in recap
+    assert "deploy key" not in recap

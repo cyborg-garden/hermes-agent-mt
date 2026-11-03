@@ -300,7 +300,7 @@ class CLIAgentSetupMixin:
             if restored:
                 restored = [m for m in restored if m.get("role") != "session_meta"]
                 self.conversation_history = restored
-                msg_count = len([m for m in restored if m.get("role") == "user"])
+                msg_count = len([m for m in restored if m.get("role") == "user" and not m.get("observed")])
                 title_part = ""
                 if session_meta.get("title"):
                     title_part = f" \"{session_meta['title']}\""
@@ -500,7 +500,7 @@ class CLIAgentSetupMixin:
         if restored:
             restored = [m for m in restored if m.get("role") != "session_meta"]
             self.conversation_history = restored
-            msg_count = len([m for m in restored if m.get("role") == "user"])
+            msg_count = len([m for m in restored if m.get("role") == "user" and not m.get("observed")])
             title_part = ""
             if session_meta.get("title"):
                 title_part = f' "{session_meta["title"]}"'
@@ -570,6 +570,9 @@ class CLIAgentSetupMixin:
             if role == "system":
                 continue
             if role == "tool":
+                continue
+            # This recap labels every row "You"; these words were a stranger's.
+            if msg.get("observed"):
                 continue
 
             if role == "user":
