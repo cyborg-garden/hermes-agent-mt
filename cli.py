@@ -9700,6 +9700,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     # Manual /compress replaces conversation_history with a new
                     # compressed handoff for the child session. Persist it from
                     # offset 0 so resume can recover the continuation after exit.
+                    # The tail kept by /compress here is still marked as stored
+                    # in the parent, and the flush skips marked rows.
+                    from agent.context_compressor import _strip_persistence_markers
+
+                    _strip_persistence_markers(self.conversation_history)
                     self.agent._flush_messages_to_session_db(self.conversation_history, None)
                 new_tokens = estimate_request_tokens_rough(
                     self.conversation_history,

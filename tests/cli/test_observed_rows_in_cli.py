@@ -169,3 +169,28 @@ def _compress_here(tmp_path, in_place):
     with patch("agent.context_compressor.call_llm", _summary):
         cli._manual_compress("/compress here 1")
     return cli, db
+
+
+def test_compress_here_with_rotation_stores_the_kept_tail(tmp_path):
+    cli, db = _compress_here(tmp_path, in_place=False)
+    assert cli.session_id != "cli"
+    stored = db.get_messages_as_conversation(cli.session_id)
+    assert len(stored) == len(cli.conversation_history)
+    assert sum(OWNER in str(m["content"]) for m in stored) == 1
+    # The tail's chatter has to stay chatter in the child session.
+    kept = [m for m in stored if m["content"] == STRANGER]
+    assert kept and all(m.get("observed") for m in kept)
+
+
+def test_compress_here_with_rotation_keeps_tool_rows_and_order(tmp_path):
+    cli, db = _compress_here(tmp_path, in_place=False)
+    stored = db.get_messages_as_conversation(cli.session_id)
+    assert [m["role"] for m in stored] == [m["role"] for m in cli.conversation_history]
+
+
+def test_compress_here_in_place_is_unchanged(tmp_path):
+    cli, db = _compress_here(tmp_path, in_place=True)
+    assert cli.session_id == "cli"
+    stored = db.get_messages_as_conversation("cli")
+    assert sum(OWNER in str(m["content"]) for m in stored) == 1
+    assert len(stored) == len(cli.conversation_history)
