@@ -333,3 +333,46 @@ async def test_undo_offers_a_legacy_wrapped_row_without_the_chatter(tmp_path, mo
     result = store.rewind_session("s")
 
     assert result["target_text"] == OWNER
+
+
+@pytest.mark.asyncio
+async def test_branch_reports_only_turns_someone_addressed_to_the_agent(tmp_path, monkeypatch):
+    store = _store(
+        tmp_path,
+        monkeypatch,
+        "s",
+        [
+            {"role": "user", "content": STRANGER, "observed": True},
+            {"role": "user", "content": OWNER},
+            {"role": "assistant", "content": "noted"},
+        ],
+    )
+    gw = _command_runner(store, "s")
+    with patch("gateway.slash_commands.t", side_effect=lambda key, **kw: (key, kw)):
+        key, values = await gw._handle_branch_command(_command_event("/branch side"))
+    assert key == "gateway.branch.branched_one"
+    assert values["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_reports_only_turns_someone_addressed_to_the_agent(tmp_path, monkeypatch):
+    store = _store(
+        tmp_path,
+        monkeypatch,
+        "s",
+        [
+            {"role": "user", "content": STRANGER, "observed": True},
+            {"role": "user", "content": OWNER},
+            {"role": "assistant", "content": "noted"},
+        ],
+    )
+    gw = _command_runner(store, "current")
+    gw._resume_target_allowed = AsyncMock(return_value=True)
+    gw._release_running_agent_state = MagicMock()
+    gw._set_session_reasoning_override = MagicMock()
+    event = _command_event("/resume s")
+    event.source.platform = Platform.DISCORD
+    with patch("gateway.slash_commands.t", side_effect=lambda key, **kw: (key, kw)):
+        key, values = await gw._handle_resume_command(event)
+    assert key == "gateway.resume.resumed_one"
+    assert values["count"] == 1

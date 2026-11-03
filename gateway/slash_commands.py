@@ -3929,7 +3929,11 @@ class GatewaySlashCommandsMixin:
 
         # Count messages for context
         history = await self.async_session_store.load_transcript(target_id)
-        msg_count = len([m for m in history if m.get("role") == "user"]) if history else 0
+        msg_count = (
+            len([m for m in history if m.get("role") == "user" and not m.get("observed")])
+            if history
+            else 0
+        )
         msg_part = f" ({msg_count} message{'s' if msg_count != 1 else ''})" if msg_count else ""
 
         if source.platform == Platform.MATRIX and allow_cross_room:
@@ -4105,7 +4109,7 @@ class GatewaySlashCommandsMixin:
         # Evict any cached agent for this session
         self._evict_cached_agent(session_key)
 
-        msg_count = len([m for m in history if m.get("role") == "user"])
+        msg_count = len([m for m in history if m.get("role") == "user" and not m.get("observed")])
         key = "gateway.branch.branched_one" if msg_count == 1 else "gateway.branch.branched_many"
         return t(key, title=branch_title, count=msg_count, parent=parent_session_id, new=new_session_id)
 
