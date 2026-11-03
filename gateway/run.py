@@ -7191,8 +7191,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _notify_skipped_resume(self, entry, adapter, source) -> None:
         """Say once in a shared thread that a job died with the restart.
 
-        A fixed line, with no agent turn and nothing from the session in it, so
-        this tells a skipped owner nothing the skip was protecting. Only in a
+        A fixed line, with no agent turn and no session content in it, so this
+        tells a skipped owner nothing the skip was protecting beyond whether a
+        process is still alive, which the registry is asked. Only in a
         thread people are already reading: a skipped owner may have been removed
         from the allowlist, and a bot DM or main-channel line asking them to ask
         again is something they cannot act on. Only when the transcript shows
@@ -7223,11 +7224,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return
             if not self._transcript_shows_interrupted_work(transcript):
                 return
+            running = await asyncio.to_thread(self._job_left_something_running, entry)
+            if running is None:
+                state = "I can't tell whether anything it started is still running."
+            elif running:
+                state = "Something it started is still running, but I've stopped working on it."
+            else:
+                state = "Nothing is running now."
             delivered = False
             try:
                 result = await adapter.send(
                     source.chat_id,
-                    "I restarted and this job was lost. Nothing is running now. "
+                    f"I restarted and this job was lost. {state} "
                     "Ask again if you still want it.",
                     metadata=self._thread_metadata_for_source(source),
                 )
@@ -7245,6 +7253,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         task = asyncio.create_task(_send())
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    @staticmethod
+    def _job_left_something_running(entry) -> Optional[bool]:
+        """Whether a process from this session outlived the restart. None if unknown.
+
+        Startup recovers survivors from the checkpoint before this can be asked.
+        """
+        try:
+            from tools.process_registry import process_registry
+
+            return bool(
+                process_registry.has_active_for_session(entry.session_key)
+                or process_registry.has_active_processes(entry.session_id)
+            )
+        except Exception as exc:
+            logger.debug("Could not check processes for %s: %s", entry.session_key, exc)
+            return None
 
     def _schedule_resume_pending_sessions(self, platform=None) -> int:
         """Auto-continue fresh restart-interrupted sessions after startup.

@@ -2209,3 +2209,103 @@ async def test_authorized_resume_posts_no_skip_notice():
 
     assert await _run_skip_pass(runner) == 1
     adapter.send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# The lost-job line must not say nothing is running without asking
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def surviving_process(tmp_path, monkeypatch):
+    """A real process that outlived the old gateway, recovered the way startup does it."""
+    import json
+    import subprocess
+
+    import tools.process_registry as pr
+
+    proc = subprocess.Popen(["sleep", "60"])
+    checkpoint = tmp_path / "processes.json"
+    monkeypatch.setattr(pr, "CHECKPOINT_PATH", checkpoint)
+    registry = pr.ProcessRegistry()
+    monkeypatch.setattr(pr, "process_registry", registry)
+    checkpoint.write_text(
+        json.dumps(
+            [
+                {
+                    "session_id": "proc_survivor",
+                    "command": "sleep 60",
+                    "pid": proc.pid,
+                    "pid_scope": "host",
+                    "host_start_time": registry._safe_host_start_time(proc.pid),
+                    "session_key": "SESSION_KEY",
+                    "task_id": "",
+                }
+            ]
+        )
+    )
+    yield registry, checkpoint, proc
+    if proc.poll() is None:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+async def _lost_job_line(entry):
+    runner, adapter = _skipped_runner(entry)
+    await _run_skip_pass(runner)
+    adapter.send.assert_awaited_once()
+    return adapter.send.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_lost_job_line_says_so_when_a_real_process_survived_the_restart(surviving_process):
+    registry, _checkpoint, proc = surviving_process
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    assert registry.recover_from_checkpoint() == 1
+    registry._running["proc_survivor"].session_key = entry.session_key
+
+    line = await _lost_job_line(entry)
+
+    assert proc.poll() is None
+    assert "Nothing is running" not in line
+    assert "still running" in line and "lost" in line
+    assert "\n" not in line
+
+
+@pytest.mark.asyncio
+async def test_lost_job_line_says_so_when_a_process_of_the_task_survived(monkeypatch):
+    import tools.process_registry as pr
+
+    monkeypatch.setattr(pr.process_registry, "has_active_for_session", lambda key: False)
+    entry = _revoked_entry(_thread_source(), datetime.now())
+    monkeypatch.setattr(pr.process_registry, "has_active_processes", lambda task: task == entry.session_id)
+
+    line = await _lost_job_line(entry)
+
+    assert "Nothing is running" not in line and "still running" in line
+
+
+@pytest.mark.asyncio
+async def test_lost_job_line_admits_it_when_the_check_fails(monkeypatch):
+    import tools.process_registry as pr
+
+    def boom(*_args):
+        raise RuntimeError("registry down")
+
+    monkeypatch.setattr(pr.process_registry, "has_active_for_session", boom)
+    line = await _lost_job_line(_revoked_entry(_thread_source(), datetime.now()))
+
+    assert "Nothing is running" not in line and "can't tell" in line
+
+
+# Controls: these pass without the fix.
+
+
+@pytest.mark.asyncio
+async def test_lost_job_line_still_says_nothing_runs_when_that_is_true(tmp_path, monkeypatch):
+    import tools.process_registry as pr
+
+    monkeypatch.setattr(pr, "process_registry", pr.ProcessRegistry())
+    line = await _lost_job_line(_revoked_entry(_thread_source(), datetime.now()))
+
+    assert "Nothing is running now." in line
