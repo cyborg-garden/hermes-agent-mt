@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
-from agent.observed_context import without_observed_block
+from agent.observed_context import OBSERVED_GROUP_CONTEXT_HEADER, without_observed_block
 from agent.vision_history import correct_stored_vision_row, snippet_of_corrected_row
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
@@ -3945,12 +3945,7 @@ class SessionDB:
         for row in rows:
             s = dict(row)
             # Build the preview from the raw substring
-            raw = s.pop("_preview_raw", "").strip()
-            if raw:
-                text = raw[:60]
-                s["preview"] = text + ("..." if len(raw) > 60 else "")
-            else:
-                s["preview"] = ""
+            s["preview"] = self._session_preview(s["id"], s.pop("_preview_raw", ""))
             # Drop the internal ordering column so callers see a clean dict.
             s.pop("_effective_last_active", None)
             sessions.append(s)
@@ -4049,14 +4044,25 @@ class SessionDB:
         runs: List[Dict[str, Any]] = []
         for row in rows:
             s = dict(row)
-            raw = s.pop("_preview_raw", "").strip()
-            if raw:
-                text = raw[:60]
-                s["preview"] = text + ("..." if len(raw) > 60 else "")
-            else:
-                s["preview"] = ""
+            s["preview"] = self._session_preview(s["id"], s.pop("_preview_raw", ""))
             runs.append(s)
         return runs
+
+    def _session_preview(self, session_id: str, raw: Optional[str]) -> str:
+        """Shorten the first user row for a session list, less any stored block."""
+        text = str(raw or "").strip()
+        if text.startswith(OBSERVED_GROUP_CONTEXT_HEADER):
+            # The SQL only reads the start of the row, which is all chatter here.
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT content FROM messages "
+                    "WHERE session_id = ? AND role = 'user' AND content IS NOT NULL "
+                    "AND COALESCE(observed, 0) = 0 ORDER BY timestamp, id LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+            content = without_observed_block(row["content"]) if row else ""
+            text = str(content).replace("\n", " ").replace("\r", " ").strip()
+        return text[:60] + ("..." if len(text) > 60 else "") if text else ""
 
     def _get_session_rich_row(self, session_id: str, compact_rows: bool = False) -> Optional[Dict[str, Any]]:
         """Fetch a single session with the same enriched columns as
@@ -4090,12 +4096,7 @@ class SessionDB:
         if not row:
             return None
         s = dict(row)
-        raw = s.pop("_preview_raw", "").strip()
-        if raw:
-            text = raw[:60]
-            s["preview"] = text + ("..." if len(raw) > 60 else "")
-        else:
-            s["preview"] = ""
+        s["preview"] = self._session_preview(s["id"], s.pop("_preview_raw", ""))
         return s
 
     # =========================================================================
@@ -4459,8 +4460,12 @@ class SessionDB:
         include_inactive: bool = False,
         limit: Optional[int] = None,
         offset: int = 0,
+        raw: bool = False,
     ) -> List[Dict[str, Any]]:
         """Load messages for a session in insertion order.
+
+        Older compactions stored some user rows with observed chatter around
+        them; readers get those without it. ``raw=True`` returns rows as stored.
 
         By default only active messages are returned. Pass
         ``include_inactive=True`` to load soft-deleted rows (e.g. for
@@ -4494,6 +4499,8 @@ class SessionDB:
             msg = dict(row)
             if "content" in msg:
                 msg["content"] = self._decode_content(msg["content"])
+                if not raw and msg.get("role") == "user":
+                    msg["content"] = without_observed_block(msg["content"])
             if msg.get("tool_calls"):
                 try:
                     msg["tool_calls"] = json.loads(msg["tool_calls"])
@@ -4561,6 +4568,8 @@ class SessionDB:
             msg = dict(row)
             if "content" in msg:
                 msg["content"] = self._decode_content(msg["content"])
+                if msg.get("role") == "user":
+                    msg["content"] = without_observed_block(msg["content"])
             if msg.get("tool_calls"):
                 try:
                     msg["tool_calls"] = json.loads(msg["tool_calls"])
@@ -5566,6 +5575,8 @@ class SessionDB:
                     for r in ctx_cursor.fetchall():
                         raw = r["content"]
                         decoded = self._decode_content(raw)
+                        if r["role"] == "user":
+                            decoded = without_observed_block(decoded)
                         # Multimodal context: render a compact text-only
                         # summary for search previews.
                         if isinstance(decoded, list):
@@ -5591,6 +5602,18 @@ class SessionDB:
             content = match.pop("content", None)
             # A snippet of an older vision row would still claim the model can see.
             decoded = self._decode_content(content)
+            if match.get("role") == "user":
+                # A hit inside a stored chatter block must not quote it as the person's.
+                without_block = without_observed_block(decoded)
+                if without_block != decoded:
+                    match["snippet"] = (
+                        without_block if isinstance(without_block, str)
+                        else " ".join(
+                            part["text"] for part in without_block
+                            if isinstance(part, dict) and isinstance(part.get("text"), str)
+                        )
+                    )[:200]
+                continue
             corrected = correct_stored_vision_row(match.get("tool_name"), decoded)
             if corrected != decoded:
                 if isinstance(corrected, list):
@@ -5847,7 +5870,7 @@ class SessionDB:
         session = self.get_session(session_id)
         if not session:
             return None
-        messages = self.get_messages(session_id)
+        messages = self.get_messages(session_id, raw=True)
         return {**session, "messages": messages}
 
     def export_session_lineage(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -5878,7 +5901,7 @@ class SessionDB:
         sessions = self.search_sessions(source=source, limit=100000)
         results = []
         for session in sessions:
-            messages = self.get_messages(session["id"])
+            messages = self.get_messages(session["id"], raw=True)
             results.append({**session, "messages": messages})
         return results
 
@@ -7346,8 +7369,7 @@ class SessionDB:
         sessions: List[Dict[str, Any]] = []
         for row in rows:
             session = dict(row)
-            raw = str(session.pop("_preview_raw", "") or "").strip()
-            session["preview"] = raw[:60] + ("..." if len(raw) > 60 else "") if raw else ""
+            session["preview"] = self._session_preview(session["id"], session.pop("_preview_raw", ""))
             sessions.append(session)
         return sessions
 
