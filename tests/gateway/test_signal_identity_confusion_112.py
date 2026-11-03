@@ -288,13 +288,3 @@ class TestGroupChannelPrompt:
         assert event is not None
         assert event.channel_prompt is None
 
-    def test_marker_matches_run_path_helper(self, monkeypatch):
-        """The adapter's marker must be the one _build_gateway_agent_history
-        keys on — otherwise observed rows replay as ordinary user turns."""
-        from gateway.run import _uses_telegram_observed_group_context
-
-        adapter = _make_signal_adapter(monkeypatch)
-        adapter._own_uuid = BOT_ACI
-        assert _uses_telegram_observed_group_context(
-            adapter._group_observe_channel_prompt()
-        )

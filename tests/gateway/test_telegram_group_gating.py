@@ -304,17 +304,19 @@ def test_observed_group_context_wraps_multimodal_current_message_without_mutatin
     assert wrapped[1] == original[1]
 
 
-def test_observed_group_context_replays_normally_without_telegram_prompt():
+def test_observed_rows_never_replay_as_user_turns_without_a_channel_prompt():
+    """Discord, Slack and Mattermost send no marker. The row's flag decides."""
     from gateway.run import _build_gateway_agent_history
 
     history = [
         {"role": "user", "content": "[Alice|111]\nside chatter", "observed": True},
+        {"role": "assistant", "content": "earlier reply"},
     ]
 
-    agent_history, observed_context = _build_gateway_agent_history(history, channel_prompt=None)
+    agent_history, observed_context = _build_gateway_agent_history(history)
 
-    assert observed_context is None
-    assert agent_history == [{"role": "user", "content": "[Alice|111]\nside chatter"}]
+    assert observed_context == "[Alice|111]\nside chatter"
+    assert agent_history == [{"role": "assistant", "content": "earlier reply"}]
 
 
 def test_observed_group_context_preserves_slash_command_text_for_dispatch():

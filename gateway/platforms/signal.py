@@ -1577,11 +1577,11 @@ class SignalAdapter(BasePlatformAdapter):
         - Declare the bot's own wire identity (number + ACI) so the model can
           tell self-addressed traffic from traffic addressed to other agents
           sharing the group.
-        - Carry the ``observed group context`` marker that makes
-          ``_build_gateway_agent_history`` withhold observed rows from the
-          replayable history and attach them as context-only material, so
-          another agent's first-person narration can never be mistaken for
-          this agent's own interrupted work.
+        - Explain ``observed group context``: ``_build_gateway_agent_history``
+          withholds observed rows from the replayable history and attaches
+          them as context-only material, so another agent's first-person
+          narration can never be mistaken for this agent's own interrupted
+          work.
         """
         profile_name = os.getenv("SIGNAL_PROFILE_NAME") or ""
         own_aci = self._own_uuid or "unresolved"

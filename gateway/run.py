@@ -875,32 +875,8 @@ def _build_replay_entry(
     return entry
 
 
-_TELEGRAM_OBSERVED_CONTEXT_PROMPT_MARKER = "observed Telegram group context"
-# Platform-neutral marker used by adapters other than Telegram (e.g. Signal —
-# hermes-agent-mt#112). Matched independently because the Telegram marker does
-# not contain this substring.
-_OBSERVED_CONTEXT_PROMPT_MARKER = "observed group context"
 _OBSERVED_GROUP_CONTEXT_HEADER = "[Observed group context - context only, not requests]"
 _CURRENT_ADDRESSED_MESSAGE_HEADER = "[Current addressed message - answer only this unless it explicitly asks you to use the observed context]"
-
-
-def _uses_telegram_observed_group_context(channel_prompt: Optional[str]) -> bool:
-    """Return True for group turns that may include observed chatter.
-
-    Observe-unmentioned mode persists skipped group chatter so a later
-    @mention can see it. Those rows must not replay as ordinary user
-    turns: a weak wake word like ``@bot cambio`` should not make the model treat
-    old unmentioned chatter as pending work — and on a multi-agent group,
-    another agent's first-person narration must never replay as this agent's
-    own history (hermes-agent-mt#112). Adapters mark these turns with a
-    channel prompt; this helper keeps the run-path check explicit and
-    unit-testable. (Name kept for history — Telegram was the first adapter.)
-    """
-
-    return bool(channel_prompt and (
-        _TELEGRAM_OBSERVED_CONTEXT_PROMPT_MARKER in channel_prompt
-        or _OBSERVED_CONTEXT_PROMPT_MARKER in channel_prompt
-    ))
 
 
 def _message_timestamps_enabled(user_config: Optional[dict]) -> bool:
@@ -931,11 +907,16 @@ def _build_gateway_agent_history(
 ) -> tuple[List[Dict[str, Any]], Optional[str]]:
     """Convert stored gateway transcript rows into agent replay messages.
 
-    Observed Telegram group rows are returned as API-only context for the
-    current addressed message instead of being replayed as normal prior user
-    turns.  Keeping that context out of ``conversation_history`` avoids
+    Observed group rows are returned as API-only context for the current
+    addressed message instead of being replayed as normal prior user turns:
+    they were never addressed to this agent, and another agent's first-person
+    narration must not read as its own history (hermes-agent-mt#112).  The
+    row's flag decides, because not every adapter marks its channel prompt.
+    Keeping that context out of ``conversation_history`` also avoids
     consecutive-user repair merging it with the live user turn and then hiding
     the current message behind ``history_offset`` during persistence.
+
+    ``channel_prompt`` no longer affects the result.
 
     When ``inject_timestamps`` is True (gateway.message_timestamps.enabled),
     each replayed user message is rendered with a single human-readable
@@ -950,7 +931,6 @@ def _build_gateway_agent_history(
     _msg_tz = _get_msg_tz()
     agent_history: List[Dict[str, Any]] = []
     observed_group_context: List[str] = []
-    separate_observed_context = _uses_telegram_observed_group_context(channel_prompt)
 
     for msg in history or []:
         role = msg.get("role")
@@ -969,7 +949,7 @@ def _build_gateway_agent_history(
         content = msg.get("content")
         if inject_timestamps and role == "user" and isinstance(content, str):
             content = _render_msg_ts(content, msg.get("timestamp"), tz=_msg_tz)
-        if separate_observed_context and msg.get("observed") and role == "user" and content:
+        if msg.get("observed") and role == "user" and content:
             observed_group_context.append(str(content).strip())
             continue
 
@@ -7399,10 +7379,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # system note before the turn runs.
             #
             # Group sessions need the observed-context channel prompt on the
-            # synthetic event too (#112): _build_gateway_agent_history keys
-            # its observed-row separation on the CURRENT event's channel
-            # prompt, and the resume path is exactly where another agent's
-            # observed narration must not replay as this agent's history.
+            # synthetic event too (#112): it tells the model what the observed
+            # rows are, and the resume path is exactly where another agent's
+            # narration must not be read as this agent's history.
             _resume_channel_prompt = None
             if getattr(source, "chat_type", None) == "group":
                 _prompt_fn = getattr(adapter, "_group_observe_channel_prompt", None)
@@ -20545,14 +20524,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             #      - These must be passed through intact so the API sees valid
             #        assistant→tool sequences (dropping tool_calls causes 500 errors)
             #
-            # Telegram observed group context is handled structurally here:
+            # Observed group context is handled structurally here:
             # observed=True transcript rows are withheld from replayable
             # history and attached to the current addressed message as
             # API-only context, so persisted history stores only the real
             # addressed user turn.
             agent_history, observed_group_context = _build_gateway_agent_history(
                 history,
-                channel_prompt=channel_prompt,
                 inject_timestamps=_message_timestamps_enabled(_load_gateway_config()),
             )
 
