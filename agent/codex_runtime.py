@@ -714,6 +714,10 @@ def run_codex_app_server_turn(
             "error": str(exc),
         }
 
+    # The model has had the turn. Everything below (memory sync, the review that
+    # writes standing memory, the returned history) reads the row as stored.
+    agent._apply_persist_user_message_override(messages)
+
     # If the turn signalled the underlying client is wedged (deadline
     # blown, post-tool watchdog tripped, OAuth refresh died, subprocess
     # exited), retire the session so the next turn respawns codex
