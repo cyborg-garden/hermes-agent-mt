@@ -30,7 +30,7 @@ def _patch_named_profile(monkeypatch, profiles_root, profile_dir):
 # Stores named here as well as in PROFILE_CREDENTIAL_PATHS, so dropping one from the list fails a test:
 # the loaders' and writers' own file names (.op.env and npmrc have no suffix the scrub edits).
 _EXTRA_STORES = {
-    ".op.env", "npmrc", "honcho.json", "google_chat_user_token.json", "google_chat_user_oauth_pending",
+    "github-broker.json", ".op.env", "npmrc", "honcho.json", "google_chat_user_token.json", "google_chat_user_oauth_pending",
     "workspace/meetings/node_token.json", "weixin/accounts", ".copilot_jwt.json", "proxy", "chrome-debug",
     "home/.git-credentials", "home/.config/gh/hosts.yml", "backups", "state-snapshots",
     DEFAULT_TEAMS_PIPELINE_STORE_FILENAME, "mem0.json",

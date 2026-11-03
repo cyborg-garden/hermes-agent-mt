@@ -194,6 +194,7 @@ def build_write_denied_paths(home: str) -> set[str]:
     # not an expanding hardcoded denylist"). They stay read-denied, not write-denied.
     hermes_files = (
         ".env", ".anthropic_oauth.json",
+        "github-broker.json",  # the agent's long-lived secret for the host-side GitHub token broker
         os.path.join("auth", "google_oauth.json"),
         os.path.join("cache", "bws_cache.json"),
         os.path.join("cache", "bws_cache.enc.json"),
@@ -400,7 +401,7 @@ _DID_SUFFIX = (
 # needs these directly — provider tools consume them through internal channels.
 # bws_cache.json is the Bitwarden Secrets Manager disk cache: plaintext secret values.
 _CREDENTIAL_FILE_NAMES = (
-    "auth.json", "auth.lock", ".anthropic_oauth.json", ".env", "webhook_subscriptions.json",
+    "auth.json", "auth.lock", ".anthropic_oauth.json", ".env", "github-broker.json", "webhook_subscriptions.json",
     os.path.join("auth", "google_oauth.json"), os.path.join("cache", "bws_cache.json"),
 )
 

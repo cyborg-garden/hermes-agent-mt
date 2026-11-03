@@ -22,6 +22,12 @@ class TestWriteDenyExactPaths:
         assert _is_write_denied(path) is True
 
 
+    def test_github_broker_secret(self):
+        # The agent's broker secret sits beside .env and gets the same guard.
+        from hermes_constants import get_hermes_home
+        path = str(get_hermes_home() / "github-broker.json")
+        assert _is_write_denied(path) is True
+
     def test_hermes_root_env_when_running_under_profile(self, tmp_path, monkeypatch):
         """Top-level ``<root>/.env`` stays write-denied even when running under
         a profile (#15981).

@@ -25,6 +25,12 @@ writer):
 Mint flow mirrors the proven pattern in ``tools/skills_hub.py``: sign a short
 RS256 JWT (iss=app id, iat-60, exp+600) → ``POST /app/installations/{id}/
 access_tokens`` → ``201 {token, expires_at}``.
+
+**Broker mode.** When ``github-broker.json`` is in the agent home, the token comes
+from the host-side broker (swarm-map ``scripts/token-broker``) and the agent holds
+no App key at all. The file carries the broker URL and this agent's own secret. It
+wins over any App credentials and never falls back to them: a broker failure must
+stay visible, not get hidden by a key that was meant to be removed.
 """
 from __future__ import annotations
 
@@ -55,6 +61,10 @@ REMINT_MARGIN_SECONDS = 600
 
 _JWT_LIFETIME_SECONDS = 600  # GitHub caps App JWTs at 10 min.
 _HTTP_TIMEOUT = 10.0
+
+BROKER_CONFIG_FILE = "github-broker.json"
+# Short: this runs on subprocess spawns, and the host is one hop away.
+_BROKER_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,55 @@ def read_app_credentials(env_path: Path) -> Optional[AppCredentials]:
 def decode_private_key(b64: str) -> str:
     """Base64-decode the stored PEM back to its multi-line text form."""
     return base64.b64decode(b64).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Host-side broker
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BrokerConfig:
+    url: str
+    secret: str
+
+
+def read_broker_config(home_dir: Path) -> Optional[BrokerConfig]:
+    """The broker settings for this home, or ``None`` when it isn't on the broker.
+
+    A profile shares its container's identity, so it uses the config at the root
+    of ``HERMES_HOME``.
+    """
+    candidates = [home_dir]
+    if home_dir.parent.name == "profiles":
+        candidates.append(home_dir.parent.parent)
+    for base in candidates:
+        try:
+            data = json.loads((base / BROKER_CONFIG_FILE).read_text(encoding="utf-8"))
+            url, secret = data["url"], data["secret"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(url, str) and isinstance(secret, str) and url and secret:
+            return BrokerConfig(url=url.rstrip("/"), secret=secret)
+    return None
+
+
+def request_broker_token(config: BrokerConfig) -> Tuple[str, str]:
+    """Ask the broker for this agent's token. Returns ``(token, expires_at_iso)``.
+
+    ``trust_env=False`` keeps the agent secret from going through any proxy set in
+    the environment; the broker is on the host, never behind one.
+    """
+    resp = httpx.post(
+        f"{config.url}/v1/token",
+        headers={"Authorization": f"Bearer {config.secret}"},
+        timeout=_BROKER_TIMEOUT,
+        trust_env=False,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"token broker refused: HTTP {resp.status_code}")
+    body = resp.json()
+    return body["token"], body["expires_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +227,10 @@ def mint_installation_token(creds: AppCredentials) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def cache_path(home_dir: Path) -> Path:
+def cache_path(home_dir: Path, name: str = "github_app_token.json") -> Path:
     """Cache file for one agent home. ``home_dir`` is the HERMES_HOME-shaped dir
     (holds ``.env``); the token cache lives under its ``home/`` subprocess HOME."""
-    return home_dir / "home" / ".cache" / "hermes" / "github_app_token.json"
+    return home_dir / "home" / ".cache" / "hermes" / name
 
 
 def _expires_epoch(iso: str) -> float:
@@ -228,23 +287,26 @@ def get_installation_token_detail(
     """Return a valid :class:`InstallationToken` for ``home_dir``, minting if needed.
 
     Cache-first: a cached token with more than ``REMINT_MARGIN_SECONDS`` of life
-    left is returned as-is. Returns ``None`` only if the home has no App creds.
+    left is returned as-is. Returns ``None`` only if the home has neither a broker
+    nor App creds.
 
     This is the lifetime-aware primitive; :func:`get_installation_token` is the
     string-only convenience wrapper for callers that only need to authenticate
     right now and never persist the value.
     """
-    creds = read_app_credentials(home_dir / ".env")
-    if creds is None:
+    broker = read_broker_config(home_dir)
+    creds = None if broker else read_app_credentials(home_dir / ".env")
+    if broker is None and creds is None:
         return None
 
-    path = cache_path(home_dir)
+    # Separate caches, so a wide App token can't outlive the move to the broker.
+    path = cache_path(home_dir, "github_broker_token.json") if broker else cache_path(home_dir)
     if not force:
         cached = _load_cache_raw(path)
         if cached and _expires_epoch(cached[1]) - time.time() > REMINT_MARGIN_SECONDS:
             return InstallationToken(cached[0], cached[1])
 
-    token, expires_at = mint_installation_token(creds)
+    token, expires_at = request_broker_token(broker) if broker else mint_installation_token(creds)
     _store_cache(path, token, expires_at)
     return InstallationToken(token, expires_at)
 
@@ -326,7 +388,15 @@ def main(argv: Optional[list] = None) -> int:
         if protocol and protocol != "https":
             return 0
         home = args.home or _default_home()
-        token = get_installation_token(home)
+        try:
+            token = get_installation_token(home)
+        except Exception as exc:
+            # One line, because git shows this to whoever is stuck. The refusals we
+            # raise ourselves carry only an HTTP status; anything else gives its type.
+            source = "the token broker" if read_broker_config(home) else "the GitHub App"
+            reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+            print(f"hermes git credentials: no GitHub token from {source} ({reason})", file=sys.stderr)
+            return 1
         if not token:
             return 1  # no App creds → git falls through to any other helper
         # git credential protocol: key=value lines, blank line terminates.

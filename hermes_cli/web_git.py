@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from hermes_cli._subprocess_compat import harden_git_argv, noninteractive_git_env
+from hermes_cli.git_credentials import add_broker_gh_token
 
 _GIT_TIMEOUT = 30
 _GH_TIMEOUT = 30
@@ -459,6 +460,8 @@ def _gh(cwd: str, args: list[str]) -> tuple[bool, str, str]:
     # GH_PROMPT_DISABLED: gh's documented kill-switch for interactive prompts.
     env = noninteractive_git_env()
     env["GH_PROMPT_DISABLED"] = "1"
+    # The server runs with HOME=/opt/data, where gh can't see the login under home/.
+    add_broker_gh_token(env)
     proc = _run(["gh", *args], cwd, _GH_TIMEOUT, env)
     if proc is None:
         return False, "", ""

@@ -150,6 +150,7 @@ DEFAULT_EXCLUDES = [
     ".env.*",
     ".env.local",
     ".env.*.local",
+    "github-broker.json",
     # OS junk
     ".DS_Store",
     "Thumbs.db",

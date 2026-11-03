@@ -605,6 +605,19 @@ def test_other_credential_store_basenames_blocked(forced_files_client):
 
 
 
+def test_github_broker_secret_is_blocked_like_env(forced_files_client):
+    """The agent's broker secret sits beside .env and is just as live."""
+    client, root = forced_files_client
+    root.mkdir(parents=True, exist_ok=True)
+    secret = root / "github-broker.json"
+    secret.write_text('{"url": "http://x", "secret": "SECRET"}\n')
+
+    assert client.get("/api/files/read", params={"path": str(secret)}).status_code == 403
+    assert client.get("/api/files/download", params={"path": str(secret)}).status_code == 403
+    names = [e["name"] for e in client.get("/api/files", params={"path": str(root)}).json()["entries"]]
+    assert "github-broker.json" not in names
+
+
 def test_credential_dir_trees_blocked_on_subdir_descent(forced_files_client):
     """Regression: mcp-tokens/ (live MCP OAuth tokens) and pairing/ are denied
     as whole directory trees by both canonical guards

@@ -170,3 +170,11 @@ def test_multifile_v4a_env_write_reaches_permission_prompt_e2e(tmp_path):
     assert "denied" in result["error"].lower()
     assert not env_target.exists()
     assert not ok_target.exists()
+
+
+def test_workspace_auto_approval_never_covers_the_github_broker_secret(tmp_path):
+    assert not should_auto_approve_edit(
+        EditProposal("write_file", str(tmp_path / "github-broker.json"), None, "x", {}),
+        "workspace_session",
+        str(tmp_path),
+    )

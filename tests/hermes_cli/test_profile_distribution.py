@@ -710,9 +710,11 @@ class TestSecurity:
         # Author leaks credentials into the staging tree (shouldn't happen, but...)
         (staged / "auth.json").write_text('{"leaked": true}')
         (staged / ".env").write_text("LEAKED=1")
+        (staged / "github-broker.json").write_text('{"leaked": true}')
 
         plan = install_distribution(str(staged), name="clean")
         assert not (plan.target_dir / "auth.json").exists(), "auth.json leaked"
+        assert not (plan.target_dir / "github-broker.json").exists(), "broker secret leaked"
         # Fresh profile may have its own .env via the bootstrap; what we care
         # about is that the leaked content didn't land in the target.
         if (plan.target_dir / ".env").exists():
