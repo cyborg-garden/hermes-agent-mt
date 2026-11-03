@@ -34,6 +34,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
+from agent.observed_context import without_observed_chatter
 from agent.skill_commands import extract_user_instruction_from_skill_message
 from tools.registry import tool_error
 
@@ -854,6 +855,8 @@ class MemoryManager:
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Notify all providers of session end."""
+        # Providers write to long-term memory, where chatter would become fact.
+        messages = without_observed_chatter(messages)
         for provider in self._providers:
             try:
                 provider.on_session_end(messages)
@@ -967,6 +970,8 @@ class MemoryManager:
         Returns combined text from providers to include in the compression
         summary prompt. Empty string if no provider contributes.
         """
+        # Providers write to long-term memory, where chatter would become fact.
+        messages = without_observed_chatter(messages)
         parts = []
         for provider in self._providers:
             try:

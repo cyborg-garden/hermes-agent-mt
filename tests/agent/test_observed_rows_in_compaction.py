@@ -6,6 +6,11 @@ from unittest.mock import patch
 
 from agent.agent_runtime_helpers import repair_message_sequence
 from agent.context_compressor import SUMMARY_PREFIX, ContextCompressor
+from agent.memory_manager import MemoryManager
+from agent.observed_context import (
+    CURRENT_ADDRESSED_MESSAGE_HEADER,
+    OBSERVED_GROUP_CONTEXT_HEADER,
+)
 from hermes_cli.partial_compress import (
     rejoin_compressed_head_and_tail,
     split_history_for_partial_compress,
@@ -437,3 +442,54 @@ def test_chatter_after_an_unanswered_owner_stays_out_of_replay_after_compress_he
     assert any(r["role"] == "user" and OWNER in str(r["content"]) for r in replay)
     assert not any(STRANGER in str(r["content"]) for r in replay)
     assert STRANGER in (context or "")
+
+
+# Memory providers
+
+
+class _RecordingProvider:
+    name = "recording"
+
+    def __init__(self):
+        self.pre_compress = None
+        self.session_end = None
+
+    def on_pre_compress(self, messages):
+        self.pre_compress = messages
+        return ""
+
+    def on_session_end(self, messages):
+        self.session_end = messages
+
+
+def _rows_for_memory():
+    wrapped = (
+        f"{OBSERVED_GROUP_CONTEXT_HEADER}\n{STRANGER}\n\n"
+        f"{CURRENT_ADDRESSED_MESSAGE_HEADER}\n{OWNER}"
+    )
+    return [
+        _observed(),
+        {"role": "user", "content": wrapped},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
+def _manager_with(provider):
+    manager = MemoryManager()
+    manager._providers = [provider]
+    return manager
+
+
+def test_memory_providers_get_no_chatter_before_compaction():
+    provider = _RecordingProvider()
+    rows = _rows_for_memory()
+    _manager_with(provider).on_pre_compress(rows)
+    assert [r["content"] for r in provider.pre_compress] == [OWNER, "ok"]
+    # The live rows still carry the turn's context.
+    assert OBSERVED_GROUP_CONTEXT_HEADER in rows[1]["content"]
+
+
+def test_memory_providers_get_no_chatter_at_session_end():
+    provider = _RecordingProvider()
+    _manager_with(provider).on_session_end(_rows_for_memory())
+    assert [r["content"] for r in provider.session_end] == [OWNER, "ok"]

@@ -36,3 +36,12 @@ def without_observed_block(content: Any) -> Any:
             for part in content
         ]
     return content
+
+
+def without_observed_chatter(messages: Any) -> list:
+    """Return the rows someone said to the agent, less any wrapped block."""
+    return [
+        {**message, "content": without_observed_block(message.get("content"))}
+        for message in messages or []
+        if not message.get("observed")
+    ]
