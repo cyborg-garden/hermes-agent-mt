@@ -1046,6 +1046,7 @@ class SessionDB:
                     isolation_level=None,
                 )
                 self._conn.row_factory = sqlite3.Row
+                self._hide_missing_observed_column()
                 return
 
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1433,6 +1434,24 @@ class SessionDB:
             self.optimize_fts()
         except Exception:
             pass  # Best effort — never fatal.
+
+    def _hide_missing_observed_column(self) -> None:
+        """Let a read-only look at an older profile's file use the current queries.
+
+        Read-only connections skip the migration that adds ``observed``, and the
+        queries name that column. A view private to this connection answers for
+        ``messages`` with every row unflagged, which is what the column's default
+        would say; nothing in the file changes.
+        """
+        try:
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)")}
+            if columns and "observed" not in columns:
+                self._conn.execute(
+                    "CREATE TEMP VIEW messages AS SELECT *, 0 AS observed FROM main.messages"
+                )
+        except sqlite3.Error:
+            # Unreadable or busy: the caller's own read reports it per profile.
+            logger.debug("Could not inspect %s for older columns", self.db_path, exc_info=True)
 
     def close(self):
         """Close the database connection.
