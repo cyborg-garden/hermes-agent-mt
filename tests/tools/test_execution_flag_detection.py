@@ -32,6 +32,17 @@ def test_real_read_tool_binaries_confirm_option_ownership(
     assert completed.stdout == expected_output
 
 
+def _gnu_sort():
+    """Find GNU sort. Ubuntu 26.04's default sort is uutils, which rejects a leading-dash value."""
+    for name in ("gnusort", "gsort", "sort"):
+        if shutil.which(name) is None:
+            continue
+        version = subprocess.run([name, "--version"], text=True, capture_output=True).stdout
+        if "GNU coreutils" in version:
+            return name
+    return None
+
+
 @pytest.mark.parametrize(
     ("tool", "args", "stdin", "needs_tty"),
     [
@@ -47,6 +58,10 @@ def test_real_binaries_execute_leading_dash_program_payload(
     tmp_path, tool, args, stdin, needs_tty
 ):
     """A PATH marker proves these binaries do not reparse '-program' as an option."""
+    if tool == "sort":
+        tool = _gnu_sort()
+        if tool is None:
+            pytest.skip("GNU sort is not installed")
     if shutil.which(tool) is None or (needs_tty and shutil.which("script") is None):
         pytest.skip(f"{tool} or script is not installed")
 
