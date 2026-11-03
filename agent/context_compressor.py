@@ -1913,6 +1913,10 @@ class ContextCompressor(ContextEngine):
 
         parts = []
         for msg in turns:
+            # Nobody said observed chatter to this agent. A summariser would
+            # read it as a user turn and write its demands up as standing rules.
+            if msg.get("observed"):
+                continue
             role = msg.get("role", "unknown")
             content = msg.get("content")
             if isinstance(content, list):
@@ -2894,7 +2898,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         candidates: list[str] = []
         for idx in range(len(messages) - 1, -1, -1):
             msg = messages[idx]
-            if msg.get("role") != "user":
+            if msg.get("role") != "user" or msg.get("observed"):
                 continue
             content = msg.get("content")
             if cls._is_context_summary_content(content):

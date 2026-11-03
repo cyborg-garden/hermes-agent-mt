@@ -82,3 +82,56 @@ def test_chatter_after_the_owner_is_not_listed_as_the_owner(tmp_path):
     )
     assert "please build room 2" in summary
     assert "deploy key" not in summary
+
+
+# The healthy summariser
+
+
+def _prompt_from_compress(messages):
+    prompts = []
+
+    def fake_llm(**kwargs):
+        prompts.append(kwargs["messages"][0]["content"])
+        raise RuntimeError("stop after capturing the prompt")
+
+    with patch("agent.context_compressor.call_llm", fake_llm):
+        _compressor().compress(messages, current_tokens=90_000, force=True)
+    return prompts[0]
+
+
+def _window(n=12):
+    rows = [{"role": "user", "content": "[sam] start"}, {"role": "assistant", "content": "ok"}]
+    for i in range(n):
+        rows += [
+            {"role": "user", "content": f"[sam] request {i}"},
+            {"role": "assistant", "content": f"working {i}"},
+        ]
+    return rows
+
+
+def test_serialized_turns_leave_out_observed_rows():
+    text = _compressor()._serialize_for_summary(
+        [_observed(), {"role": "user", "content": OWNER}, {"role": "assistant", "content": "ok"}]
+    )
+    assert "deploy key" not in text
+    assert f"[USER]: {OWNER}" in text
+
+
+def test_observed_row_in_the_window_never_reaches_the_summariser():
+    rows = _window()
+    rows.insert(3, _observed())
+    prompt = _prompt_from_compress(rows)
+    assert "deploy key" not in prompt
+    assert "[sam] request 0" in prompt
+
+
+def test_observed_row_never_becomes_the_focus_topic():
+    rows = [*_window(), _observed(), {"role": "assistant", "content": "x"}]
+    focus = ContextCompressor._derive_auto_focus_topic(rows)
+    assert "deploy key" not in focus
+    assert "[sam] request 11" in focus
+    assert "deploy key" not in _prompt_from_compress(rows)
+
+
+def test_only_observed_rows_give_no_focus_topic():
+    assert ContextCompressor._derive_auto_focus_topic([_observed()]) is None
