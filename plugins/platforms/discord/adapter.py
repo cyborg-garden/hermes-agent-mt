@@ -1208,7 +1208,9 @@ class VoiceReceiver:
 
 
 from plugins.platforms.discord.adapter_config_readers import (
-    _DISCORD_PROMPT_TIMEOUT_DEFAULT, _DISCORD_PROMPT_TIMEOUT_MIN, _read_discord_prompt_timeout, _read_dm_role_auth_guild)
+    _DISCORD_PROMPT_TIMEOUT_DEFAULT, _DISCORD_PROMPT_TIMEOUT_MIN, _read_discord_prompt_timeout, _read_dm_role_auth_guild,
+    _resolve_exec_approval_admin_gate)
+from plugins.platforms.discord.adapter_exec_approval_view import build_exec_approval_view
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -1232,6 +1234,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
     MAX_MESSAGE_LENGTH = 2000
     _SPLIT_THRESHOLD = 1900  # near the 2000-char split point
     supports_code_blocks = True  # Discord markdown renders fenced code blocks natively
+    allow_from_covers_groups = True  # no group_allow_from: allow_from is the one user allowlist
     splits_long_messages = True  # send() chunks via truncate_message(MAX_MESSAGE_LENGTH)
     # Safety ceiling on split deliveries: chunks beyond the cap become a notice (degenerate turns).
     # Safety ceiling on split deliveries (#86581): a degenerate turn can produce tens of thousands of
@@ -5391,11 +5394,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
     def _component_live_auth(self, interaction) -> Optional[bool]:
         """The gateway's live allowlist verdict for a component click (None when no check is wired):
         an out-of-process revoke never reaches the connect-time ``_allowed_user_ids`` snapshot."""
+        from plugins.platforms.discord.adapter_component_auth import component_chat_context
         user_id = str(getattr(getattr(interaction, "user", None), "id", "") or "")
-        channel_id = getattr(interaction, "channel_id", None)
-        chat_type = "dm" if getattr(interaction, "guild", None) is None else "group"
-        return self._is_sender_authorized(
-            user_id, chat_type, str(channel_id) if channel_id is not None else None)
+        chat_type, chat_id, thread_id = component_chat_context(interaction, discord.Thread)
+        return self._is_sender_authorized(user_id, chat_type, chat_id, thread_id=thread_id)
 
     def resolved_allowlist_user_ids(self) -> set:
         """Numeric IDs from connect-time username resolution.
@@ -6167,6 +6169,21 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
         """Send an approval with content as its canonical payload and an embed for state."""
+        require_admin, admin_user_ids = _resolve_exec_approval_admin_gate(getattr(self.config, "extra", None))
+        choices = set(prompt.choices)
+        view = ExecApprovalView(
+            session_key=prompt.session_key, allowed_user_ids=self._allowed_user_ids,
+            allowed_role_ids=self._allowed_role_ids, require_admin=require_admin,
+            admin_user_ids=admin_user_ids, allow_permanent="always" in choices,
+            allow_session="session" in choices, smart_denied=prompt.smart_denied,
+            request_id=prompt.request_id,
+            approver_roles=_exec_approval_approver_roles(getattr(self.config, "extra", None)),
+        )
+        # Observe BEFORE sending, so a request that settles while the card is in flight still
+        # reports its real reason; ``pending_retire`` holds it until the card exists.
+        if view.request_id and not self._observe_exec_approval_settle(prompt.session_key, view):
+            view.pending_retire = "gone"  # already gone: how it ended is unknown
+
         def _build(_channel):
             content = prompt.text
             mention_content = self._approval_mention_content()
@@ -6176,16 +6193,6 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 title=_truncate_discord_component_text(f"⚠️ {t('gateway.exec_approval.header')}", _DISCORD_EMBED_TITLE_LIMIT),
                 color=discord.Color.orange(),
             )
-            require_admin, admin_user_ids = _resolve_exec_approval_admin_gate(getattr(self.config, "extra", None))
-            choices = set(prompt.choices)
-            view = ExecApprovalView(
-                session_key=prompt.session_key, allowed_user_ids=self._allowed_user_ids,
-                allowed_role_ids=self._allowed_role_ids, require_admin=require_admin,
-                admin_user_ids=admin_user_ids,
-                approver_roles=_exec_approval_approver_roles(getattr(self.config, "extra", None)),
-                allow_permanent="always" in choices,
-                allow_session="session" in choices, smart_denied=prompt.smart_denied,
-            )
             send_kwargs: dict[str, Any] = {"content": content, "embed": embed, "view": view}
             if mention_content:
                 allowed_mentions_cls = getattr(discord, "AllowedMentions", None)
@@ -6194,7 +6201,28 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                         users=True, roles=False, everyone=False, replied_user=False,
                     )
             return send_kwargs, view
-        return await self._send_prompt(prompt.chat_id, prompt.metadata, _build)
+        result = await self._send_prompt(prompt.chat_id, prompt.metadata, _build)
+        if result.success and view.pending_retire:
+            await view.retire(view.pending_retire)
+        return result
+
+    def _observe_exec_approval_settle(self, session_key: str, view) -> bool:
+        """Retire ``view`` when its request settles (before it is sent: via ``view.pending_retire``)."""
+        from tools.approval import observe_gateway_settle
+        loop = asyncio.get_running_loop()
+
+        def retire(reason):
+            def schedule():
+                if view._message is None:  # still in flight (or its send failed)
+                    view.pending_retire = reason
+                    return
+                task = loop.create_task(view.retire(reason))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+                task.add_done_callback(_consume_background_task_result)
+            loop.call_soon_threadsafe(schedule)
+
+        return observe_gateway_settle(session_key, view.request_id, retire)
 
     async def send_slash_confirm(
         self, chat_id: str, title: str, message: str, session_key: str,
@@ -6994,8 +7022,9 @@ def _define_discord_view_classes() -> None:
         def _first_embed(message):
             return message.embeds[0] if message.embeds else None
 
-        async def _expire_embed(self, footer: str) -> None:
-            """Grey out the original message's embed after a timeout (best effort)."""
+        async def _expire_embed(self, footer: str, *, keep_controls: bool = True) -> None:
+            """Grey out the original message's embed and stamp ``footer`` (best effort). The disabled
+            buttons stay unless ``keep_controls`` is False, which removes them."""
             msg = self._message
             if msg:
                 try:
@@ -7003,19 +7032,24 @@ def _define_discord_view_classes() -> None:
                     if embed:
                         embed.color = discord.Color.greyple()
                         embed.set_footer(text=footer)
-                    await msg.edit(embed=embed, view=self)
+                    await msg.edit(embed=embed, view=self if keep_controls else None)
                 except Exception:
-                    pass  # message deleted or too old to edit
+                    logger.debug("[Discord] Could not stamp prompt card", exc_info=True)  # deleted / too old
 
         async def _finalize_embed(self, interaction: discord.Interaction, color, footer: str) -> None:
-            """Mark resolved, stamp the embed (color + footer), disable buttons, edit in place."""
+            """Mark resolved, stamp the embed (color + footer), disable buttons, edit in place, then
+            ``stop()`` the view (also when the edit fails)."""
             self.resolved = True
             embed = self._first_embed(interaction.message)
             if embed:
                 embed.color = color
                 embed.set_footer(text=footer)
             self._disable_all()
-            await interaction.response.edit_message(embed=embed, view=self)
+            try:
+                await interaction.response.edit_message(embed=embed, view=self)
+            finally:
+                # Answered: release the view, or its timeout later stamps "expired" over the answer.
+                self.stop()
 
         def _localize_buttons(self, **keys_by_attr: str) -> None:
             """Relabel decorator-declared buttons from the catalog (decorators run at import, before
@@ -7034,6 +7068,9 @@ def _define_discord_view_classes() -> None:
                     item.label = _t_discord(key, _DISCORD_BUTTON_LABEL_LIMIT)
 
         async def on_timeout(self):
+            # stop() can't cancel an on_timeout discord.py queued in the tick a click landed: keep the answer.
+            if self.resolved:
+                return
             self.resolved = True
             self._disable_all()
             await self._expire_embed(t("platform.discord.prompt.expired_footer"))
@@ -7350,6 +7387,7 @@ def _define_discord_view_classes() -> None:
             if not await self._gate(interaction, resolved_msg=t("platform.discord.picker.already_resolved"), unauth_msg=_unauthorized()):
                 return
             self.resolved = True
+            self.stop()  # answered: release the view and its timeout now, before any await
             self.clear_items()
             await self._edit(
                 interaction, t("platform.discord.picker.switching", model=model_id),
@@ -7401,10 +7439,14 @@ def _define_discord_view_classes() -> None:
             if not await self._gate(interaction, resolved_msg=None, unauth_msg=_unauthorized()):
                 return
             self.resolved = True
+            self.stop()  # answered: release the view and its timeout now, before any await
             self.clear_items()
             await self._edit(interaction, t("platform.discord.picker.cancelled"), color=discord.Color.greyple())
 
         async def on_timeout(self):
+            # stop() can't cancel an on_timeout discord.py queued in the tick a click landed: keep the answer.
+            if self.resolved:
+                return
             self.resolved = True
             self.clear_items()
             msg = self._message
@@ -7535,6 +7577,8 @@ def _define_discord_view_classes() -> None:
                     await interaction.response.defer()
                 except Exception:
                     pass
+            finally:
+                self.stop()  # answered (or handed to typed text): release the view and its timeout
 
         async def _resolve_choice(self, interaction: discord.Interaction, index: int, choice: str) -> None:
             """Resolve the clarify with a chosen option."""
