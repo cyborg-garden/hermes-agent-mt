@@ -3700,7 +3700,17 @@ This compaction should PRIORITISE preserving all information related to the focu
 
         _merge_summary_into_tail = False
         last_head_role = messages[compress_start - 1].get("role", "user") if compress_start > 0 else "user"
-        first_tail_role = messages[compress_end].get("role", "user") if compress_end < n_messages else "user"
+        # Observed rows do not replay, so the summary's real neighbour is the
+        # first row after them. A summary merged into one would leave replay too.
+        _first_replayed_tail_idx = next(
+            (i for i in range(compress_end, n_messages) if not messages[i].get("observed")),
+            None,
+        )
+        first_tail_role = (
+            messages[_first_replayed_tail_idx].get("role", "user")
+            if _first_replayed_tail_idx is not None
+            else None
+        )
         # When the only protected head message is the system prompt, the
         # summary becomes the first *visible* message in the API request
         # (most adapters — Anthropic, Bedrock — send the system prompt as
@@ -3774,7 +3784,7 @@ This compaction should PRIORITISE preserving all information related to the focu
 
         for i in range(compress_end, n_messages):
             msg = _fresh_compaction_message_copy(messages[i])
-            if _merge_summary_into_tail and i == compress_end:
+            if _merge_summary_into_tail and i == _first_replayed_tail_idx:
                 # Merge the summary into the first tail message, but place
                 # the END MARKER at the very end so the model sees an
                 # unambiguous boundary. Old tail content is preserved as
