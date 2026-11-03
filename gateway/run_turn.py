@@ -28,6 +28,8 @@ from gateway.response_filters import (
     display_kind_for_event, display_metadata_for_event, is_machinery_display_kind, persisted_user_metadata_for_event,
     reply_expected_metadata,
 )
+from gateway.media_repair import repair_explicit_computer_use_media_paths
+from gateway.run_background import _bg_prompt_preview
 from gateway.warning_notifications import diagnostic_metadata, diagnostic_turn_muted, diagnostic_wake_muted
 from gateway.session import (
     SessionSource, _session_key_namespace, build_channel_continuity_note,
@@ -502,6 +504,9 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
                     logger.warning("Background task vision enrichment failed: %s", e)
 
             def run_sync():
+                from gateway.session_context import declare_stateless_channel
+                # This finite /bg session has no route for a completion after its final reply.
+                declare_stateless_channel()
                 agent = AIAgent(
                     model=turn_route["model"],
                     **turn_route["runtime"],

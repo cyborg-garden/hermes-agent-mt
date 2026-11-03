@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- upstream v0.22.6 added _park_last_fatal_platform and other startup-phase additions; offset pending
 """Startup sequence, resume/restore and handoff methods for GatewayRunner.
 
 Split out of ``gateway/run.py``; bound onto ``GatewayRunner`` via the MRO.

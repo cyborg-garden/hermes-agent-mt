@@ -70,6 +70,6 @@ def _resolve_exec_approval_admin_gate(config_extra: Optional[dict]) -> tuple[boo
     try:
         from gateway.slash_access import _coerce_id_list
         admin_ids = set(_coerce_id_list(extra.get("allow_admin_from")))
-    except Exception:
+    except Exception:  # health: allow BLE001 -- any coerce/import failure defaults to empty admin set; exec approval stays off
         admin_ids = set()
     return (True, admin_ids)

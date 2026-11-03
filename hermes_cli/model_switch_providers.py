@@ -485,7 +485,7 @@ def _nous_picker_model_ids(curated: dict, force_fresh_nous_tier: bool) -> list:
         usage = nous_picker_usage(any_age=True)
         if usage is not None:
             model_ids = featured_first(model_ids, usage.featured_model_ids)
-    except Exception:
+    except Exception:  # health: allow BLE001 S110 -- optional ordering step; any failure leaves model_ids unordered
         pass
     return model_ids
 

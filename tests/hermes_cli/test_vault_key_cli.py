@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import argparse
 
-import keyring
 import pytest
+
+keyring = pytest.importorskip("keyring")
 from keyring.backend import KeyringBackend
 from keyring.backends import fail
 

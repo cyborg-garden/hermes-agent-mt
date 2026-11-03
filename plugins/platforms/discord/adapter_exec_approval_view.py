@@ -65,7 +65,7 @@ def build_exec_approval_view(discord, base, *, unauthorized):
                     return True
                 if approver_roles_match(self.approver_roles, identity):
                     return True
-            except Exception:
+            except Exception:  # health: allow BLE001 -- fallback when slash_access or identity helpers are unavailable; plain uid check only
                 # Fallback: plain uid check if slash_access or identity helpers are unavailable.
                 if uid and uid in self.admin_user_ids:
                     return True
