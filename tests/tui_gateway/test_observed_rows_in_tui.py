@@ -218,3 +218,15 @@ def test_prompt_submit_truncate_ordinal_counts_only_the_persons_turns(db):
         "ok",
         STRANGER,
     ]
+
+
+def test_preview_restart_keeps_the_owner_prompt_under_later_chatter():
+    rows = [{"role": "user", "content": OWNER}]
+    for i in range(30):
+        rows.append({"role": "assistant", "content": f"step {i}"})
+    rows.append({"role": "user", "content": STRANGER, "observed": True})
+    session = {"history": rows, "history_lock": threading.Lock()}
+
+    kept = [m["content"] for m in server._preview_restart_history(session, max_messages=24)]
+
+    assert OWNER in kept

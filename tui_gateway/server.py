@@ -4547,7 +4547,7 @@ def _preview_restart_history(session: dict, max_messages: int = 24, max_tool_cha
     # extend backwards up to max_messages so we capture the prior context.
     last_user_idx = None
     for idx in range(len(history) - 1, -1, -1):
-        if history[idx].get("role") == "user":
+        if history[idx].get("role") == "user" and not history[idx].get("observed"):
             last_user_idx = idx
             break
 
