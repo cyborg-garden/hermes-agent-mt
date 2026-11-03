@@ -2052,6 +2052,9 @@ class ContextCompressor(ContextEngine):
                         _collect_paths_from_jsonish(parsed)
 
         for msg in turns_to_summarize:
+            # Observed chatter must not read as an ask or a recent turn.
+            if msg.get("observed"):
+                continue
             role = msg.get("role", "unknown")
             text = _compact_fallback_turn(msg.get("content"))
             _collect_path_mentions(text, relevant_files)
@@ -2221,6 +2224,9 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                     url = image.get("url", "") if isinstance(image, dict) else str(image or "")
                     if url and not url.startswith("data:") and url not in attachments:
                         attachments.append(redact_sensitive_text(url))
+            # Chatter the gateway only observed: nobody said it to this agent.
+            if msg.get("observed"):
+                return
             text = _ATTACHED_LINE_RE.sub("", _TRIGGER_LINE_RE.sub("", raw))
             text = re.sub(r"\s+", " ", _words_before_context(text)).strip()
             if text and text not in users:
