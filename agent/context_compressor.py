@@ -2298,52 +2298,59 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         model that kept the list headings.
         """
         body = ContextCompressor._strip_summary_prefix(prior)
-        if _FALLBACK_USERS_HEADING not in body and _FALLBACK_ATTACHMENTS_HEADING not in body:
-            return body, [], [], 0, 0
 
-        def _section(heading: str) -> str:
-            if heading not in body:
-                return ""
-            rest = body.split(heading, 1)[1]
-            return re.split(r"\n## ", rest, maxsplit=1)[0]
+        # Turns quoted in the template can name any heading, but they are flattened
+        # to one line each. A real heading is a whole line of its own.
+        def _heading_lines(heading: str) -> List[re.Match]:
+            return list(re.finditer(rf"^{re.escape(heading)}[ \t]*$", body, re.MULTILINE))
 
-        def _items(heading: str) -> List[str]:
+        def _section(match: Optional[re.Match]) -> str:
+            return re.split(r"\n## ", body[match.end():], maxsplit=1)[0] if match else ""
+
+        def _items(match: Optional[re.Match]) -> List[str]:
             return [
                 line[2:].strip()
-                for line in _section(heading).splitlines()
+                for line in _section(match).splitlines()
                 if line.startswith("- ") and line[2:].strip()
             ]
 
-        def _omitted(heading: str) -> int:
-            match = _FALLBACK_OMITTED_RE.search(_section(heading))
-            return int(match.group(1)) if match else 0
+        def _omitted(match: Optional[re.Match]) -> int:
+            found = _FALLBACK_OMITTED_RE.search(_section(match))
+            return int(found.group(1)) if found else 0
 
+        # Only list entries and the other list follow a real list, and an entry
+        # starts with "- ", so the last such line is the real one.
+        lists = [
+            (_heading_lines(heading) or [None])[-1]
+            for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING)
+        ]
+        users_at, attachments_at = lists
+        if users_at is None and attachments_at is None:
+            return body, [], [], 0, 0
         record = (
-            _items(_FALLBACK_USERS_HEADING),
-            _items(_FALLBACK_ATTACHMENTS_HEADING),
-            _omitted(_FALLBACK_USERS_HEADING),
-            _omitted(_FALLBACK_ATTACHMENTS_HEADING),
+            _items(users_at),
+            _items(attachments_at),
+            _omitted(users_at),
+            _omitted(attachments_at),
         )
+        found = sorted((m for m in lists if m), key=lambda m: m.start())
 
         # Look only above the carried text, which can hold a heading of the same name.
-        own = body.split(_FALLBACK_CARRIED_HEADING, 1)[0]
-        decisions = re.split(r"\n## ", own.split("## Key Decisions", 1)[-1], maxsplit=1)[0].strip()
-        if "## Key Decisions" not in own:
-            decisions = ""
+        carried_at = (_heading_lines(_FALLBACK_CARRIED_HEADING) or [None])[0]
+        own = body[: carried_at.start()] if carried_at else body
+        decisions_at = re.search(r"^## Key Decisions[ \t]*$", own, re.MULTILINE)
+        decisions = ""
+        if decisions_at:
+            decisions = re.split(r"\n## ", own[decisions_at.end():], maxsplit=1)[0].strip()
         if _FALLBACK_TEMPLATE_MARK not in own or decisions not in ("", _FALLBACK_NO_DECISIONS):
-            carried = body.replace(f"{_FALLBACK_CARRIED_HEADING}\n", "")
-            for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING):
-                carried = carried.replace(f"{heading}{_section(heading)}", "")
-            return (carried.strip(), *record)
+            carried = body
+            for match in reversed(found):
+                carried = carried[: match.start()] + carried[match.end() + len(_section(match)):]
+            return (carried.replace(f"{_FALLBACK_CARRIED_HEADING}\n", "").strip(), *record)
 
         # The carried text can hold its own headings, so it ends at the list.
-        carried = ""
-        if _FALLBACK_CARRIED_HEADING in body:
-            carried = body.split(_FALLBACK_CARRIED_HEADING, 1)[1]
-            for heading in (_FALLBACK_USERS_HEADING, _FALLBACK_ATTACHMENTS_HEADING):
-                carried = carried.split(heading, 1)[0]
-            carried = carried.strip()
-        completed = _section("## Completed Actions").strip()
+        carried = body[carried_at.end(): found[0].start()].strip() if carried_at else ""
+        completed = _section((_heading_lines("## Completed Actions") or [None])[0]).strip()
         if completed and not completed.startswith("None recoverable"):
             carried = f"{carried}\n\nEarlier actions:\n{completed}".strip()
         return (carried, *record)

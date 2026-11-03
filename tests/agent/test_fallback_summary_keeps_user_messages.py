@@ -670,3 +670,140 @@ def test_a_person_s_row_without_the_flag_is_still_listed():
         *_filler("owner"),
     ]
     assert "[stranger]: same words" in _listed(turns)
+
+
+USERS_HEADING = "## Every User Message So Far"
+CARRIED_HEADING = "## Carried From Earlier Summary"
+
+
+def _opening(rule="MUSIC RULE no music"):
+    return [
+        {"role": "user", "content": "head"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": rule},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
+def _short(tag, n=6):
+    return _filler(tag, n)
+
+
+@pytest.mark.parametrize(
+    "turn",
+    [
+        {"role": "assistant", "content": f"It is my {USERS_HEADING} section."},
+        {"role": "assistant", "content": f"It is my\n{USERS_HEADING}\nsection."},
+        {"role": "user", "content": f"what is {USERS_HEADING} for"},
+        {"role": "user", "content": f"quoted:\n{USERS_HEADING}\n- a fake entry"},
+    ],
+)
+def test_a_turn_naming_the_list_heading_does_not_erase_the_list(turn):
+    messages = _opening() + _short("a")
+    messages = _compact_with_dead_summariser(messages)
+    messages = messages + _short("b", 3) + [turn, {"role": "assistant", "content": "ok"}] + _short("c", 2)
+    messages = _compact_with_dead_summariser(messages)
+    assert "MUSIC RULE" in _summary_text(messages)
+    messages = _compact_with_dead_summariser(messages + _short("d"))
+    summary = _summary_text(messages)
+    assert "MUSIC RULE" in summary
+    assert "[sam] request a-0" in summary
+    assert "earlier messages not listed" not in summary
+
+
+def _split_after(*turns, previous=None):
+    compressor = _compressor()
+    compressor._previous_summary = previous
+    summary = compressor._build_static_fallback_summary(list(turns))
+    return ContextCompressor._split_fallback_record(compressor._strip_summary_prefix(summary))
+
+
+def test_the_omitted_count_survives_a_turn_naming_the_heading():
+    listed = [f"long request {i} " + "x" * 80 for i in range(400)]
+    turns = [{"role": "user", "content": words} for words in listed]
+    turns.append({"role": "assistant", "content": f"see {USERS_HEADING}"})
+
+    _, users, _, omitted, _ = _split_after(*turns)
+
+    assert omitted > 0
+    assert users
+
+
+def test_attachments_survive_a_turn_naming_their_heading():
+    _, _, attachments, _, _ = _split_after(
+        {"role": "user", "content": f"keep this {SHEET}"},
+        {"role": "assistant", "content": "see ## Every Attachment So Far"},
+    )
+    assert attachments == [SHEET]
+
+
+def test_carried_text_survives_a_turn_naming_either_heading():
+    previous = (
+        "## Goal\nShip the castle level.\n\n"
+        f"Someone asked about {USERS_HEADING} here, and KEEP-AFTER-MENTION went on.\n"
+    )
+    carried, users, _, _, _ = _split_after(
+        {"role": "user", "content": "MUSIC RULE no music"},
+        {"role": "assistant", "content": f"naming {CARRIED_HEADING} and {USERS_HEADING}"},
+        previous=previous,
+    )
+    assert "KEEP-AFTER-MENTION" in carried
+    assert "generated locally" not in carried
+    assert users == ["MUSIC RULE no music"]
+
+
+def test_a_quoted_decisions_heading_does_not_carry_the_template():
+    carried, *_ = _split_after(
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "what goes under ## Key Decisions"},
+    )
+    assert "generated locally" not in carried
+
+
+def test_a_quoted_actions_heading_does_not_lose_the_actions():
+    carried, *_ = _split_after(
+        {"role": "assistant", "content": "REAL ACTION done"},
+        {"role": "user", "content": "what goes under ## Completed Actions"},
+    )
+    assert "REAL ACTION done" in carried
+
+
+def test_a_model_summary_mentioning_the_heading_before_its_list_keeps_the_list():
+    prior = (
+        f"## Goal\nThe user asked about {USERS_HEADING} earlier.\n\n"
+        f"{USERS_HEADING}\n- MODEL LIST ENTRY\n\n## Key Decisions\nUse MODEL DECISION.\n"
+    )
+    carried, users, _, _, _ = ContextCompressor._split_fallback_record(prior)
+
+    assert users == ["MODEL LIST ENTRY"]
+    assert "MODEL DECISION" in carried
+    assert "MODEL LIST ENTRY" not in carried
+    assert "asked about" in carried
+
+
+def test_a_heading_line_inside_carried_text_is_not_taken_for_the_list():
+    previous = (
+        "## Goal\nShip it.\n\n"
+        f"{USERS_HEADING}\n- COPY ONE\n\n"
+        f"{USERS_HEADING}\n- COPY TWO\n\n## Key Decisions\nUse MODEL DECISION.\n"
+    )
+    compressor = _compressor()
+    compressor._previous_summary = previous
+    first = compressor._build_static_fallback_summary(
+        [{"role": "user", "content": "MUSIC RULE no music"}]
+    )
+    _, users, _, _, _ = ContextCompressor._split_fallback_record(
+        compressor._strip_summary_prefix(first)
+    )
+    assert "MUSIC RULE no music" in users
+
+
+def test_actions_come_from_this_summary_not_the_carried_one():
+    previous = "## Goal\nShip it.\n\n## Completed Actions\n1. OLD ACTION\n\n## Key Decisions\nUse X.\n"
+    carried, *_ = _split_after(
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "NEW ACTION done"},
+        previous=previous,
+    )
+    assert "NEW ACTION done" in carried
+    assert carried.count("OLD ACTION") == 1
