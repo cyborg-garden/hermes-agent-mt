@@ -2011,22 +2011,3 @@ def test_command_dispatch_undo_prefills_a_legacy_row_without_the_chatter(server)
         result = _tui_dispatch(server, "undo", sid)["result"]
 
     assert result["message"] == _TUI_OWNER
-
-
-def test_branch_seed_keeps_the_observed_flag(server):
-    db = MagicMock()
-    session = {
-        "parent_session_id": "parent",
-        "session_key": "branch",
-        "history": [
-            {"role": "user", "content": _TUI_STRANGER, "observed": True},
-            {"role": "user", "content": _TUI_OWNER},
-        ],
-        "history_lock": threading.Lock(),
-    }
-
-    with patch.object(server, "_get_db", return_value=db):
-        server._persist_branch_seed(session)
-
-    flags = [call.kwargs.get("observed") for call in db.append_message.call_args_list]
-    assert flags == [True, False]

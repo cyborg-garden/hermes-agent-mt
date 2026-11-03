@@ -5331,6 +5331,9 @@ def _history_to_messages(history: list[dict]) -> list[dict]:
         if not content_text.strip() and not has_reasoning:
             continue
         msg = {"role": role, "text": content_text}
+        # Clients send rows back when they branch, so they need to know this.
+        if m.get("observed"):
+            msg["observed"] = True
         if role == "assistant":
             for key in reasoning_keys:
                 if key in m and m.get(key) is not None:
@@ -5359,7 +5362,10 @@ def _coerce_seed_history(value: Any) -> list[dict]:
         if not isinstance(content, str) or not content.strip():
             continue
 
-        history.append({"role": role, "content": content})
+        row = {"role": role, "content": content}
+        if item.get("observed"):
+            row["observed"] = True
+        history.append(row)
 
     return history
 

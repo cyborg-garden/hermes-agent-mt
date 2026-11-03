@@ -226,6 +226,7 @@ export function reconcileResumeMessages(nextMessages: ChatMessage[], previousMes
 
 export interface BranchMessage {
   content: string
+  observed?: boolean
   role: ChatMessage['role']
   source: ChatMessage
 }
@@ -233,7 +234,12 @@ export interface BranchMessage {
 // The copyable spine of a branch: user/assistant turns that carry text.
 export const toBranchMessages = (messages: ChatMessage[]): BranchMessage[] =>
   messages
-    .map(message => ({ content: chatMessageText(message), role: message.role, source: message }))
+    .map(message => ({
+      content: chatMessageText(message),
+      role: message.role,
+      source: message,
+      ...(message.observed ? { observed: true } : {})
+    }))
     .filter(({ content, role }) => content.trim() && (role === 'assistant' || role === 'user'))
 
 export function upsertOptimisticSession(

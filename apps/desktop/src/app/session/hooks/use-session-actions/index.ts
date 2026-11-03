@@ -818,7 +818,11 @@ export function useSessionActions({
           cols: 96,
           source: 'desktop',
           ...(cwd && { cwd }),
-          messages: branchMessages.map(({ content, role }) => ({ content, role })),
+          messages: branchMessages.map(({ content, observed, role }) => ({
+            content,
+            role,
+            ...(observed ? { observed } : {})
+          })),
           ...(parentStoredId && { parent_session_id: parentStoredId })
         })
 

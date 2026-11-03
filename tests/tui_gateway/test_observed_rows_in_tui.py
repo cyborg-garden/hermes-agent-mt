@@ -81,3 +81,49 @@ def test_session_branch_keeps_the_observed_flag(db):
         (OWNER, False),
         ("noted", False),
     ]
+
+
+def test_session_history_tells_the_client_which_rows_are_observed(db):
+    db.create_session("parent", source="discord")
+    db.append_message("parent", "user", STRANGER, observed=True)
+    db.append_message("parent", "user", OWNER)
+    _live_session("p1", "parent", [])
+
+    with patch.object(server, "_get_db", return_value=db):
+        messages = _call("session.history", session_id="p1")["result"]["messages"]
+
+    assert [(row["text"], row.get("observed")) for row in messages] == [
+        (STRANGER, True),
+        (OWNER, None),
+    ]
+
+
+def test_desktop_branch_seed_stores_the_flag_on_first_submit(db):
+    """session.create seeds the branch; prompt.submit is what stores it."""
+    db.create_session("parent", source="discord")
+    with (
+        patch.object(server, "_get_db", return_value=db),
+        patch.object(server, "_resolve_model", return_value="test/model"),
+        patch.object(server, "_start_agent_build"),
+        patch.object(server, "_wait_agent", return_value={"error": {"message": "stop here"}}),
+    ):
+        created = _call(
+            "session.create",
+            cols=80,
+            source="desktop",
+            parent_session_id="parent",
+            messages=[
+                {"role": "user", "content": STRANGER, "observed": True},
+                {"role": "user", "content": OWNER},
+                {"role": "assistant", "content": "noted"},
+            ],
+        )["result"]
+        sid = created["session_id"]
+        key = server._sessions[sid]["session_key"]
+        _call("prompt.submit", session_id=sid, text="next")
+
+    assert _stored(db, key)[:3] == [
+        (STRANGER, True),
+        (OWNER, False),
+        ("noted", False),
+    ]

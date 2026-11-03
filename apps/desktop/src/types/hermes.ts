@@ -369,6 +369,8 @@ export interface SessionMessage {
   content: unknown
   context?: unknown
   name?: string
+  /** A stranger's group chatter the agent only saw. Never a turn by the person. */
+  observed?: boolean | number
   reasoning?: null | string
   reasoning_content?: null | string
   reasoning_details?: unknown

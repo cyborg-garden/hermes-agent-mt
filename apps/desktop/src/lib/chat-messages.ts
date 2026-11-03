@@ -17,6 +17,8 @@ export type ChatMessage = {
   error?: string
   branchGroupId?: string
   hidden?: boolean
+  /** A stranger's group chatter the agent only saw. Never a turn by the person. */
+  observed?: boolean
   /** Composer attachment ref strings (`@file:...`, `@image:...`) sent with this user message. */
   attachmentRefs?: string[]
 }
@@ -843,7 +845,8 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
       id: `${message.timestamp || Date.now()}-${index}-${message.role}`,
       role: message.role,
       parts,
-      timestamp: message.timestamp
+      timestamp: message.timestamp,
+      ...(message.observed ? { observed: true } : {})
     })
 
     activeAssistantIndex = message.role === 'assistant' ? result.length - 1 : null
