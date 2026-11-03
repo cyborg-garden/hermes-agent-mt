@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
+from agent.vision_history import correct_stored_vision_row
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
@@ -4819,6 +4820,9 @@ class SessionDB:
             content = self._decode_content(row["content"])
             if row["role"] in {"user", "assistant"} and isinstance(content, str):
                 content = sanitize_context(content).strip()
+            elif row["role"] == "tool":
+                # Older rows still claim the model can see an image they don't hold.
+                content = correct_stored_vision_row(row["tool_name"], content)
             msg = {"role": row["role"], "content": content}
             if row["timestamp"]:
                 msg["timestamp"] = row["timestamp"]

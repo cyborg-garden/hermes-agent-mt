@@ -146,6 +146,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import sanitize_context
+from agent.vision_history import correct_stored_vision_row
 from agent.error_classifier import FailoverReason
 from agent.redact import redact_sensitive_text
 from agent.model_metadata import (
@@ -1964,6 +1965,9 @@ class AIAgent:
                         elif isinstance(p, dict) and p.get("type") in {"image", "image_url", "input_image"}:
                             _txt.append("[screenshot]")
                     content = "\n".join(_txt) if _txt else None
+                    # The pixels stop here, so the claim beside them stops too.
+                    if role == "tool":
+                        content = correct_stored_vision_row(msg.get("tool_name"), content)
                 tool_calls_data = None
                 if hasattr(msg, "tool_calls") and isinstance(msg.tool_calls, list) and msg.tool_calls:
                     tool_calls_data = [

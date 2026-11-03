@@ -41,6 +41,7 @@ from typing import Any, Awaitable, Dict, Optional
 from urllib.parse import urlparse
 import httpx
 from agent.auxiliary_client import async_call_llm, extract_content_or_reasoning
+from agent.vision_history import NATIVE_VISION_ACK
 from hermes_constants import get_hermes_dir
 from tools.debug_helpers import DebugSession
 from tools.website_policy import check_website_access
@@ -859,11 +860,6 @@ def _should_use_native_vision_fast_path() -> bool:
         return False
 
 
-# Sits next to the pixels in the tool result. Only true while they travel with it.
-NATIVE_VISION_ACK = (
-    "Image loaded into your context — you can see it natively now. "
-    "Use your built-in vision to answer the user."
-)
 # What the model gets instead when the pixels were dropped before reaching it.
 NO_IMAGE_SEEN = (
     "Vision failed: no image reached you, you have not seen it. "
