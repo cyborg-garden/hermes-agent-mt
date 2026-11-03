@@ -867,7 +867,8 @@ def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) ->
     this wrapper is the backstop for anything they miss.
     """
     try:
-        return _summarize_tool_result_unguarded(tool_name, tool_args, tool_content)
+        # One line: these land in a template whose headings are whole lines.
+        return " ".join(_summarize_tool_result_unguarded(tool_name, tool_args, tool_content).split())
     except Exception as exc:  # noqa: BLE001 — a summary must never crash compression
         logger.debug("Tool-result summary failed for %s: %s", tool_name, exc)
         _len = len(tool_content) if isinstance(tool_content, str) else 0
@@ -2108,7 +2109,7 @@ class ContextCompressor(ContextEngine):
             unique: list[str] = []
             seen: set[str] = set()
             for item in items:
-                item = item.strip()
+                item = " ".join(item.split())
                 if not item or item in seen:
                     continue
                 seen.add(item)
@@ -2119,7 +2120,7 @@ class ContextCompressor(ContextEngine):
 
         completed: list[str] = []
         for idx, item in enumerate((assistant_actions + tool_actions)[:12], start=1):
-            completed.append(f"{idx}. {item}")
+            completed.append(f"{idx}. {' '.join(item.split())}")
 
         active_task = (
             f"User asked: {user_asks[-1]!r}"
@@ -2134,7 +2135,7 @@ class ContextCompressor(ContextEngine):
                 "failed."
             )
 
-        reason_text = f" Summary failure reason: {reason}." if reason else ""
+        reason_text = f" Summary failure reason: {' '.join(reason.split())}." if reason else ""
         body = f"""{HISTORICAL_TASK_HEADING}
 {active_task}
 
