@@ -798,6 +798,31 @@ class TestStoredVisionRows:
         assert len(snippet) < 400
         assert "Image from an earlier turn" in snippet and "natively" not in snippet
 
+    def test_a_list_form_row_corrects_the_claim(self, db):
+        # In-place compaction stores a live multimodal tool row as it stands.
+        db.create_session("old", source="discord")
+        db.archive_and_compact("old", [
+            {"role": "user", "content": "look"},
+            {
+                "role": "tool", "tool_call_id": "a", "tool_name": "vision_analyze",
+                "content": [
+                    {"type": "text", "text": NEWER_VISION_ROW + " axolotl"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            },
+        ])
+        replay = db.get_messages_as_conversation("old")
+        row = next(m for m in replay if m["role"] == "tool")
+        assert "natively" not in str(row["content"])
+        assert "cannot see it now" in row["content"][0]["text"]
+        assert row["content"][1]["type"] == "image_url"
+
+        out = session_search(session_id="old", around_message_id=2, db=db, current_session_id="new")
+        assert "natively" not in out
+
+        snippet = db.search_messages("natively", limit=5)[0]["snippet"]
+        assert "natively" not in snippet and "image_url" not in snippet
+
     def test_a_memory_row_quoting_the_sentence_is_left_alone(self, db):
         row = _seed_vision_session(db, tool_name="memory")
         out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")

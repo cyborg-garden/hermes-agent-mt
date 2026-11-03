@@ -29,10 +29,22 @@ _VISION_TOOLS = frozenset({"vision_analyze", "browser_vision"})
 
 def correct_stored_vision_row(tool_name: Optional[str], content: Any) -> Any:
     """Return a tool row's text with any claim of sight replaced by the truth."""
-    if tool_name not in _VISION_TOOLS or not isinstance(content, str):
+    if tool_name not in _VISION_TOOLS:
         return content
+    if isinstance(content, list):
+        # In-place compaction can store a live multimodal row whole.
+        return [
+            {**part, "text": _corrected_text(part["text"])}
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+            else part
+            for part in content
+        ]
+    return _corrected_text(content) if isinstance(content, str) else content
+
+
+def _corrected_text(text: str) -> str:
     return _OLD_SUMMARY_RE.sub(
-        IMAGE_NOT_IN_HISTORY, content.replace(NATIVE_VISION_ACK, IMAGE_NOT_IN_HISTORY)
+        IMAGE_NOT_IN_HISTORY, text.replace(NATIVE_VISION_ACK, IMAGE_NOT_IN_HISTORY)
     )
 
 

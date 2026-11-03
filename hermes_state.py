@@ -5558,8 +5558,14 @@ class SessionDB:
         for match in matches:
             content = match.pop("content", None)
             # A snippet of an older vision row would still claim the model can see.
-            corrected = correct_stored_vision_row(match.get("tool_name"), content)
-            if corrected != content:
+            decoded = self._decode_content(content)
+            corrected = correct_stored_vision_row(match.get("tool_name"), decoded)
+            if corrected != decoded:
+                if isinstance(corrected, list):
+                    corrected = " ".join(
+                        part["text"] for part in corrected
+                        if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    )
                 match["snippet"] = snippet_of_corrected_row(match.get("snippet"), corrected)
 
         return matches
