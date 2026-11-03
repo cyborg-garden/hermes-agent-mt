@@ -708,3 +708,86 @@ class TestArchivedRowsOfCurrentSession:
             current_session_id=self.SID,
         ))
         assert result["success"] is False
+
+
+OLD_VISION_ROW = "Image attached natively for the main model (12.0 KB). Answer using built-in vision."
+NEWER_VISION_ROW = (
+    "Image loaded into your context — you can see it natively now. "
+    "Use your built-in vision to answer the user."
+)
+
+
+def _seed_vision_session(db, content=OLD_VISION_ROW, tool_name="vision_analyze", title=None):
+    db.create_session("old", source="discord")
+    if title:
+        db._conn.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, "old"))
+    db.append_message("old", "user", "look at the castle sheet")
+    db.append_message(
+        "old",
+        "assistant",
+        "",
+        tool_calls=[{"id": "c1", "type": "function", "function": {"name": tool_name, "arguments": "{}"}}],
+    )
+    row = db.append_message("old", "tool", content, tool_call_id="c1", tool_name=tool_name)
+    db.append_message("old", "assistant", "fine")
+    return row
+
+
+class TestStoredVisionRows:
+    """A stored row has no pixels, so nothing here may tell a model it can see them."""
+
+    @pytest.mark.parametrize("stored", [OLD_VISION_ROW, NEWER_VISION_ROW])
+    def test_scroll_corrects_the_claim(self, db, stored):
+        row = _seed_vision_session(db, stored)
+        out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")
+        assert "natively" not in out
+        assert "cannot see it now" in out
+
+    def test_browser_vision_row_is_corrected_too(self, db):
+        row = _seed_vision_session(db, tool_name="browser_vision")
+        out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")
+        assert "natively" not in out
+
+    def test_reading_a_whole_session_corrects_the_claim(self, db):
+        _seed_vision_session(db)
+        out = session_search(session_id="old", db=db, current_session_id="new")
+        assert json.loads(out)["mode"] == "read"
+        assert "natively" not in out
+
+    def test_a_discovery_window_corrects_the_claim(self, db):
+        _seed_vision_session(db)
+        out = session_search(query="castle", db=db, current_session_id="new")
+        assert json.loads(out)["count"] == 1
+        assert "natively" not in out
+
+    def test_a_title_match_corrects_the_claim(self, db):
+        _seed_vision_session(db, title="Castle Art")
+        out = session_search(query="Castle Art", db=db, current_session_id="new")
+        assert json.loads(out)["count"] >= 1
+        assert "natively" not in out
+
+    @pytest.mark.parametrize("stored", [OLD_VISION_ROW, NEWER_VISION_ROW])
+    def test_a_snippet_from_the_row_itself_corrects_the_claim(self, db, stored):
+        _seed_vision_session(db, stored)
+        out = json.loads(
+            session_search(query="natively", role_filter="tool", db=db, current_session_id="new")
+        )
+        assert out["count"] == 1
+        assert "natively" not in json.dumps(out["results"])
+        assert "cannot see it now" in out["results"][0]["snippet"]
+
+    def test_a_memory_row_quoting_the_sentence_is_left_alone(self, db):
+        row = _seed_vision_session(db, tool_name="memory")
+        out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")
+        assert OLD_VISION_ROW in out
+
+    def test_a_person_quoting_the_sentence_is_left_alone(self, db):
+        db.create_session("old", source="discord")
+        row = db.append_message("old", "user", f"why did it say {OLD_VISION_ROW}")
+        out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")
+        assert OLD_VISION_ROW in out
+
+    def test_the_stored_row_is_not_rewritten(self, db):
+        row = _seed_vision_session(db)
+        session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")
+        assert any(m["content"] == OLD_VISION_ROW for m in db.get_messages("old"))

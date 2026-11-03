@@ -5556,7 +5556,11 @@ class SessionDB:
 
         # Remove full content from result (snippet is enough, saves tokens)
         for match in matches:
-            match.pop("content", None)
+            content = match.pop("content", None)
+            # A snippet of an older vision row would still claim the model can see.
+            corrected = correct_stored_vision_row(match.get("tool_name"), content)
+            if corrected != content:
+                match["snippet"] = corrected
 
         return matches
 
