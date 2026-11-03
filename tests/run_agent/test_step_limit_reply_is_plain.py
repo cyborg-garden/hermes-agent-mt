@@ -125,3 +125,79 @@ def test_a_person_on_a_platform_is_still_told_to_reply():
     agent.platform = "discord"
     reply = agent._handle_max_iterations(_messages(), 60)
     assert "Send a reply" in reply
+
+
+def _live_process(monkeypatch, *, task_id=None, session_key=None):
+    """What the registry reports for one running process with these ids."""
+    from tools.process_registry import process_registry
+
+    monkeypatch.setattr(process_registry, "has_active_processes", lambda t: t == task_id)
+    monkeypatch.setattr(process_registry, "has_active_for_session", lambda k, **_kw: k == session_key)
+
+
+def test_reply_does_not_deny_a_process_still_running_under_this_turn(monkeypatch):
+    agent, _ = _agent()
+    agent._current_task_id = "turn-1"
+    _live_process(monkeypatch, task_id="turn-1")
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "Nothing is running" not in reply
+    assert "still running" in reply
+
+
+def test_reply_does_not_deny_a_process_from_an_earlier_turn_of_the_session(monkeypatch):
+    agent, _ = _agent()
+    agent._current_task_id = "turn-2"
+    agent._gateway_session_key = "discord:thread-9"
+    _live_process(monkeypatch, session_key="discord:thread-9")
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "Nothing is running" not in reply
+    assert "still running" in reply
+
+
+def test_reply_does_not_deny_a_process_found_under_the_session_id(monkeypatch):
+    agent, _ = _agent()
+    agent._current_task_id = "turn-2"
+    agent.session_id = "session-1"
+    _live_process(monkeypatch, task_id="session-1")
+    assert "Nothing is running" not in agent._handle_max_iterations(_messages(), 60)
+
+
+def test_another_sessions_process_does_not_change_the_reply(monkeypatch):
+    agent, _ = _agent()
+    agent._current_task_id = "turn-1"
+    agent._gateway_session_key = "discord:thread-9"
+    _live_process(monkeypatch, task_id="someone-else", session_key="discord:other")
+    assert "Nothing is running now." in agent._handle_max_iterations(_messages(), 60)
+
+
+def test_failed_process_check_makes_no_claim_either_way(monkeypatch):
+    from tools.process_registry import process_registry
+
+    def _boom(_task_id):
+        raise RuntimeError("registry broke")
+
+    agent, _ = _agent()
+    agent._current_task_id = "turn-1"
+    monkeypatch.setattr(process_registry, "has_active_processes", _boom)
+    reply = agent._handle_max_iterations(_messages(), 60)
+    assert "Nothing is running" not in reply
+    assert "can't tell" in reply
+    assert "registry broke" not in reply
+
+
+def test_real_registry_entry_is_seen_by_the_step_limit_reply():
+    """No mocked registry: an entry for this turn, as the terminal tool would add it."""
+    from tools.process_registry import ProcessSession, process_registry
+
+    agent, _ = _agent()
+    agent._current_task_id = "step-limit-real-turn"
+    session = ProcessSession(id="proc_step_limit_test", command="sleep 8", task_id="step-limit-real-turn")
+    with process_registry._lock:
+        process_registry._running[session.id] = session
+    try:
+        reply = agent._handle_max_iterations(_messages(), 60)
+    finally:
+        with process_registry._lock:
+            process_registry._running.pop(session.id, None)
+    assert "Nothing is running" not in reply
+    assert "still running" in reply

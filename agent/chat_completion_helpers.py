@@ -1798,11 +1798,27 @@ def _a_person_can_reply(agent) -> bool:
     return getattr(agent, "platform", None) not in {"cron", "subagent"}
 
 
+def _background_process_state(agent) -> Optional[bool]:
+    """Whether this agent's background processes are still alive. None if unknown."""
+    try:
+        from tools.process_registry import process_registry
+
+        for task_id in {getattr(agent, "_current_task_id", None), getattr(agent, "session_id", None)}:
+            if task_id and process_registry.has_active_processes(task_id):
+                return True
+        session_key = getattr(agent, "_gateway_session_key", None)
+        return bool(session_key and process_registry.has_active_for_session(session_key))
+    except Exception as exc:
+        logger.debug("Could not check background processes at the step limit: %s", exc)
+        return None
+
+
 def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     """Stop at the step limit and tell the user so, in code rather than by request.
 
     The model writes the summary, but the facts the user needs do not depend on
-    it: the work stopped because of a limit, and nothing runs until they reply.
+    it: the work stopped because of a limit, and no more steps run until they
+    reply. A background process it started may outlive that, so check first.
     """
     summary = _request_iteration_summary(agent, messages, api_call_count)
 
@@ -1816,7 +1832,13 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     if not stated:
         parts.append("I can't say whether any work is left, so assume some is.")
     if not finished:
-        parts.append("Nothing is running now.")
+        running = _background_process_state(agent)
+        if running is None:
+            parts.append("I can't tell whether anything I started is still running.")
+        elif running:
+            parts.append("Something I started in the background is still running, but I've stopped working on it.")
+        else:
+            parts.append("Nothing is running now.")
         if _a_person_can_reply(agent):
             parts[-1] += " Send a reply if you want me to carry on."
     reply = "\n\n".join(parts)
