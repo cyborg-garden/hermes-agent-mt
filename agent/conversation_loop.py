@@ -928,6 +928,11 @@ def run_conversation(
 
         api_messages = []
         for idx, msg in enumerate(messages):
+            # Nobody said observed chatter to this agent. The gateway removes it
+            # before a turn; a resume outside the gateway hands the rows over as
+            # stored, so they stop here and stay in the transcript.
+            if msg.get("observed"):
+                continue
             api_msg = msg.copy()
 
             # Inject ephemeral context into the current turn's user message.

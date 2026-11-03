@@ -1864,6 +1864,9 @@ def _request_iteration_summary(agent, messages: list, api_call_count: int) -> st
         _needs_sanitize = agent._should_sanitize_tool_calls()
         api_messages = []
         for msg in messages:
+            # Same rule as the main loop: observed chatter is never sent.
+            if msg.get("observed"):
+                continue
             api_msg = msg.copy()
             agent._copy_reasoning_content_for_api(msg, api_msg)
             for internal_field in ("reasoning", "finish_reason", "_thinking_prefill"):
