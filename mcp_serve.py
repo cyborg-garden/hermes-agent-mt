@@ -525,6 +525,7 @@ class EventBridge:
                         "content": content[:500],
                         "timestamp": str(msg.get("timestamp", "")),
                         "message_id": str(msg.get("id", "")),
+                        **({"observed": True} if msg.get("observed") else {}),
                     },
                 ))
 
@@ -695,6 +696,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
                         "role": role,
                         "content": content[:2000],
                         "timestamp": msg.get("timestamp", ""),
+                        **({"observed": True} if msg.get("observed") else {}),
                     })
 
         messages = filtered[-limit:]
