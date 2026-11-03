@@ -13083,7 +13083,9 @@ def _(rid, params: dict) -> dict:
                 except Exception:
                     pass
         target_msg = result.get("target_message") or {}
-        target_text = target_msg.get("content") or ""
+        from agent.observed_context import without_observed_block
+
+        target_text = without_observed_block(target_msg.get("content") or "")
         if isinstance(target_text, list):
             parts = [
                 p.get("text", "") for p in target_text

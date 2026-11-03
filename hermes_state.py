@@ -5077,12 +5077,15 @@ class SessionDB:
         limit: int = 20,
         include_inactive: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Return the *limit* most-recent user messages, newest first.
+        """Return the *limit* most-recent user turns, newest first.
 
         Each entry is a dict with keys ``id``, ``timestamp``, ``preview``.
         ``preview`` is the first 80 characters of the message content
         (with line breaks collapsed to spaces). Used by the /rewind
-        slash command picker.
+        slash command picker and by /undo.
+
+        Observed group chatter is left out: nobody took a turn by saying it,
+        so counting it would make /undo remove the chatter and leave the turn.
 
         By default only active messages are returned.
         """
@@ -5090,7 +5093,7 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT id, timestamp, content FROM messages "
-                "WHERE session_id = ? AND role = 'user'"
+                "WHERE session_id = ? AND role = 'user' AND COALESCE(observed, 0) = 0"
                 f"{active_clause} "
                 "ORDER BY id DESC LIMIT ?",
                 (session_id, int(limit)),

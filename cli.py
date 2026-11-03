@@ -7327,7 +7327,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Walk backwards collecting the indices of the last N user messages.
         user_indices = []
         for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
+            msg = self.conversation_history[i]
+            if msg.get("role") == "user" and not msg.get("observed"):
                 user_indices.append(i)
                 if len(user_indices) >= n:
                     break
@@ -7420,6 +7421,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     @staticmethod
     def _undo_content_to_text(content) -> str:
         """Flatten message content (str or content-part list) to plain text."""
+        from agent.observed_context import without_observed_block
+
+        content = without_observed_block(content)
         if isinstance(content, str):
             return content
         if isinstance(content, list):

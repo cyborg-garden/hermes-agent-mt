@@ -270,3 +270,66 @@ async def test_branch_keeps_a_stranger_out_of_replay(tmp_path, monkeypatch):
     replay, context = _build_gateway_agent_history(rows)
     assert [m["content"] for m in replay] == [OWNER, "noted"]
     assert context == STRANGER
+
+
+@pytest.mark.asyncio
+async def test_undo_removes_the_owner_turn_under_later_chatter(tmp_path, monkeypatch):
+    store = _store(
+        tmp_path,
+        monkeypatch,
+        "s",
+        [
+            {"role": "user", "content": "[owner] earlier"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": OWNER},
+            {"role": "assistant", "content": "noted"},
+            {"role": "user", "content": STRANGER, "observed": True},
+        ],
+    )
+    gw = _command_runner(store, "s")
+
+    reply = await gw._handle_undo_command(_command_event("/undo"))
+
+    assert "deploy key" not in reply
+    assert "dream scenes" in reply
+    assert [m["content"] for m in store.load_transcript("s")] == ["[owner] earlier", "ok"]
+
+
+@pytest.mark.asyncio
+async def test_undo_counts_only_turns_someone_addressed_to_the_agent(tmp_path, monkeypatch):
+    store = _store(
+        tmp_path,
+        monkeypatch,
+        "s",
+        [
+            {"role": "user", "content": "[owner] first"},
+            {"role": "assistant", "content": "a"},
+            {"role": "user", "content": STRANGER, "observed": True},
+            {"role": "user", "content": OWNER},
+            {"role": "assistant", "content": "b"},
+        ],
+    )
+    result = store.rewind_session("s", 2)
+    assert result["target_text"] == "[owner] first"
+    assert store.load_transcript("s") == []
+
+
+@pytest.mark.asyncio
+async def test_undo_with_only_chatter_has_nothing_to_undo(tmp_path, monkeypatch):
+    store = _store(tmp_path, monkeypatch, "s", [{"role": "user", "content": STRANGER, "observed": True}])
+    gw = _command_runner(store, "s")
+
+    reply = await gw._handle_undo_command(_command_event("/undo"))
+
+    assert "deploy key" not in reply
+    assert len(store.load_transcript("s")) == 1
+
+
+@pytest.mark.asyncio
+async def test_undo_offers_a_legacy_wrapped_row_without_the_chatter(tmp_path, monkeypatch):
+    wrapped = _wrap_current_message_with_observed_context(OWNER, STRANGER)
+    store = _store(tmp_path, monkeypatch, "s", [{"role": "user", "content": wrapped}])
+
+    result = store.rewind_session("s")
+
+    assert result["target_text"] == OWNER

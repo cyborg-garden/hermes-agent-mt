@@ -56,8 +56,51 @@ def test_retry_unwraps_a_legacy_row():
     assert cli.retry_last() == OWNER
 
 
+def test_undo_backs_up_over_the_owner_turn_in_memory_and_on_disk(tmp_path):
+    rows = [
+        {"role": "user", "content": "[owner] earlier"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": OWNER},
+        {"role": "assistant", "content": "noted"},
+        _observed(),
+    ]
+    cli = _make_cli()
+    cli._session_db = _seed(tmp_path, rows)
+    cli.session_id = "cli"
+    cli.conversation_history = [dict(r) for r in rows]
+    prefilled = []
+    cli._prefill_input_buffer = prefilled.append
+
+    cli.undo_last()
+
+    assert [m["content"] for m in cli.conversation_history] == ["[owner] earlier", "ok"]
+    stored = cli._session_db.get_messages_as_conversation("cli")
+    assert [m["content"] for m in stored] == ["[owner] earlier", "ok"]
+    assert prefilled == [OWNER]
 
 
+def test_undo_with_only_chatter_leaves_it_alone(tmp_path):
+    rows = [_observed()]
+    cli = _make_cli()
+    cli._session_db = _seed(tmp_path, rows)
+    cli.session_id = "cli"
+    cli.conversation_history = [dict(r) for r in rows]
+
+    cli.undo_last()
+
+    assert len(cli.conversation_history) == 1
+    assert len(cli._session_db.get_messages_as_conversation("cli")) == 1
+
+
+def test_undo_prefills_a_legacy_row_without_the_chatter():
+    cli = _make_cli()
+    cli.conversation_history = [{"role": "user", "content": WRAPPED}]
+    prefilled = []
+    cli._prefill_input_buffer = prefilled.append
+
+    cli.undo_last()
+
+    assert prefilled == [OWNER]
 
 
 def _summary(**_kw):

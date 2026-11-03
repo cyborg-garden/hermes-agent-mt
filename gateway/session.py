@@ -2768,7 +2768,10 @@ class SessionStore:
             logger.debug("rewind_session: rewind_to_message failed: %s", e)
             return None
         target_msg = result.get("target_message") or {}
-        content = target_msg.get("content") or ""
+        from agent.observed_context import without_observed_block
+
+        # The reply offers this text to send again, so it is the person's alone.
+        content = without_observed_block(target_msg.get("content") or "")
         if isinstance(content, list):
             parts = [
                 p.get("text", "")

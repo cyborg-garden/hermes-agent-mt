@@ -1988,3 +1988,26 @@ def test_command_dispatch_retry_with_only_chatter_sends_nothing(server):
     ])
 
     assert "error" in _tui_dispatch(server, "retry", sid)
+
+
+def test_command_dispatch_undo_prefills_a_legacy_row_without_the_chatter(server):
+    from agent.observed_context import (
+        CURRENT_ADDRESSED_MESSAGE_HEADER,
+        OBSERVED_GROUP_CONTEXT_HEADER,
+    )
+
+    wrapped = (
+        f"{OBSERVED_GROUP_CONTEXT_HEADER}\n{_TUI_STRANGER}\n\n"
+        f"{CURRENT_ADDRESSED_MESSAGE_HEADER}\n{_TUI_OWNER}"
+    )
+    sid = "test-session"
+    _tui_group_session(server, sid, [{"role": "user", "content": wrapped}])
+    db = MagicMock()
+    db.list_recent_user_messages.return_value = [{"id": 1}]
+    db.rewind_to_message.return_value = {"target_message": {"content": wrapped}, "rewound_count": 1}
+    db.get_messages_as_conversation.return_value = []
+
+    with patch.object(server, "_get_db", return_value=db):
+        result = _tui_dispatch(server, "undo", sid)["result"]
+
+    assert result["message"] == _TUI_OWNER
