@@ -409,3 +409,54 @@ def test_webhook_env_stays_inherited_off_the_broker(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert _webhook()._github_env() is None
+
+
+def test_review_pane_gh_gets_the_broker_token(hub_auth, broker, stub_gh, tmp_path):
+    from hermes_cli import web_git
+
+    ok, _out = web_git._gh(str(tmp_path), ["auth", "status"])
+    assert ok
+    assert stub_gh.read_text() == TOKEN
+
+
+def test_review_pane_gh_prefers_a_token_in_the_env(hub_auth, broker, stub_gh, tmp_path, monkeypatch):
+    from hermes_cli import web_git
+
+    monkeypatch.setenv("GH_TOKEN", "env-token-value")
+    assert web_git._gh(str(tmp_path), ["auth", "status"])[0]
+    assert stub_gh.read_text() == "env-token-value"
+    assert broker.requests == []
+
+
+def test_review_pane_gh_fails_when_the_broker_is_down(hub_auth, broker, stub_gh, tmp_path):
+    from hermes_cli import web_git
+
+    broker.status = 502
+    ok, _out = web_git._gh(str(tmp_path), ["auth", "status"])
+    assert not ok
+
+
+# ---- the three places fleet-live hands a tool its env ---
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda local: local._sanitize_subprocess_env(dict(os.environ)),
+        lambda local: local.hermes_subprocess_env(),
+        lambda local: local._make_run_env({}),
+    ],
+    ids=["sanitize", "hermes_subprocess_env", "run_env"],
+)
+def test_every_spawn_surface_gets_gh_token_and_not_github_token(agent_home, broker, monkeypatch, build):
+    from tools.environments import local
+
+    monkeypatch.setenv("HERMES_HOME", str(agent_home))
+    monkeypatch.setenv("TERMINAL_HOME_MODE", "profile")  # what a container resolves to
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "old-pat-value")
+    (agent_home / "home").mkdir(exist_ok=True)
+    local._GH_TOKEN_MINT_FAILURE_TS = 0.0
+    env = build(local)
+    assert env["GH_TOKEN"] == TOKEN
+    assert "GITHUB_TOKEN" not in env
