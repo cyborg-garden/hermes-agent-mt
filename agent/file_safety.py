@@ -329,6 +329,8 @@ def get_read_block_error(path: str) -> Optional[str]:
         "auth.lock",
         ".anthropic_oauth.json",
         ".env",
+        # The agent's secret for the host-side GitHub token broker.
+        "github-broker.json",
         "webhook_subscriptions.json",
         os.path.join("auth", "google_oauth.json"),
         # Bitwarden Secrets Manager disk cache: stores plaintext secret values
