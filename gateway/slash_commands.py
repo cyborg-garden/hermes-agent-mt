@@ -3468,6 +3468,9 @@ class GatewaySlashCommandsMixin:
                 if not compressor.has_content_to_compress(head):
                     return t("gateway.compress.nothing_to_do")
 
+                # In-place compaction archives every active row, tail included.
+                tmp_agent._compaction_kept_tail = tail
+
                 loop = asyncio.get_running_loop()
                 compressed, _ = await loop.run_in_executor(
                     None,
@@ -3532,7 +3535,7 @@ class GatewaySlashCommandsMixin:
                     )
                 elif _in_place:
                     # archive_and_compact() already persisted the compacted
-                    # transcript inside _compress_context — nothing to do.
+                    # transcript and the kept tail inside _compress_context.
                     pass
                 else:
                     logger.warning(

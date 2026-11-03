@@ -116,3 +116,26 @@ def test_no_focus_prints_standard_banner(capsys):
     output = capsys.readouterr().out
     assert "focus:" not in output
     assert "Compressing" in output
+
+
+def test_compress_here_names_the_kept_tail_only_during_the_call(capsys):
+    """In-place compaction stores this tail; the agent lives on, so it must not stick."""
+    shell = _make_cli()
+    history = _make_history()
+    shell.conversation_history = history
+    shell.agent = MagicMock()
+    shell.agent.compression_enabled = True
+    shell.agent._cached_system_prompt = ""
+    seen = []
+
+    def compress(head, *args, **kwargs):
+        seen.append(shell.agent._compaction_kept_tail)
+        return list(head), ""
+
+    shell.agent._compress_context.side_effect = compress
+
+    with patch("agent.model_metadata.estimate_request_tokens_rough", return_value=100):
+        shell._manual_compress("/compress here 1")
+
+    assert seen == [history[-2:]]
+    assert shell.agent._compaction_kept_tail is None

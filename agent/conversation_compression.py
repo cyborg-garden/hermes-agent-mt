@@ -893,6 +893,15 @@ def compress_context(
                     # for search/recovery (Teknium review — keep one durable id
                     # WITHOUT destroying history, unlike a hard replace_messages).
                     # See #38763.
+                    #
+                    # A caller compacting only the head (/compress here) names
+                    # the tail it keeps. Every active row is archived below, so
+                    # the tail has to be stored in the same write.
+                    _kept_tail = getattr(agent, "_compaction_kept_tail", None)
+                    if isinstance(_kept_tail, list) and _kept_tail:
+                        from hermes_cli.partial_compress import rejoin_compressed_head_and_tail
+
+                        _rows_to_store = rejoin_compressed_head_and_tail(_rows_to_store, _kept_tail)
                     agent._session_db.archive_and_compact(agent.session_id, _rows_to_store)
                     # Reset the flush identity set so the next turn's appends are
                     # diffed against the COMPACTED transcript: the compacted dicts

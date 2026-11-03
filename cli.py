@@ -9655,13 +9655,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # _build_system_prompt appends system_message to prompt_parts
                 # which already contain the agent identity — resulting in the
                 # identity block appearing twice (issue #15281).
-                compressed, _ = self.agent._compress_context(
-                    head,
-                    None,
-                    approx_tokens=approx_tokens,
-                    focus_topic=focus_topic or None,
-                    force=True,
-                )
+                # In-place compaction archives every active row, tail included.
+                # This agent lives on, so the name is cleared after the call.
+                self.agent._compaction_kept_tail = tail
+                try:
+                    compressed, _ = self.agent._compress_context(
+                        head,
+                        None,
+                        approx_tokens=approx_tokens,
+                        focus_topic=focus_topic or None,
+                        force=True,
+                    )
+                finally:
+                    self.agent._compaction_kept_tail = None
                 # Re-append the verbatim tail after the compressed head.
                 # The split guarantees `tail` begins on a user turn, so the
                 # compressed-head -> tail boundary is normally valid
