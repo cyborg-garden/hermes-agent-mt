@@ -2029,7 +2029,7 @@ class TestTryPaymentFallback:
         mock_client = MagicMock()
         with patch("agent.auxiliary_client._try_openrouter", return_value=(mock_client, "or-model")), \
              patch("agent.auxiliary_client._read_main_provider", return_value="openai-codex"):
-            client, model, label = _try_payment_fallback("openai-codex", task="vision")
+            client, model, label = _try_payment_fallback("openai-codex", task="compression")
         assert client is mock_client
         assert label == "openrouter"
 
@@ -2672,7 +2672,7 @@ class TestTryMainAgentModelFallback:
              patch("agent.auxiliary_client._is_provider_unhealthy", return_value=False), \
              patch("agent.auxiliary_client.resolve_provider_client",
                    return_value=(fake_client, "anthropic/claude-sonnet-4")):
-            client, model, label = _try_main_agent_model_fallback("glm", task="vision")
+            client, model, label = _try_main_agent_model_fallback("glm", task="compression")
         assert client is fake_client
         assert model == "anthropic/claude-sonnet-4"
         assert label == "main-agent(openrouter)"

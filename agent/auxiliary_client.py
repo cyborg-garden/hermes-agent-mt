@@ -3986,6 +3986,31 @@ async def _call_fallback_candidate_async(
         return None
 
 
+def _fallback_candidate_can_see(provider: Optional[str], model: Optional[str]) -> bool:
+    """True only when a vision fallback candidate is known to accept images.
+
+    A failed vision call must end in an honest error. A model that cannot see
+    may answer anyway, and its words would come back as the image's description.
+    So unknown counts as no. To allow a model the data has no answer for, set
+    ``providers.<provider>.models.<model>.supports_vision: true``.
+    """
+    if not provider or not model:
+        return False
+    try:
+        from agent.image_routing import _lookup_supports_vision
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        # ``model.supports_vision`` describes the main model, not this candidate.
+        model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+        if isinstance(model_cfg, dict) and model != _read_main_model():
+            cfg = {**cfg, "model": {k: v for k, v in model_cfg.items() if k != "supports_vision"}}
+        return _lookup_supports_vision(provider, model, cfg) is True
+    except Exception as exc:
+        logger.debug("Auxiliary vision: could not check fallback candidate: %s", exc)
+        return False
+
+
 def _try_payment_fallback(
     failed_provider: str,
     task: str = None,
@@ -4023,6 +4048,11 @@ def _try_payment_fallback(
             continue
         client, model = try_fn()
         if client is not None:
+            if task == "vision" and not _fallback_candidate_can_see(
+                "custom" if label == "local/custom" else label, model
+            ):
+                tried.append(f"{label} (not known to see)")
+                continue
             logger.info(
                 "Auxiliary %s: %s on %s — falling back to %s (%s)",
                 task or "call", reason, failed_provider, label, model or "default",
@@ -4078,6 +4108,12 @@ def _try_main_agent_model_fallback(
         client, resolved_model = None, None
 
     if client is None:
+        return None, None, ""
+    if task == "vision" and not _fallback_candidate_can_see(main_provider, resolved_model or main_model):
+        logger.warning(
+            "Auxiliary vision: %s on %s — not falling back to the main model, "
+            "it is not known to see images", reason, failed_provider,
+        )
         return None, None, ""
 
     label = f"main-agent({main_provider})"
@@ -4212,6 +4248,9 @@ def _try_configured_fallback_chain(
             fb_client, resolved_model = None, None
 
         if fb_client is not None:
+            if task == "vision" and not _fallback_candidate_can_see(fb_provider, resolved_model or fb_model):
+                tried.append(f"{label} (not known to see)")
+                continue
             if min_ctx is not None and resolved_model:
                 fb_ctx = _candidate_context_window(
                     fb_provider,
@@ -4346,6 +4385,9 @@ def _try_main_fallback_chain(
             logger.debug("Auxiliary %s: main fallback %s failed to resolve: %s", task or "call", label, exc)
             fb_client, resolved_model = None, None
         if fb_client is not None:
+            if task == "vision" and not _fallback_candidate_can_see(fb_provider, resolved_model or fb_model):
+                tried.append(f"{label} (not known to see)")
+                continue
             if min_ctx is not None:
                 fb_ctx = _candidate_context_window(
                     fb_provider,
@@ -7004,6 +7046,13 @@ def call_llm(
                 async_mode=False,
                 main_runtime=main_runtime,
             )
+            if client is not None and not _fallback_candidate_can_see(effective_provider, final_model):
+                logger.warning(
+                    "Vision provider %s unavailable, and auto picked %s, which is "
+                    "not known to see images. Refusing it.",
+                    resolved_provider, effective_provider,
+                )
+                client = None
         if client is None:
             raise RuntimeError(
                 f"No LLM provider configured for task={task} provider={resolved_provider}. "
@@ -7648,6 +7697,13 @@ async def async_call_llm(
                 async_mode=True,
                 main_runtime=main_runtime,
             )
+            if client is not None and not _fallback_candidate_can_see(effective_provider, final_model):
+                logger.warning(
+                    "Vision provider %s unavailable, and auto picked %s, which is "
+                    "not known to see images. Refusing it.",
+                    resolved_provider, effective_provider,
+                )
+                client = None
         if client is None:
             raise RuntimeError(
                 f"No LLM provider configured for task={task} provider={resolved_provider}. "
