@@ -2247,12 +2247,15 @@ class GatewaySlashCommandsMixin:
         session_entry = await self.async_session_store.get_or_create_session(source)
         history = await self.async_session_store.load_transcript(session_entry.session_id)
         
-        # Find the last user message
+        # Find the last user message. Observed chatter was not said to the
+        # agent, so re-sending it would turn it into an addressed turn.
+        from agent.observed_context import without_observed_block
+
         last_user_msg = None
         last_user_idx = None
         for i in range(len(history) - 1, -1, -1):
-            if history[i].get("role") == "user":
-                last_user_msg = history[i].get("content", "")
+            if history[i].get("role") == "user" and not history[i].get("observed"):
+                last_user_msg = without_observed_block(history[i].get("content", ""))
                 last_user_idx = i
                 break
         
