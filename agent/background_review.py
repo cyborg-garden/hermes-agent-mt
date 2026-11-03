@@ -139,7 +139,8 @@ def _digest_history(messages_snapshot: List[Dict], tail: int = 24) -> List[Dict]
     old = msgs[:-len(keep)]
     lines: List[str] = []
     for m in old:
-        if not isinstance(m, dict):
+        # This text reads as what the person said, and standing memory is written from it.
+        if not isinstance(m, dict) or m.get("observed"):
             continue
         role = m.get("role")
         text = _msg_text(m).replace("\n", " ")

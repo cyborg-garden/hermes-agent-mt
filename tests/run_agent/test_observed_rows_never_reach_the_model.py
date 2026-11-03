@@ -101,3 +101,45 @@ def test_step_limit_summary_request_leaves_out_the_chatter():
     text = " ".join(str(m.get("content")) for m in sent)
     assert "deploy key" not in text
     assert "dream scenes" in text
+
+
+def _long_history(db):
+    db.create_session("review", source="discord")
+    db.append_message("review", "user", STRANGER, observed=True)
+    db.append_message("review", "user", OWNER)
+    db.append_message("review", "assistant", "noted")
+    for index in range(30):
+        role = "user" if index % 2 == 0 else "assistant"
+        db.append_message("review", role, f"[sam] row {index}")
+    return db.get_messages_as_conversation("review", repair_alternation=True)
+
+
+def test_routed_review_digest_leaves_the_stranger_out(tmp_path):
+    """The review agent writes standing memory and skills from this text."""
+    import agent.background_review as review
+
+    db = SessionDB(tmp_path / "state.db")
+    history = _long_history(db)
+    agent = _agent(db, "review")
+    runtime = dict(review._resolve_review_runtime(agent), routed=True, model="test/other")
+    sent = []
+
+    def fake_call(_self, api_kwargs, **_kwargs):
+        sent.append(api_kwargs["messages"])
+        return _reply("nothing to save")
+
+    with (
+        patch.object(review, "_resolve_review_runtime", return_value=runtime),
+        patch.object(AIAgent, "_interruptible_api_call", fake_call),
+        patch.object(AIAgent, "_interruptible_streaming_api_call", fake_call),
+        patch("agent.context_compressor.get_model_context_length", return_value=100_000),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        review._run_review_in_thread(agent, history, "Review the conversation above.")
+
+    text = "\n".join(str(row.get("content")) for row in sent[0])
+    assert "digest" in text
+    assert "dream scenes" in text
+    assert "deploy key" not in text
