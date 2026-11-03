@@ -153,6 +153,7 @@ _OS_CREDENTIAL_STORES = (*HOME_CREDENTIAL_DIRS, ".envrc")
 # overwritten) on a distribution install. Add a store here when a writer or loader starts using one.
 PROFILE_CREDENTIAL_PATHS = frozenset({
     "auth.json", ".env", "auth/google_oauth.json",
+    "github-broker.json",           # the agent's secret for the host GitHub token broker
     ".op.env",                      # 1Password service-account token (env_loader)
     "npmrc",                        # npm registry auth (source_build)
     ".anthropic_oauth.json",        # Anthropic OAuth tokens (credential_sources)
@@ -2165,7 +2166,7 @@ def _default_export_ignore(root_dir: Path):
 # PROFILE_CREDENTIAL_PATHS. ``bot-desktop`` is the screen's runtime state:
 # its persistent Chromium profile (Cookies, Login Data — the bot's live web sessions), Xauthority, sockets.
 # The OS stores are dropped wherever they sit (a skill dir copied from a home carries its ``.ssh``).
-_EXPORT_CREDENTIAL_FILES = frozenset({"auth.json", ".env", "bot-desktop", *_OS_CREDENTIAL_STORES})
+_EXPORT_CREDENTIAL_FILES = frozenset({"auth.json", ".env", "github-broker.json", "bot-desktop", *_OS_CREDENTIAL_STORES})
 _EXPORT_CREDENTIAL_PARTS = tuple(tuple(p.split("/")) for p in _EXPORT_CREDENTIAL_FILES)
 
 
