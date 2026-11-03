@@ -1227,6 +1227,26 @@ class TestMediaDeliveryDefaultMode:
 
         assert BasePlatformAdapter.validate_media_delivery_path(str(token)) is None
 
+    def test_denylist_blocks_github_broker_secret(self, tmp_path, monkeypatch):
+        """github-broker.json holds the agent's long-lived broker secret. A
+        prompt-injected MEDIA tag must not post it to chat, however old the
+        file is. Its mtime never changes, so recency is no protection.
+        """
+        self._patch_roots(monkeypatch)
+
+        fake_home = tmp_path / "home"
+        hermes_dir = fake_home / ".hermes"
+        hermes_dir.mkdir(parents=True)
+        secret = hermes_dir / "github-broker.json"
+        secret.write_text('{"url": "http://test", "secret": "not-a-real-secret"}')
+        old = time.time() - 300 * 86400
+        os.utime(secret, (old, old))
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setattr("gateway.platforms.base._HERMES_HOME", hermes_dir)
+        monkeypatch.setattr("gateway.platforms.base._HERMES_ROOT", hermes_dir)
+
+        assert BasePlatformAdapter.validate_media_delivery_path(str(secret)) is None
+
     def test_denylist_blocks_pairing_directory_contents(self, tmp_path, monkeypatch):
         """Files under ~/.hermes/pairing/ (platform pairing tokens) are
         credential material and must not be deliverable.

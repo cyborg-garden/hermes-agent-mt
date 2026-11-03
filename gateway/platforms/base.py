@@ -1194,6 +1194,8 @@ def _media_delivery_denied_paths() -> List[Path]:
         "google_token.json",
         "google_oauth_pending.json",
         os.path.join("auth", "google_oauth.json"),
+        # The agent's long-lived secret for the host-side GitHub token broker.
+        "github-broker.json",
         # Webhook subscription HMAC secrets.
         "webhook_subscriptions.json",
         # Bitwarden Secrets Manager plaintext disk cache.
