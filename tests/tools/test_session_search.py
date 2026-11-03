@@ -776,6 +776,28 @@ class TestStoredVisionRows:
         assert "natively" not in json.dumps(out["results"])
         assert "cannot see it now" in out["results"][0]["snippet"]
 
+    def test_a_long_row_gives_a_snippet_not_the_whole_row(self, db):
+        db.create_session("old", source="discord")
+        db.append_message(
+            "old", "tool", "x " * 20000 + NEWER_VISION_ROW + " tapir",
+            tool_name="vision_analyze", tool_call_id="a",
+        )
+        matches = db.search_messages("tapir", limit=5)
+        assert len(matches) == 1
+        snippet = matches[0]["snippet"]
+        assert len(snippet) < 400
+        assert "tapir" in snippet and "natively" not in snippet
+
+    def test_a_long_row_shows_the_correction_when_the_claim_was_the_match(self, db):
+        db.create_session("old", source="discord")
+        db.append_message(
+            "old", "tool", "x " * 20000 + NEWER_VISION_ROW,
+            tool_name="vision_analyze", tool_call_id="a",
+        )
+        snippet = db.search_messages("natively", limit=5)[0]["snippet"]
+        assert len(snippet) < 400
+        assert "Image from an earlier turn" in snippet and "natively" not in snippet
+
     def test_a_memory_row_quoting_the_sentence_is_left_alone(self, db):
         row = _seed_vision_session(db, tool_name="memory")
         out = session_search(session_id="old", around_message_id=row, db=db, current_session_id="new")

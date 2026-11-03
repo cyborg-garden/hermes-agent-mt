@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
-from agent.vision_history import correct_stored_vision_row
+from agent.vision_history import correct_stored_vision_row, snippet_of_corrected_row
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
@@ -5560,7 +5560,7 @@ class SessionDB:
             # A snippet of an older vision row would still claim the model can see.
             corrected = correct_stored_vision_row(match.get("tool_name"), content)
             if corrected != content:
-                match["snippet"] = corrected
+                match["snippet"] = snippet_of_corrected_row(match.get("snippet"), corrected)
 
         return matches
 

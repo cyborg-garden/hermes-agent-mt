@@ -34,3 +34,18 @@ def correct_stored_vision_row(tool_name: Optional[str], content: Any) -> Any:
     return _OLD_SUMMARY_RE.sub(
         IMAGE_NOT_IN_HISTORY, content.replace(NATIVE_VISION_ACK, IMAGE_NOT_IN_HISTORY)
     )
+
+
+def snippet_of_corrected_row(snippet: Optional[str], corrected: str, limit: int = 240) -> str:
+    """Return a short snippet of a corrected row, near what the search matched.
+
+    The search engine's own snippet came from the uncorrected text, so it may
+    quote the claim. Whole rows can run to tens of thousands of characters.
+    """
+    matched = re.search(r">>>(.*?)<<<", snippet or "")
+    at = corrected.lower().find(matched.group(1).lower()) if matched else -1
+    if at < 0:
+        at = corrected.find(IMAGE_NOT_IN_HISTORY)
+    start = max(at - limit // 3, 0)
+    end = start + limit
+    return f"{'...' if start else ''}{corrected[start:end]}{'...' if end < len(corrected) else ''}"
