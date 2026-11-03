@@ -856,6 +856,7 @@ class TestImport:
             "config.yaml": "model: openrouter\n",
             ".env": "OPENROUTER_API_KEY=sk-secret\n",
             "auth.json": '{"providers": {"nous": "token"}}',
+            "github-broker.json": '{"secret": "x"}',
             "state.db": b"SQLite format 3\x00",
             "profiles/coder/.env": "ANTHROPIC_API_KEY=sk-ant-secret\n",
         })
@@ -865,6 +866,9 @@ class TestImport:
         from hermes_cli.backup import run_import
         run_import(args)
 
+        for rel in ("github-broker.json",):
+            mode = (hermes_home / rel).stat().st_mode & 0o777
+            assert mode == 0o600, f"{rel} restored with mode {oct(mode)}, expected 0o600"
         for rel in (".env", "auth.json", "state.db", "profiles/coder/.env"):
             mode = (hermes_home / rel).stat().st_mode & 0o777
             assert mode == 0o600, f"{rel} restored with mode {oct(mode)}, expected 0o600"
