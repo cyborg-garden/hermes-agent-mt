@@ -388,7 +388,15 @@ def main(argv: Optional[list] = None) -> int:
         if protocol and protocol != "https":
             return 0
         home = args.home or _default_home()
-        token = get_installation_token(home)
+        try:
+            token = get_installation_token(home)
+        except Exception as exc:
+            # One line, because git shows this to whoever is stuck. The refusals we
+            # raise ourselves carry only an HTTP status; anything else gives its type.
+            source = "the token broker" if read_broker_config(home) else "the GitHub App"
+            reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+            print(f"hermes git credentials: no GitHub token from {source} ({reason})", file=sys.stderr)
+            return 1
         if not token:
             return 1  # no App creds → git falls through to any other helper
         # git credential protocol: key=value lines, blank line terminates.

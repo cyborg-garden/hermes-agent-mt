@@ -254,3 +254,33 @@ def test_broker_config_is_denied_to_the_read_tool(tmp_path, monkeypatch):
     target = tmp_path / gat.BROKER_CONFIG_FILE
     target.write_text("{}")
     assert get_read_block_error(str(target)) is not None
+
+
+def _run_helper(agent_home, stdin="protocol=https\nhost=github.com\n\n"):
+    env = {"HOME": str(agent_home / "home"), "PATH": os.environ.get("PATH", "")}
+    return subprocess.run(
+        [sys.executable, "-m", "hermes_cli.github_app_token", "get-credential"],
+        input=stdin, capture_output=True, text=True, env=env, cwd=Path(gat.__file__).parent.parent,
+    )
+
+
+def test_helper_with_the_broker_down_says_so_in_one_line(agent_home):
+    (agent_home / "home").mkdir(exist_ok=True)
+    # Nothing listens on port 1, so the connection is refused as with a stopped broker.
+    (agent_home / gat.BROKER_CONFIG_FILE).write_text(json.dumps({"url": "http://127.0.0.1:1", "secret": SECRET}))
+    r = _run_helper(agent_home)
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    assert "token broker" in r.stderr
+    assert len(r.stderr.strip().splitlines()) == 1
+    assert SECRET not in r.stderr + r.stdout
+
+
+def test_helper_with_a_refusing_broker_names_the_status(agent_home, broker):
+    (agent_home / "home").mkdir(exist_ok=True)
+    broker.status = 502
+    r = _run_helper(agent_home)
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    assert "HTTP 502" in r.stderr
+    assert SECRET not in r.stderr + r.stdout
