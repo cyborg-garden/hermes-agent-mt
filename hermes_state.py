@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
+from agent.observed_context import without_observed_block
 from agent.vision_history import correct_stored_vision_row, snippet_of_corrected_row
 from hermes_constants import get_hermes_home
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
@@ -4818,6 +4819,9 @@ class SessionDB:
         messages = []
         for row in rows:
             content = self._decode_content(row["content"])
+            if row["role"] == "user":
+                # Older compactions stored the current row with the chatter still around it.
+                content = without_observed_block(content)
             if row["role"] in {"user", "assistant"} and isinstance(content, str):
                 content = sanitize_context(content).strip()
             elif row["role"] == "tool":

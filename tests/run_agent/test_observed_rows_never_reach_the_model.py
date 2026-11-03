@@ -268,3 +268,27 @@ def test_the_main_path_review_reads_the_row_as_stored():
 
     assert snapshots, "review did not fire"
     assert [m["content"] for m in snapshots[0] if m["role"] == "user"] == ["[owner] hi there"]
+
+
+def test_a_row_stored_wrapped_replays_without_the_block(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("group", source="discord")
+    db.append_message("group", "user", _wrapped_owner_turn())
+    db.append_message("group", "assistant", "noted")
+    restored = db.get_messages_as_conversation("group", repair_alternation=True)
+    agent = _agent(db, "group")
+    sent = {}
+
+    def _call(api_kwargs, **_kw):
+        sent["messages"] = api_kwargs["messages"]
+        return _reply("ok")
+
+    with (
+        patch.object(agent, "_interruptible_api_call", _call),
+        patch.object(agent, "_interruptible_streaming_api_call", _call),
+    ):
+        agent.run_conversation("[owner] next", conversation_history=restored)
+
+    turns = [str(m.get("content")) for m in sent["messages"] if m["role"] == "user"]
+    assert "deploy key" not in " ".join(turns)
+    assert any("[owner] hi there" in text for text in turns)
