@@ -5,6 +5,7 @@ through that: a list that loses it fails here, by name, and not only in a test o
 """
 from __future__ import annotations
 
+import importlib
 import re
 import tarfile
 from pathlib import Path
@@ -15,37 +16,23 @@ BROKER_SECRET = "github-broker.json"
 REPO = Path(__file__).resolve().parents[2]
 
 
-def _guards():
-    from acp_adapter.edit_approval import SENSITIVE_AUTO_APPROVE_NAMES
-    from agent.file_safety import _CREDENTIAL_FILE_NAMES
-    from gateway.platforms.base import _ROOT_CREDENTIAL_PATHS
-    from hermes_cli.backup import _SECRET_FILE_NAMES
-    from hermes_cli.profile_distribution import USER_OWNED_EXCLUDE
-    from hermes_cli.profiles import (
-        _DEFAULT_EXPORT_EXCLUDE_ROOT,
-        _EXPORT_CREDENTIAL_FILES,
-        PROFILE_CREDENTIAL_PATHS,
-    )
-    from hermes_cli.web_routers.files import _SENSITIVE_MANAGED_FILE_BASENAMES
-    from tools.checkpoint_manager import DEFAULT_EXCLUDES
-
-    return {
-        "acp auto-approve": SENSITIVE_AUTO_APPROVE_NAMES,
-        "file_safety read deny": _CREDENTIAL_FILE_NAMES,
-        "media delivery deny": _ROOT_CREDENTIAL_PATHS,
-        "backup restore modes": _SECRET_FILE_NAMES,
-        "distribution install": USER_OWNED_EXCLUDE,
-        "default profile export": _DEFAULT_EXPORT_EXCLUDE_ROOT,
-        "export at any depth": _EXPORT_CREDENTIAL_FILES,
-        "profile credential stores": PROFILE_CREDENTIAL_PATHS,
-        "dashboard files api": _SENSITIVE_MANAGED_FILE_BASENAMES,
-        "checkpoint snapshots": DEFAULT_EXCLUDES,
-    }
+GUARDS = [
+    ("acp_adapter.edit_approval", "SENSITIVE_AUTO_APPROVE_NAMES"),      # ACP auto-approve
+    ("agent.file_safety", "_CREDENTIAL_FILE_NAMES"),                    # read deny
+    ("gateway.platforms.base", "_ROOT_CREDENTIAL_PATHS"),               # media delivery deny
+    ("hermes_cli.backup", "_SECRET_FILE_NAMES"),                        # restore file modes
+    ("hermes_cli.profile_distribution", "USER_OWNED_EXCLUDE"),          # distribution install
+    ("hermes_cli.profiles", "_DEFAULT_EXPORT_EXCLUDE_ROOT"),            # default profile export
+    ("hermes_cli.profiles", "_EXPORT_CREDENTIAL_FILES"),                # export at any depth
+    ("hermes_cli.profiles", "PROFILE_CREDENTIAL_PATHS"),                # named profile export
+    ("hermes_cli.web_routers.files", "_SENSITIVE_MANAGED_FILE_BASENAMES"),  # dashboard files API
+    ("tools.checkpoint_manager", "DEFAULT_EXCLUDES"),                   # checkpoint snapshots
+]
 
 
-@pytest.mark.parametrize("name", sorted(_guards()))
-def test_every_list_that_names_env_names_the_broker_secret(name):
-    assert BROKER_SECRET in _guards()[name], f"{name} lost {BROKER_SECRET}"
+@pytest.mark.parametrize("module,name", GUARDS)
+def test_every_list_that_names_env_names_the_broker_secret(module, name):
+    assert BROKER_SECRET in getattr(importlib.import_module(module), name)
 
 
 def test_stage2_chown_list_names_it():
