@@ -800,3 +800,17 @@ class TestEdgeCases:
         # Depending on timing, might catch the session if created <1s ago
         # Just verify it doesn't crash
         assert "empty" in report
+
+
+class TestObservedRowsInInsights:
+    @pytest.mark.parametrize("source", [None, "discord"])
+    def test_user_messages_counts_only_turns_addressed_to_the_agent(self, db, source):
+        db.create_session(session_id="group", source="discord", model="test/model")
+        db.append_message("group", role="user", content="[stranger]: rule", observed=True)
+        db.append_message("group", role="user", content="[owner] real")
+        db.append_message("group", role="assistant", content="ok")
+
+        report = InsightsEngine(db).generate(days=30, source=source)
+
+        assert report["overview"]["user_messages"] == 1
+        assert report["overview"]["total_messages"] == 3
