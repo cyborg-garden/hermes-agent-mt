@@ -550,6 +550,7 @@ def test_the_step_limit_request_is_not_listed_as_something_the_user_said():
     listed = summary.split("## Every User Message So Far", 1)[1]
     assert "STILL_LISTED" in listed
     assert "maximum number of tool-calling iterations" not in listed
+    assert "Work remaining" not in listed
 
 
 def test_a_person_s_words_merged_with_the_step_limit_request_stay():
