@@ -2007,7 +2007,12 @@ def _persist_branch_seed(session: dict) -> None:
             return
         try:
             for msg in seed:
-                db.append_message(session_id=key, role=msg.get("role", "user"), content=msg.get("content"))
+                db.append_message(
+                    session_id=key,
+                    role=msg.get("role", "user"),
+                    content=msg.get("content"),
+                    observed=bool(msg.get("observed")),
+                )
             session["_branch_seed_persisted"] = True
         except Exception:
             logger.debug("branch seed persist failed", exc_info=True)
