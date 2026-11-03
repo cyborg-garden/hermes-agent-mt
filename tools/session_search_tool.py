@@ -622,6 +622,9 @@ def _discover(
             "messages_before": view.get("messages_before", 0),
             "messages_after": view.get("messages_after", 0),
         }
+        # matched_role alone reads as the user's words; these were a stranger's.
+        if match_info.get("observed"):
+            entry["matched_observed"] = True
         if lineage_root and lineage_root != hit_sid:
             entry["parent_session_id"] = lineage_root
         results.append(entry)
