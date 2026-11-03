@@ -18549,6 +18549,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             api_messages.append({"role": "system", "content": context_prompt})
 
         for msg in history:
+            # Role and content alone would make a stranger's row the person's turn.
+            if msg.get("observed"):
+                continue
             role = msg.get("role")
             content = msg.get("content")
             if role in {"user", "assistant"} and content:
