@@ -99,7 +99,7 @@ DEFAULT_DIST_OWNED: Tuple[str, ...] = (
 # convention for user customizations.
 USER_OWNED_EXCLUDE: frozenset = frozenset({
     # Credentials & runtime secrets
-    "auth.json", ".env",
+    "auth.json", ".env", "github-broker.json",
     # Databases & runtime state
     "state.db", "state.db-shm", "state.db-wal",
     "hermes_state.db", "response_store.db",
