@@ -28,6 +28,7 @@ from typing import Any, Dict, Optional
 
 from hermes_cli.timeouts import get_provider_request_timeout, get_provider_stale_timeout
 from hermes_constants import PARTIAL_STREAM_STUB_ID, FINISH_REASON_LENGTH
+from agent.context_compressor import STEP_LIMIT_REQUEST, STEP_LIMIT_REQUEST_ENDING
 from agent.error_classifier import FailoverReason
 from agent.errors import EmptyStreamError
 from agent.gemini_native_adapter import is_native_gemini_base_url
@@ -1854,12 +1855,7 @@ def _request_iteration_summary(agent, messages: list, api_call_count: int) -> st
     """Ask for a summary without tools. Returns it, or "" if none could be had."""
     print(f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary...")
 
-    summary_request = (
-        "You've reached the maximum number of tool-calling iterations allowed. "
-        "Please provide a final response summarizing what you've found and accomplished so far, "
-        "without calling any more tools. End with one line: 'Work remaining: none' if nothing "
-        "is left, or 'Work remaining: ' and a short list of what is."
-    )
+    summary_request = STEP_LIMIT_REQUEST + STEP_LIMIT_REQUEST_ENDING
     messages.append({"role": "user", "content": summary_request})
 
     try:
