@@ -17,7 +17,7 @@ class FakeClock:
 
 def _worker(rate=100, window=60.0, dedup_window=300.0, sender=None, guard=None):
     clock = FakeClock()
-    q: "queue.Queue[str]" = queue.Queue(maxsize=100)
+    q: queue.Queue[str] = queue.Queue(maxsize=100)
     throttle = Throttle(rate=rate, window=window, dedup_window=dedup_window, clock=clock)
     guard = guard or ReentrancyGuard()
     w = HomeLogWorker(out_queue=q, throttle=throttle, sender=sender or (lambda m: None), guard=guard)
@@ -84,7 +84,7 @@ def test_stop_is_idempotent_and_joins():
 
 def test_idle_flush_sends_pending_summary():
     sent = []
-    w, _, clock, _ = _worker(rate=1, window=10.0, sender=sent.append)
+    w, _, _clock, _ = _worker(rate=1, window=10.0, sender=sent.append)
     w.process("A")          # admitted
     w.process("B")          # suppressed (rate)
     sent.clear()

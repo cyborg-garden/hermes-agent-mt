@@ -61,7 +61,7 @@ def _ensure_discord_mock():
 
 _ensure_discord_mock()
 
-from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
+from plugins.platforms.discord.adapter import DiscordAdapter
 
 CATEGORY_ID = "7770001"
 CHANNEL_IN_CATEGORY = "5551111"

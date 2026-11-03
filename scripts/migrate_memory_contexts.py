@@ -52,7 +52,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools.memory_tool import ENTRY_DELIMITER, derive_context_id  # noqa: E402
+from tools.memory_tool import ENTRY_DELIMITER, derive_context_id
 
 TARGETS = (("memory", "MEMORY.md"), ("user", "USER.md"))
 
@@ -65,11 +65,11 @@ _KNOWN_PLATFORMS = (
 _KNOWN_SCOPES = ("dm", "chat", "group", "channel", "forum", "thread")
 
 
-def read_entries(path: Path) -> List[str]:
+def read_entries(path: Path) -> list[str]:
     if not path.exists():
         return []
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except OSError:
         return []
     if not raw.strip():
@@ -77,7 +77,7 @@ def read_entries(path: Path) -> List[str]:
     return [e for e in (x.strip() for x in raw.split(ENTRY_DELIMITER)) if e]
 
 
-def write_entries(path: Path, entries: List[str]) -> None:
+def write_entries(path: Path, entries: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(ENTRY_DELIMITER.join(entries), encoding="utf-8")
 
@@ -88,7 +88,7 @@ def raw_chat_id(dir_name: str) -> str:
     return parsed[2] if parsed else dir_name
 
 
-def parse_qualified_name(dir_name: str) -> Optional[Tuple[str, str, str]]:
+def parse_qualified_name(dir_name: str) -> Optional[tuple[str, str, str]]:
     """Split a gen1/gen2 directory name into (platform, chat_type, chat_id).
 
     Returns None for a gen0 (raw chat_id) name. A qualified name already
@@ -105,13 +105,13 @@ def parse_qualified_name(dir_name: str) -> Optional[Tuple[str, str, str]]:
     return None
 
 
-def load_chat_facts(agent_dir: Path) -> Dict[str, Tuple[str, str, Optional[str]]]:
+def load_chat_facts(agent_dir: Path) -> dict[str, tuple[str, str, Optional[str]]]:
     """chat_id -> (platform, chat_type, parent_chat_id) from the agent's sessions.
 
     The most recently started session for a chat_id wins.
     """
     db = agent_dir / "state.db"
-    facts: Dict[str, Tuple[str, str, Optional[str]]] = {}
+    facts: dict[str, tuple[str, str, Optional[str]]] = {}
     if not db.exists():
         return facts
     try:
@@ -151,10 +151,10 @@ def load_chat_facts(agent_dir: Path) -> Dict[str, Tuple[str, str, Optional[str]]
     return facts
 
 
-def plan_for_agent(agent_dir: Path) -> Tuple[List[Dict], List[Dict]]:
+def plan_for_agent(agent_dir: Path) -> tuple[list[dict], list[dict]]:
     """Return (moves, skipped) for one agent directory."""
-    moves: List[Dict] = []
-    skipped: List[Dict] = []
+    moves: list[dict] = []
+    skipped: list[dict] = []
     mem_dir = agent_dir / "memories"
     contexts = mem_dir / "contexts"
     if not contexts.is_dir():
@@ -166,7 +166,7 @@ def plan_for_agent(agent_dir: Path) -> Tuple[List[Dict], List[Dict]]:
     }
 
     # target_dir_name -> list of (source_dir, mtime)
-    grouped: Dict[str, List[Tuple[Path, float]]] = defaultdict(list)
+    grouped: dict[str, list[tuple[Path, float]]] = defaultdict(list)
 
     for entry in sorted(contexts.iterdir()):
         if not entry.is_dir():
@@ -204,10 +204,10 @@ def plan_for_agent(agent_dir: Path) -> Tuple[List[Dict], List[Dict]]:
         if [s for s, _ in sources] == [target_dir]:
             continue  # already correct, nothing to do
 
-        merged: Dict[str, List[str]] = {}
-        stripped: Dict[str, int] = {}
+        merged: dict[str, list[str]] = {}
+        stripped: dict[str, int] = {}
         for _, fname in TARGETS:
-            acc: List[str] = []
+            acc: list[str] = []
             dropped = 0
             for src, _mt in sources:
                 for e in read_entries(src / fname):
@@ -229,7 +229,7 @@ def plan_for_agent(agent_dir: Path) -> Tuple[List[Dict], List[Dict]]:
     return moves, skipped
 
 
-def apply_move(move: Dict) -> None:
+def apply_move(move: dict) -> None:
     target_dir: Path = move["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
     for _, fname in TARGETS:
@@ -243,7 +243,7 @@ def apply_move(move: Dict) -> None:
             shutil.rmtree(src)
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("agent_dirs", nargs="+", type=Path,

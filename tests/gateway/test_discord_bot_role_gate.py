@@ -23,9 +23,9 @@ from gateway.session import Platform, SessionSource
 
 # Reuse the discord stub + FakeBot from the connect tests (also installs the
 # AllowedMentions shim when the real library is present).
-from tests.gateway.test_discord_connect import FakeBot  # noqa: E402
-import plugins.platforms.discord.adapter as discord_platform  # noqa: E402
-from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
+from tests.gateway.test_discord_connect import FakeBot
+import plugins.platforms.discord.adapter as discord_platform
+from plugins.platforms.discord.adapter import DiscordAdapter
 
 GUILD_ID = 1531068097719570432
 TRUSTED_ROLE = 1600000000000000001
@@ -116,7 +116,7 @@ async def _connected_adapter(monkeypatch):
         "gateway.status.acquire_scoped_lock",
         lambda scope, identity, metadata=None: (True, None),
     )
-    monkeypatch.setattr("gateway.status.release_scoped_lock", lambda scope, identity: None)
+    monkeypatch.setattr("gateway.status_scoped_locks.release_scoped_lock", lambda scope, identity: None)
     intents = SimpleNamespace(
         message_content=False, dm_messages=False, guild_messages=False,
         members=False, voice_states=False,
@@ -377,13 +377,15 @@ def test_bot_is_never_an_approval_admin(monkeypatch):
 
 
 def test_bot_cannot_pass_component_auth(monkeypatch):
+    from plugins.platforms.discord.adapter_component_auth import _component_check_auth
+
     monkeypatch.setenv("DISCORD_ALLOW_ALL_USERS", "true")
     bot_user = _member(FLEET_BOT_ID, bot=True, role_ids=[TRUSTED_ROLE])
     human = _member(HUMAN_ID, bot=False)
-    assert discord_platform._component_check_auth(
+    assert _component_check_auth(
         SimpleNamespace(user=human), set(), set()
     ) is True
-    assert discord_platform._component_check_auth(
+    assert _component_check_auth(
         SimpleNamespace(user=bot_user), {str(FLEET_BOT_ID)}, {TRUSTED_ROLE}
     ) is False
 
@@ -473,7 +475,8 @@ async def test_bot_cannot_approve_or_deny_with_admin_only_off(cmd):
     from unittest.mock import patch
     from gateway.platforms.base import MessageEvent
     from tests.gateway.test_approval_admin_gating import _clear_approval_state, _make_runner
-    from tools.approval import _ApprovalEntry, _gateway_queues
+    from tools.approval import _gateway_queues
+    from tools.approval_gateway_wait import _ApprovalEntry
 
     _clear_approval_state()
     runner = _make_runner()
@@ -484,7 +487,7 @@ async def test_bot_cannot_approve_or_deny_with_admin_only_off(cmd):
     entry = _ApprovalEntry({"command": "rm -rf /"})
     _gateway_queues[runner._session_key_for_source(src)] = [entry]
     handler = getattr(runner, f"_handle_{cmd}_command")
-    with patch("tools.approval._get_approval_config", return_value={"admin_only": False}):
+    with patch("tools.approval_context._get_approval_config", return_value={"admin_only": False}):
         result = await handler(MessageEvent(text=f"/{cmd}", source=src, message_id="m1"))
     assert "not authorized" in result.lower()
     assert not entry.event.is_set()
@@ -699,9 +702,9 @@ def test_discord_bot_cannot_answer_pending_prompts():
     import inspect
     from gateway.run import GatewayRunner
 
-    src = inspect.getsource(GatewayRunner._handle_message)
-    assert "_bot_sender = _is_discord_bot_sender(source)" in src
-    assert src.count("not _bot_sender") >= 3
+    # Upstream split the interceptions into _hm_pending_reply_intercepts, which a bot skips whole.
+    src = inspect.getsource(GatewayRunner._hm_pending_reply_intercepts)
+    assert "if _is_discord_bot_sender(source):" in src
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +732,7 @@ async def test_discord_bot_message_queues_instead_of_interrupting(is_bot, expect
     parent = B._make_running_parent()
     runner._running_agents[sk] = parent
     runner.adapters[Platform.DISCORD] = adapter
-    with patch("gateway.run.merge_pending_message_event"):
+    with patch("gateway.platforms.base.merge_pending_message_event"):
         await runner._handle_active_session_busy_message(event, sk)
     assert parent.interrupt.called is expect_interrupt
     if is_bot:  # queued, not silently dropped

@@ -105,7 +105,8 @@ class TestApproveAdminGating:
     @pytest.mark.asyncio
     async def test_non_admin_blocked_when_admin_only_true(self):
         """A non-admin user gets the denial message."""
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="nonadmin")
@@ -114,7 +115,7 @@ class TestApproveAdminGating:
         entry = _ApprovalEntry({"command": "rm -rf /"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_ADMIN_POLICY):
                 result = await runner._handle_approve_command(
                     _make_event("/approve", user_id="nonadmin")
@@ -126,7 +127,8 @@ class TestApproveAdminGating:
     @pytest.mark.asyncio
     async def test_admin_allowed_when_admin_only_true(self):
         """An admin user can still approve."""
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="admin1")
@@ -135,7 +137,7 @@ class TestApproveAdminGating:
         entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_ADMIN_POLICY):
                 result = await runner._handle_approve_command(
                     _make_event("/approve", user_id="admin1")
@@ -147,7 +149,8 @@ class TestApproveAdminGating:
     @pytest.mark.asyncio
     async def test_anyone_allowed_when_admin_only_false(self):
         """When admin_only is False, any authorized user can approve."""
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="nonadmin")
@@ -156,7 +159,7 @@ class TestApproveAdminGating:
         entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": False}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": False}):
             result = await runner._handle_approve_command(
                 _make_event("/approve", user_id="nonadmin")
             )
@@ -170,7 +173,8 @@ class TestApproveAdminGating:
         falls back to "approved = admin": the individual (DM) allowlist decides.
         A non-allowlisted user is denied — previously this path treated everyone
         as admin (the bug). An allowlisted user is admitted."""
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         runner._is_individual_allowlisted = lambda source: source.user_id == "approved_user"
@@ -180,7 +184,7 @@ class TestApproveAdminGating:
         blocked_key = runner._session_key_for_source(blocked_src)
         blocked_entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[blocked_key] = [blocked_entry]
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_DISABLED_POLICY):
                 blocked = await runner._handle_approve_command(
                     _make_event("/approve", user_id="anyone")
@@ -193,7 +197,7 @@ class TestApproveAdminGating:
         ok_key = runner._session_key_for_source(ok_src)
         ok_entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[ok_key] = [ok_entry]
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_DISABLED_POLICY):
                 ok = await runner._handle_approve_command(
                     _make_event("/approve", user_id="approved_user")
@@ -215,7 +219,8 @@ class TestDenyAdminGating:
 
     @pytest.mark.asyncio
     async def test_non_admin_blocked_when_admin_only_true(self):
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="nonadmin")
@@ -224,7 +229,7 @@ class TestDenyAdminGating:
         entry = _ApprovalEntry({"command": "rm -rf /"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_ADMIN_POLICY):
                 result = await runner._handle_deny_command(
                     _make_event("/deny", user_id="nonadmin")
@@ -235,7 +240,8 @@ class TestDenyAdminGating:
 
     @pytest.mark.asyncio
     async def test_admin_can_deny(self):
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="admin1")
@@ -244,7 +250,7 @@ class TestDenyAdminGating:
         entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
             with patch("gateway.slash_access.policy_for_source", return_value=_ADMIN_POLICY):
                 result = await runner._handle_deny_command(
                     _make_event("/deny", user_id="admin1")
@@ -256,7 +262,8 @@ class TestDenyAdminGating:
 
     @pytest.mark.asyncio
     async def test_anyone_can_deny_when_admin_only_false(self):
-        from tools.approval import _ApprovalEntry, _gateway_queues
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
 
         runner = _make_runner()
         source = _make_source(user_id="nonadmin")
@@ -265,7 +272,7 @@ class TestDenyAdminGating:
         entry = _ApprovalEntry({"command": "test"})
         _gateway_queues[session_key] = [entry]
 
-        with patch("tools.approval._get_approval_config", return_value={"admin_only": False}):
+        with patch("tools.approval_context._get_approval_config", return_value={"admin_only": False}):
             result = await runner._handle_deny_command(
                 _make_event("/deny", user_id="nonadmin")
             )
@@ -338,7 +345,7 @@ class TestTelegramCallbackAdminGating:
         context = MagicMock()
 
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
-            with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+            with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
                 with patch.object(adapter, "_is_user_admin", return_value=False):
                     await adapter._handle_callback_query(update, context)
 
@@ -371,7 +378,7 @@ class TestTelegramCallbackAdminGating:
         context = MagicMock()
 
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
-            with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+            with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
                 with patch.object(adapter, "_is_user_admin", return_value=True):
                     with patch("tools.approval.resolve_gateway_approval", return_value=1):
                         await adapter._handle_callback_query(update, context)
@@ -402,7 +409,7 @@ class TestTelegramCallbackAdminGating:
         context = MagicMock()
 
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
-            with patch("tools.approval._get_approval_config", return_value={"admin_only": False}):
+            with patch("tools.approval_context._get_approval_config", return_value={"admin_only": False}):
                 with patch("tools.approval.resolve_gateway_approval", return_value=1):
                     await adapter._handle_callback_query(update, context)
 
@@ -434,7 +441,7 @@ class TestTelegramCallbackAdminGating:
         context = MagicMock()
 
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
-            with patch("tools.approval._get_approval_config", return_value={"admin_only": True}):
+            with patch("tools.approval_context._get_approval_config", return_value={"admin_only": True}):
                 with patch.object(adapter, "_is_user_admin", side_effect=RuntimeError("boom")):
                     with patch("tools.approval.resolve_gateway_approval", return_value=1):
                         await adapter._handle_callback_query(update, context)
@@ -529,3 +536,65 @@ class TestIsUserAdmin:
         adapter = _make_adapter()
         assert adapter._is_user_admin("") is False
         assert adapter._is_user_admin(None) is False
+
+
+# ===========================================================================
+# LOCAL sessions (CLI / TUI / desktop): the operator approves their own prompts
+# ===========================================================================
+
+
+class TestLocalSourceApprovalAdmin:
+    def _local_source(self):
+        return SessionSource(platform=Platform.LOCAL, user_id="local-user", chat_id="local", chat_type="dm")
+
+    @pytest.mark.parametrize("verdict,expected", [(True, True), (False, False), (None, False)])
+    def test_local_source_follows_the_local_authority(self, verdict, expected):
+        runner = _make_runner()
+        with patch("gateway.session_local.authorize_local_source", return_value=verdict) as auth, \
+                patch("gateway.slash_access.policy_for_runner_source", return_value=_ADMIN_POLICY):
+            assert runner._is_approval_admin(self._local_source()) is expected
+        auth.assert_called_once()
+
+    def test_messaging_source_never_consults_the_local_authority(self):
+        runner = _make_runner()
+        with patch("gateway.session_local.authorize_local_source", return_value=True) as auth, \
+                patch("gateway.slash_access.policy_for_runner_source", return_value=_ADMIN_POLICY):
+            assert runner._is_approval_admin(_make_source("not-admin")) is False
+        auth.assert_not_called()
+
+    def _wired_runner(self):
+        """A runner whose LOCAL adapter and authority are real, so the forged-source refusal is
+        proven by ``authorize_local_source`` itself rather than by a patched verdict."""
+        from gateway.session_authority import LiveSession
+        from gateway.session_local import LocalSessionAdapter
+        runner = _make_runner()
+        authority = SimpleNamespace(sessions={})
+        adapter = LocalSessionAdapter(authority)
+        runner.session_authority = authority
+        runner._adapters_for_profile = lambda _profile: {Platform.LOCAL: adapter}
+        live = self._local_source()
+        adapter.register_source(live)
+        authority.sessions["sid"] = LiveSession(live, "route")
+        return runner, live
+
+    def test_the_live_local_source_is_an_approval_admin(self):
+        runner, live = self._wired_runner()
+        with patch("gateway.slash_access.policy_for_runner_source") as policy:
+            assert runner._is_approval_admin(live) is True
+        policy.assert_not_called()
+
+    def test_a_forged_copy_of_the_local_source_is_refused(self):
+        # Same field values (e.g. rebuilt from relay wire JSON or persisted session data), but not
+        # the object the local authority registered: never an approval admin, even with an
+        # allow-all messaging policy.
+        runner, live = self._wired_runner()
+        forged = SessionSource.from_dict(live.to_dict())
+        assert forged is not live and forged.to_dict() == live.to_dict()
+        with patch("gateway.slash_access.policy_for_runner_source", return_value=_ADMIN_POLICY):
+            assert runner._is_approval_admin(forged) is False
+
+    def test_a_local_source_on_a_runtime_without_a_local_adapter_is_refused(self):
+        runner, _live = self._wired_runner()
+        runner._adapters_for_profile = lambda _profile: {}
+        with patch("gateway.slash_access.policy_for_runner_source", return_value=_ADMIN_POLICY):
+            assert runner._is_approval_admin(self._local_source()) is False

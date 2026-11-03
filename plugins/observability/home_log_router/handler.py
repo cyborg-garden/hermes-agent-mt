@@ -20,7 +20,7 @@ class HomeLogHandler(logging.Handler):
     def __init__(
         self,
         policy: RoutePolicy,
-        out_queue: "queue.Queue[str]",
+        out_queue: queue.Queue[str],
         guard: ReentrancyGuard,
     ) -> None:
         super().__init__()

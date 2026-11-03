@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class HomeLogWorker:
     def __init__(
         self,
-        out_queue: "queue.Queue[str]",
+        out_queue: queue.Queue[str],
         throttle: Throttle,
         sender: Callable[[str], None],
         guard: ReentrancyGuard,

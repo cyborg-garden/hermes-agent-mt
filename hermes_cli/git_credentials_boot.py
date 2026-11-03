@@ -45,7 +45,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Optional
 
@@ -255,7 +255,7 @@ def gh_hosts_needs_refresh(
 def _parse_iso_z(value: str) -> float:
     return (
         datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
-        .replace(tzinfo=timezone.utc)
+        .replace(tzinfo=UTC)
         .timestamp()
     )
 
@@ -272,7 +272,7 @@ def _read_env_token(env_path: Path) -> Optional[tuple[str, str]]:
     match across ``TOKEN_VARS`` (in precedence order) wins.
     """
     try:
-        content = env_path.read_text(encoding="utf-8")
+        content = env_path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
     for key in TOKEN_VARS:
@@ -503,7 +503,7 @@ def _provision_app_mode(
 
 def _read_text(path: Path) -> Optional[str]:
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
 

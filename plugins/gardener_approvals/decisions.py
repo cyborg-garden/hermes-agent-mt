@@ -32,14 +32,14 @@ class ResolvedDecision:
     date: str   # ISO date string "YYYY-MM-DD", or "" if absent
 
 
-def read_open_decisions(decisions_path: str) -> List[Decision]:
+def read_open_decisions(decisions_path: str) -> list[Decision]:
     try:
-        with open(decisions_path, "r", encoding="utf-8") as fh:
+        with open(decisions_path, "r", encoding="utf-8-sig") as fh:
             text = fh.read()
     except OSError:
         return []
 
-    decisions: List[Decision] = []
+    decisions: list[Decision] = []
     for m in _OPEN_RE.finditer(text):
         dec_id = m.group(1)
         block_start = m.start()
@@ -64,7 +64,7 @@ def read_open_decisions(decisions_path: str) -> List[Decision]:
     return decisions
 
 
-def read_open_ids(decisions_path: str) -> List[str]:
+def read_open_ids(decisions_path: str) -> list[str]:
     return [d.id for d in read_open_decisions(decisions_path)]
 
 
@@ -77,7 +77,7 @@ def most_recent_resolved(path: str) -> Optional[ResolvedDecision]:
     chronologically, so last = newest).
     """
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             text = fh.read()
     except OSError:
         return None

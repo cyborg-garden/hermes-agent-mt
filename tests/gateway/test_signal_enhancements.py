@@ -19,7 +19,7 @@ def _make_signal_adapter(monkeypatch, account="+15551234567", **extra):
         monkeypatch.setenv("SIGNAL_GROUP_INVITE_POLICY", extra.pop("group_invite_policy"))
     if "profile_name" in extra:
         monkeypatch.setenv("SIGNAL_PROFILE_NAME", extra.pop("profile_name"))
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {
@@ -32,7 +32,7 @@ def _make_signal_adapter(monkeypatch, account="+15551234567", **extra):
 
 @pytest.fixture(autouse=True)
 def _reset_signal_scheduler():
-    from gateway.platforms.signal_rate_limit import _reset_scheduler
+    from plugins.platforms.signal.signal_rate_limit import _reset_scheduler
     _reset_scheduler()
     yield
     _reset_scheduler()
@@ -494,7 +494,6 @@ class TestProfileNameSetting:
         async def mock_rpc(method, params, rpc_id=None, **kwargs):
             if method == "updateProfile":
                 raise Exception("RPC timeout")
-            return None
 
         adapter._rpc = mock_rpc
 

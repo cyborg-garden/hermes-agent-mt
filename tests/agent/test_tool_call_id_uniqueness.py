@@ -123,17 +123,27 @@ def test_fixture_reproduces_the_incident_numbers():
 # --- The bug: unrepaired, the pipeline deletes the session ---------------
 
 
-def test_unrepaired_transcript_loses_almost_every_tool_result():
-    """Documents the pre-fix behaviour this change exists to prevent."""
+def test_unrepaired_transcript_keeps_results_but_still_collides():
+    """Documents what the repair still prevents after upstream v0.22.4.
+
+    Pre-merge, the unrepaired incident transcript lost 181 of 191 tool results
+    in the pre-call sanitizer (one result per distinct id). Upstream v0.22.4
+    independently rewrote ``_dedupe_tool_call_ids`` to track OUTSTANDING calls
+    (llama.cpp constant-id fix), so the sanitizer no longer deletes them. The
+    payload still carries only 10 distinct ids for 191 results, though: every
+    other id-keyed pass (compressor tool-pair sanitizer, Codex Responses
+    adapter, strict providers that 400 on duplicate ``tool_call_id``) still
+    sees round 2+ as duplicates of round 1. That is what the repair fixes.
+    """
     messages = build_incident_transcript()
     sanitized = _sanitize(messages)
     count, chars = count_visible_tool_results(sanitized)
-    assert count == INCIDENT_DISTINCT_IDS, (
-        "without the repair the request carries one result per distinct id"
+    assert (count, chars) == (INCIDENT_TOOL_RESULTS, INCIDENT_TOOL_CHARS)
+    _total, distinct, would_drop = audit_tool_call_ids(sanitized)
+    assert distinct == INCIDENT_DISTINCT_IDS, (
+        "without the repair the payload still reuses round-scoped ids"
     )
-    assert INCIDENT_TOOL_CHARS - chars == 374_884, (
-        "the model loses essentially all of its tool output"
-    )
+    assert would_drop == INCIDENT_DELETED_RESULTS
 
 
 # --- The fix -------------------------------------------------------------
@@ -332,17 +342,26 @@ def test_repair_logs_an_error_naming_the_real_numbers(caplog):
 
 
 def test_repair_runs_before_the_request_payload_is_assembled():
-    """The repair is worthless if it lands after api_messages is built."""
+    """The repair is worthless if it lands after api_messages is built.
+
+    Upstream v0.22.4 split run_conversation into per-iteration phases: the
+    repair lives in ``turn_iteration_prep.prepare_iteration`` and the request
+    copy is built in ``turn_request_assembly.assemble_api_request``. The loop
+    must run the prep phase before the assembly phase.
+    """
     import inspect
 
-    from agent import conversation_loop
+    from agent import conversation_loop, turn_iteration_prep
 
-    src = inspect.getsource(conversation_loop.run_conversation)
-    repair_at = src.find("repair_conversation_tool_call_ids(")
-    assemble_at = src.find("api_messages = []")
-    assert repair_at != -1, "run_conversation no longer repairs tool_call ids"
-    assert assemble_at != -1
-    assert repair_at < assemble_at, (
+    prep_src = inspect.getsource(turn_iteration_prep.prepare_iteration)
+    assert "repair_conversation_tool_call_ids(" in prep_src, (
+        "prepare_iteration no longer repairs tool_call ids"
+    )
+    loop_src = inspect.getsource(conversation_loop)
+    prep_at = loop_src.find("_run_phase(prepare_iteration,")
+    assemble_at = loop_src.find("_run_phase(assemble_api_request,")
+    assert prep_at != -1 and assemble_at != -1
+    assert prep_at < assemble_at, (
         "tool_call ids must be made unique before the request copy is built"
     )
 
@@ -351,9 +370,9 @@ def test_dropped_tool_results_are_reported_loudly():
     """The request-assembly invariant fires when results go missing."""
     import inspect
 
-    from agent import conversation_loop
+    from agent import turn_request_assembly
 
-    src = inspect.getsource(conversation_loop.run_conversation)
+    src = inspect.getsource(turn_request_assembly.assemble_api_request)
     assert "count_visible_tool_results(messages)" in src
     assert "count_visible_tool_results(api_messages)" in src
     assert "Request assembly dropped" in src

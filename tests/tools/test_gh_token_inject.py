@@ -50,7 +50,7 @@ def _detail(token="ghs_minted", ttl_seconds=3600):
     import datetime as _dt
 
     expires = (
-        _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=ttl_seconds)
+        _dt.datetime.now(_dt.UTC) + _dt.timedelta(seconds=ttl_seconds)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     return InstallationToken(token, expires)
 
@@ -133,7 +133,7 @@ class TestFailSoft:
         assert mint.call_count == 1
 
     def test_cooldown_expires(self):
-        with patch(MINT_TARGET, side_effect=RuntimeError("api down")) as mint:
+        with patch(MINT_TARGET, side_effect=RuntimeError("api down")):
             _sanitize_subprocess_env(_base_env())
         local_mod._GH_TOKEN_MINT_FAILURE_TS = (
             time.time() - local_mod._GH_TOKEN_MINT_COOLDOWN_SECONDS - 1

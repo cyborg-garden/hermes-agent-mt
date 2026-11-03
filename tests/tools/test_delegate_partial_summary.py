@@ -144,11 +144,12 @@ class TestLiveTranscriptIsPublished:
 
         from agent import conversation_loop
 
-        src = inspect.getsource(conversation_loop.run_conversation)
-        # Window is generous enough to span the explanatory comment, but far
-        # short of the loop body — the publish must happen at turn start.
-        head = src.split("messages = _ctx.messages", 1)[1][:1200]
-        assert "agent._session_messages = messages" in head, (
+        # The turn body moved into ``_run_conversation_turn`` (upstream loop
+        # decomposition); the publish sits right after the per-turn context is
+        # settled, before the loop starts.
+        src = inspect.getsource(conversation_loop._run_conversation_turn)
+        head = src.split("begin_voice_turn_route(agent, _ctx.messages", 1)[1][:1200]
+        assert "agent._session_messages = _ctx.messages" in head, (
             "run_conversation must publish its live transcript on the agent "
             "immediately after binding it, or a timed-out subagent's work "
             "cannot be salvaged."

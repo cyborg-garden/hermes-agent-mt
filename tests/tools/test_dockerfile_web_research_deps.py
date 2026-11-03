@@ -3,8 +3,9 @@
 The image sets ``HERMES_DISABLE_LAZY_INSTALLS=1``, so an opt-in backend whose
 SDK is not installed at build time can never work in a container. Fleet
 agents use the self-hosted Firecrawl (``web_extract``) and the keyless ddgs
-search fallback, so both SDKs must come in through the locked ``uv sync``
-(transitives pinned by uv.lock), not a runtime install.
+search fallback, so both SDKs must come in through the locked
+``pm.build_env`` venv build (transitives pinned by uv.lock), not a runtime
+install. The venv is sealed, so a later ``uv pip install`` is not an option.
 """
 from __future__ import annotations
 
@@ -24,11 +25,13 @@ WEB_RESEARCH_EXTRAS = {
 
 
 def _uv_sync_line() -> str:
+    """The pm.build_env RUN instruction, continuation lines joined."""
+    text = DOCKERFILE.read_text().replace("\\\n", " ")
     lines = [
-        line for line in DOCKERFILE.read_text().splitlines()
-        if line.startswith("RUN uv sync --frozen")
+        line for line in text.splitlines()
+        if line.startswith("RUN python3 -m pm.build_env ")
     ]
-    assert len(lines) == 1, f"expected one locked uv sync in Dockerfile, got {lines}"
+    assert len(lines) == 1, f"expected one pm.build_env venv build in Dockerfile, got {lines}"
     return lines[0]
 
 
@@ -56,10 +59,12 @@ def test_web_research_extras_are_exact_pinned() -> None:
         )
 
 
-def test_firecrawl_extra_pin_matches_lazy_deps() -> None:
-    from tools.lazy_deps import LAZY_DEPS
+def test_web_research_extras_have_pm_import_anchors() -> None:
+    """pm decides an extra is installed by importing its anchor module."""
+    from pm.extras import ANCHORS
 
-    assert tuple(_optional_deps()["firecrawl"]) == LAZY_DEPS["search.firecrawl"]
+    for extra, (_dist, module) in WEB_RESEARCH_EXTRAS.items():
+        assert ANCHORS.get(extra) == module, (extra, ANCHORS.get(extra))
 
 
 def test_web_research_extras_stay_out_of_all() -> None:

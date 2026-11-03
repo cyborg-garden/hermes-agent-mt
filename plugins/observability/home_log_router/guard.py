@@ -24,7 +24,7 @@ class ReentrancyGuard:
         with self._lock:
             return self._depth > 0
 
-    def __enter__(self) -> "ReentrancyGuard":
+    def __enter__(self) -> ReentrancyGuard:
         with self._lock:
             self._depth += 1
         return self

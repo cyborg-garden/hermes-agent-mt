@@ -188,7 +188,7 @@ def is_platform_admin(user_id: str, platform: str) -> bool:
 def _pre_gateway_dispatch(event=None, **kwargs):
     """Cache session context from incoming message event and resolve admin status."""
     if event is None:
-        return None
+        return
     source = event.source
     _session_ctx.platform = source.platform.value if source.platform else ""
     _session_ctx.chat_id = source.chat_id or ""
@@ -203,15 +203,15 @@ def _pre_gateway_dispatch(event=None, **kwargs):
     except Exception as e:
         logger.warning("swarm-map-policy: admin resolution failed (fail-closed): %s", e)
         _session_ctx.is_admin = False
-    return None  # Allow normal dispatch
+    return  # Allow normal dispatch
 
 
-def _on_session_start(session_id: str = None, **kwargs) -> None:
+def _on_session_start(session_id: str | None = None, **kwargs) -> None:
     """Log session start."""
     logger.debug("swarm-map-policy: session start %s", session_id)
 
 
-def _pre_tool_call(tool_name: str = None, **kwargs):
+def _pre_tool_call(tool_name: str | None = None, **kwargs):
     """Gate tool calls based on HSM policy. Returns None to allow, dict to block."""
     if tool_name and tool_name in admin_gated_tools():
         ctx = get_session_context()

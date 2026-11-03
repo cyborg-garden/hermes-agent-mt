@@ -272,7 +272,7 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
             **metric_dims,
         )
         return result
-    except Exception as exc:  # noqa: BLE001 — must never break the turn
+    except Exception as exc:
         logger.warning("intelligent_routing: pre_llm_call failed (inert): %s", exc)
         return None
 
@@ -318,7 +318,7 @@ def log_routing_decision(
                 ensure_ascii=False,
             ),
         )
-    except Exception:  # noqa: BLE001 — instrumentation must never break the turn
+    except Exception:
         logger.debug("intelligent_routing: metric emit failed", exc_info=True)
 
 

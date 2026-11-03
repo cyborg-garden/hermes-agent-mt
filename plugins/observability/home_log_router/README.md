@@ -27,7 +27,7 @@ That's the opt-in. It activates immediately. If no home channel is configured
 
 Records at **WARNING+** from these loggers (prefix-matched):
 
-- `gateway.platforms.signal` — reconnects / health (benign churn is DEBUG, so only real problems surface)
+- `plugins.platforms.signal` — reconnects / health (benign churn is DEBUG, so only real problems surface)
 - `agent.conversation_loop` — model cascade fallbacks
 - `model_tools` — provider errors during model calls
 

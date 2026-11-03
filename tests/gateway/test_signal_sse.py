@@ -7,7 +7,7 @@ should warn.
 """
 import logging
 
-from gateway.platforms.signal import _sse_reconnect_log_level, SSE_RETRY_DELAY_INITIAL
+from plugins.platforms.signal.adapter import _sse_reconnect_log_level, SSE_RETRY_DELAY_INITIAL
 
 
 def test_transient_reconnect_logs_at_debug():

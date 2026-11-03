@@ -15,7 +15,7 @@ from types import SimpleNamespace as NS
 from gateway.session import Platform
 
 # Trigger the shared discord mock (tests/gateway/conftest.py) before import.
-from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
+from plugins.platforms.discord.adapter import DiscordAdapter
 
 
 def _member(uid, name, display_name=None, global_name=None, discriminator="0", bot=False):

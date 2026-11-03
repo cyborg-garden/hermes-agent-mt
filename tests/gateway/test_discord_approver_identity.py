@@ -22,7 +22,7 @@ from gateway.slash_access import (
 )
 
 # Trigger the shared discord mock (tests/gateway/conftest.py) before import.
-from plugins.platforms.discord.adapter import (  # noqa: E402
+from plugins.platforms.discord.adapter import (
     ExecApprovalView,
     _discord_platform_identity,
     _resolve_exec_approval_admin_gate,

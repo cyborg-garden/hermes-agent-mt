@@ -1,0 +1,8 @@
+# actionlint knows only GitHub-hosted runner labels. An org admin names the
+# larger runners. Each one therefore reads as "unknown runner label" and hides
+# the real findings, unless this file declares it.
+self-hosted-runner:
+  labels:
+    # Fork: upstream's Blacksmith labels were swapped for GitHub-hosted ones.
+    # GitHub larger runners still used by matrices not yet migrated.
+    - windows-11-arm

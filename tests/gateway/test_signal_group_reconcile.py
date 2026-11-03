@@ -32,7 +32,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
     """Create a SignalAdapter with a tmp HERMES_HOME so tests never touch the real one.
 
     Sets HERMES_HOME (read live by ``get_hermes_home``) rather than monkeypatching
-    the function object. Patching ``gateway.platforms.signal.get_hermes_home`` via a
+    the function object. Patching ``plugins.platforms.signal.adapter.get_hermes_home`` via a
     dotted string leaks across tests when the module is imported for the first time
     *during* the patch (monkeypatch records the already-patched lambda as the
     "original" and never restores the real function). See the matching helper in
@@ -46,7 +46,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
     if "group_invite_policy" in extra:
         monkeypatch.setenv("SIGNAL_GROUP_INVITE_POLICY", extra.pop("group_invite_policy"))
 
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {
@@ -59,7 +59,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
 
 @pytest.fixture(autouse=True)
 def _reset_signal_scheduler():
-    from gateway.platforms.signal_rate_limit import _reset_scheduler
+    from plugins.platforms.signal.signal_rate_limit import _reset_scheduler
     _reset_scheduler()
     yield
     _reset_scheduler()
@@ -136,7 +136,7 @@ class TestReconcileDoesNotApproveOnAdminPresence:
 
         await adapter._reconcile_groups()
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         path = tmp_path / _APPROVED_GROUPS_FILE
         if path.exists():
             assert "grp-3" not in json.loads(path.read_text())
@@ -193,7 +193,7 @@ class TestReconcileSkipsIneligible:
 
         await adapter._reconcile_groups()
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         # Idempotent: an already-approved group should not create a persistence entry.
         path = tmp_path / _APPROVED_GROUPS_FILE
         if path.exists():
@@ -237,7 +237,7 @@ class TestReconcilePolicyParity:
 
         await adapter._reconcile_groups()
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         data = json.loads((tmp_path / _APPROVED_GROUPS_FILE).read_text())
         assert "grp-persist" in data
 
@@ -295,7 +295,7 @@ class TestReconcileRobustness:
 
         await adapter._reconcile_groups()
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         path = tmp_path / _APPROVED_GROUPS_FILE
         assert not path.exists(), "wildcard allow-all should not persist per-group entries"
 

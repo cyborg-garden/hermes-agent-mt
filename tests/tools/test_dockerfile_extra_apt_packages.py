@@ -5,8 +5,9 @@ agent (e.g. a file-converting public bot that needs headless LibreOffice) can
 carry system packages the rest of the fleet does not. The layer must:
 
 * default to empty, so every other agent's image is unchanged;
-* sit AFTER the heavy npm/uv dependency layers, so an agent that sets it
-  still shares their build cache;
+* sit AFTER the heavy Python dependency layer (pm.build_env) in the
+  python_deps stage, so an agent that sets it still shares that build cache.
+  The frontend builds in its own stage from runtime_base, so it is unaffected;
 * validate names before they reach apt (the value is shell-split).
 """
 from __future__ import annotations
@@ -35,8 +36,8 @@ def test_arg_defaults_to_empty() -> None:
 
 def test_layer_sits_after_dependency_layers_and_before_source() -> None:
     arg = _index(r"^ARG HERMES_EXTRA_APT_PACKAGES=")
-    assert arg > _index(r"^RUN uv sync --frozen")
-    assert arg > _index(r"^RUN npm install ")
+    assert arg > _index(r"^RUN python3 -m pm\.build_env ")
+    assert _index(r"^FROM runtime_base AS python_deps") < arg < _index(r"^FROM python_deps AS icons")
     assert arg < _index(r"^COPY --link --chmod=a\+rX,go-w \. \.")
 
 
@@ -53,7 +54,7 @@ def _accepts(name: str) -> bool:
     check = body.split("apt-get", 1)[0].replace("\\\n", "\n").rstrip().removesuffix("&&")
     script = check + "\nfi\n"
     r = subprocess.run(["sh", "-c", script], env={"HERMES_EXTRA_APT_PACKAGES": name, "LC_ALL": "C"},
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     return r.returncode == 0
 
 

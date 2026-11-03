@@ -44,7 +44,7 @@ def _make_signal_adapter(monkeypatch, account="+15551234567", **extra):
     monkeypatch.setenv("SIGNAL_GROUP_ALLOWED_USERS", extra.pop("group_allowed", ""))
     if "allowed_users" in extra:
         monkeypatch.setenv("SIGNAL_ALLOWED_USERS", extra.pop("allowed_users"))
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {
@@ -59,7 +59,7 @@ def _make_signal_adapter(monkeypatch, account="+15551234567", **extra):
 @pytest.fixture(autouse=True)
 def _reset_signal_scheduler():
     try:
-        from gateway.platforms.signal_rate_limit import _reset_scheduler
+        from plugins.platforms.signal.signal_rate_limit import _reset_scheduler
         _reset_scheduler()
         yield
         _reset_scheduler()
@@ -170,16 +170,6 @@ class TestSignalObserveOnly:
         adapter.handle_message = AsyncMock(side_effect=lambda e: capture_handler(e))
 
         # Build a group message without mention
-        envelope = {
-            "source": "+15559999999",
-            "sourceName": "Alice",
-            "sourceUuid": "aaaa-bbbb",
-            "dataMessage": {
-                "message": "hello everyone",
-                "groupInfo": {"groupId": "testgroup123"},
-                "timestamp": 1700000000000,
-            },
-        }
 
         # Patch _process_envelope to just test the mention filter logic.
         # Instead, we test by calling the internal method if it exists,

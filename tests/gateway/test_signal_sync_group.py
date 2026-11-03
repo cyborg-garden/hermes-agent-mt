@@ -14,7 +14,7 @@ from tests.gateway.test_signal_enhancements import _make_signal_adapter
 
 @pytest.fixture(autouse=True)
 def _reset_signal_scheduler():
-    from gateway.platforms.signal_rate_limit import _reset_scheduler
+    from plugins.platforms.signal.signal_rate_limit import _reset_scheduler
     _reset_scheduler()
     yield
     _reset_scheduler()
@@ -102,10 +102,8 @@ class TestSyncMessageGroupCreation:
             allowed_users="*",
         )
 
-        processed_messages = []
 
         # Save original _handle_envelope to check dataMessage promotion
-        original_handle = adapter._handle_envelope
 
         async def mock_rpc(method, params, rpc_id=None, **kwargs):
             return {"success": True}

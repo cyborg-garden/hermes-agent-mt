@@ -9,7 +9,7 @@ name: Upstream Sync
 # our divergence as a single merge commit rather than rewriting it each run.
 #
 # Syncs to the latest upstream RELEASE TAG, not the moving `main`. Upstream
-# ships tags like v2026.8.3; `main` is whatever landed minutes ago. Tracking
+# ships tags like v0.22.4 (formerly v2026.8.3); `main` is whatever landed minutes ago. Tracking
 # tags means we merge something upstream has itself decided is coherent, and
 # each sync is a nameable version rather than "whatever Monday 06:00 caught".
 # Override with the `ref` input to sync to an arbitrary ref (e.g. `main`) when
@@ -70,11 +70,18 @@ jobs:
             TARGET="$REF"
             echo "Using explicitly requested ref: $TARGET"
           else
-            # Latest upstream release tag by version order. Upstream tags look
-            # like v2026.8.3 / v2026.7.7.2 — `--sort=-v:refname` orders those
-            # correctly, where a plain lexical sort would put v2026.7.7 above
-            # v2026.7.30.
-            TARGET=$(git tag -l 'v*' --sort=-v:refname --merged upstream/main | head -1)
+            # Latest upstream release tag. Upstream moved from date tags
+            # (v2026.9.24) to semver (v0.22.4, plus +canary nightlies) in
+            # 2026-09. A plain `--sort=-v:refname` ranks 2026 above 0 and kept
+            # picking the stale date tag, so selection lives in a tested script:
+            # semver beats date tags, canary/pre-release tags never qualify.
+            # No `|| true`: the picker prints nothing (exit 0) when no tag
+            # qualifies, so a non-zero exit is a real failure (crash, broken
+            # git) and must fail the run, not fall back to the moving main.
+            # pipefail because the default `bash -e` shell does not set it,
+            # and a failed `git tag` would otherwise read as "no tags".
+            set -o pipefail
+            TARGET=$(git tag -l 'v*' --merged upstream/main | python3 scripts/ci/pick_upstream_tag.py)
             if [ -z "$TARGET" ]; then
               echo "::warning::No upstream release tag found; falling back to upstream/main"
               TARGET="upstream/main"

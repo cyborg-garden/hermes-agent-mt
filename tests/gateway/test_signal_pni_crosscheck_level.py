@@ -6,7 +6,7 @@ cross-checks it against `getUserStatus`. Per that method's docstring, signal-cli
 0.14.5), so the two values always differ — the mismatch branch is the expected
 steady state on every gateway start, not a fault.
 
-It used to log at WARNING. Because `gateway.platforms.signal` is in
+It used to log at WARNING. Because `plugins.platforms.signal.adapter` is in
 home_log_router's `DEFAULT_LOGGERS` and that router forwards at WARNING, every
 agent on the fleet relayed this line to the operator's home channel on each
 restart. That is the lifecycle spam home_log_router's own module docstring
@@ -33,7 +33,7 @@ PNI = "288ecc5e-30ea-4bbb-cccc-000000000002"
 @pytest.fixture
 def adapter():
     """A SignalAdapter with _rpc stubbed to the real-world PNI/ACI split."""
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
 
     a = SignalAdapter.__new__(SignalAdapter)
     a.account = "+15550001111"
@@ -60,7 +60,7 @@ async def _resolve(adapter):
 class TestPniCrossCheckLevel:
     @pytest.mark.asyncio
     async def test_mismatch_does_not_warn(self, adapter, caplog):
-        caplog.set_level(logging.DEBUG, logger="gateway.platforms.signal")
+        caplog.set_level(logging.DEBUG, logger="plugins.platforms.signal.adapter")
         await _resolve(adapter)
 
         offending = [
@@ -75,7 +75,7 @@ class TestPniCrossCheckLevel:
 
     @pytest.mark.asyncio
     async def test_mismatch_is_still_recorded_at_info(self, adapter, caplog):
-        caplog.set_level(logging.DEBUG, logger="gateway.platforms.signal")
+        caplog.set_level(logging.DEBUG, logger="plugins.platforms.signal.adapter")
         await _resolve(adapter)
 
         info_msgs = [
@@ -105,7 +105,7 @@ class TestPniCrossCheckLevel:
             return [{"uuid": ACI}]
 
         adapter._rpc = _rpc
-        caplog.set_level(logging.DEBUG, logger="gateway.platforms.signal")
+        caplog.set_level(logging.DEBUG, logger="plugins.platforms.signal.adapter")
         await _resolve(adapter)
 
         assert not [

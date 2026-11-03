@@ -34,7 +34,7 @@ class Throttle:
         self._last_prune = self._window_start
         self._suppressed = 0  # suppressions since last summary
 
-    def admit(self, message: str) -> List[str]:
+    def admit(self, message: str) -> list[str]:
         now = self._clock()
 
         # Roll the rate window if it has elapsed.
@@ -58,14 +58,14 @@ class Throttle:
         self._last_seen[message] = now
         self._prune(now)
 
-        out: List[str] = []
+        out: list[str] = []
         if self._suppressed > 0:
             out.append(self._summary(self._suppressed))
             self._suppressed = 0
         out.append(message)
         return out
 
-    def flush_summary(self) -> List[str]:
+    def flush_summary(self) -> list[str]:
         """Emit a pending "N suppressed" summary outside the admit path.
 
         A burst that ends with suppression (no following admit) would otherwise

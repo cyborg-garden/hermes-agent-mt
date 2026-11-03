@@ -23,10 +23,9 @@ from gateway.run import _context_id_for_source
 from gateway.config import Platform
 from tools.memory_tool import MemoryStore, derive_context_id
 
-# Patch get_memory_dir on the exact module object MemoryStore came from, not by
-# dotted string: tests/tools/test_memory_tool_import_fallback.py reimports
-# tools.memory_tool, so a later sys.modules entry can be a different object.
-_MEM_MOD = sys.modules[MemoryStore.__module__]
+# MemoryStore now lives in tools.memory_tool_store and resolves get_memory_dir via
+# ``from tools import memory_tool`` at call time, so patch the live
+# tools.memory_tool module (test_memory_tool_import_fallback.py reimports it).
 
 
 @dataclass
@@ -167,7 +166,7 @@ def test_string_platform_supported():
 def test_context_id_path_safe(tmp_path, monkeypatch):
     """A chat_id containing path-traversal sequences is sanitized by the store
     and stays under contexts/ — never escapes the memories dir."""
-    monkeypatch.setattr(_MEM_MOD, "get_memory_dir", lambda: tmp_path)
+    monkeypatch.setattr(sys.modules["tools.memory_tool"], "get_memory_dir", lambda: tmp_path)
 
     cid = _context_id_for_source(FakeSource(Platform.SLACK, "group", "../../etc/x"))
     assert cid is not None
@@ -215,7 +214,7 @@ class TestLiveDerivationPath:
 def test_derivation_matches_stored_context_id(tmp_path, monkeypatch):
     """The colon-delimited id resolves to a single directory under contexts/
     (the ':' separators are kept verbatim, not treated as path boundaries)."""
-    monkeypatch.setattr(_MEM_MOD, "get_memory_dir", lambda: tmp_path)
+    monkeypatch.setattr(sys.modules["tools.memory_tool"], "get_memory_dir", lambda: tmp_path)
     cid = _context_id_for_source(FakeSource(Platform.TELEGRAM, "dm", "u1"))
     store = MemoryStore(context_id=cid)
     store.load_from_disk()

@@ -32,7 +32,7 @@ ROUTED_NONE = {"reasoning_effort": "none"}
 
 @pytest.fixture
 def transport():
-    import agent.transports.chat_completions  # noqa: F401
+    import agent.transports.chat_completions
     return get_transport("chat_completions")
 
 
@@ -150,7 +150,9 @@ def test_reasoning_overrides_is_the_supported_route_to_the_same_wire_shape(trans
         max_tokens=200,
     )
     assert kwargs["reasoning_effort"] == "none"
-    assert kwargs["extra_body"]["think"] is False   # inert on /v1, kept for /api/chat
+    # Upstream v0.22.4 stopped emitting ollama's native ``think`` flag on the
+    # OpenAI-compatible route (it was inert on /v1); if present it must be off.
+    assert (kwargs.get("extra_body") or {}).get("think", False) is False
 
     kwargs.pop("timeout", None)
     seen = _capture_wire_body(**kwargs)

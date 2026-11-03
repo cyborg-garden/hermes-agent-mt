@@ -50,7 +50,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 from hermes_constants import get_hermes_home
 from utils import atomic_replace
@@ -72,13 +72,13 @@ def moderation_sync_mode() -> str:
     return raw
 
 
-def sync_guild_ids() -> Set[str]:
+def sync_guild_ids() -> set[str]:
     """Guilds whose moderation events propagate (empty = all guilds)."""
     raw = os.getenv("DISCORD_MODERATION_SYNC_GUILDS", "")
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
-def exempt_user_ids() -> Set[str]:
+def exempt_user_ids() -> set[str]:
     """Snowflakes that are never auto-revoked (break-glass operators)."""
     raw = os.getenv("DISCORD_MODERATION_SYNC_EXEMPT", "")
     return {part.strip() for part in raw.split(",") if part.strip()}
@@ -131,7 +131,7 @@ class DenyStore:
         if not path.exists():
             return {}
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             if not isinstance(data, dict):
                 raise ValueError("deny store is not a JSON object")
             return data

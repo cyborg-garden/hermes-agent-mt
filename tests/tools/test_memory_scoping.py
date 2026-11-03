@@ -27,18 +27,17 @@ import pytest
 
 from tools.memory_tool import MemoryStore, ENTRY_DELIMITER
 
-# Patch get_memory_dir on the exact module object MemoryStore was defined in,
-# not by dotted string. tests/tools/test_memory_tool_import_fallback.py deletes
-# and re-imports tools.memory_tool, so a later ``sys.modules["tools.memory_tool"]``
-# can be a different module object than the one holding this class's methods.
-# Resolving via the class keeps the patch pointed at the right globals.
-_MEM_MOD = sys.modules[MemoryStore.__module__]
+# MemoryStore now lives in tools.memory_tool_store and resolves get_memory_dir
+# through ``from tools import memory_tool`` at call time, so patch whichever
+# tools.memory_tool module object is live when the fixture runs
+# (tests/tools/test_memory_tool_import_fallback.py deletes and re-imports it).
 
 
 @pytest.fixture
 def mem_dir(tmp_path, monkeypatch):
     """Patch get_memory_dir to a temp dir; return the dir."""
-    monkeypatch.setattr(_MEM_MOD, "get_memory_dir", lambda: tmp_path)
+    import tools.memory_tool
+    monkeypatch.setattr(sys.modules["tools.memory_tool"], "get_memory_dir", lambda: tmp_path)
     return tmp_path
 
 

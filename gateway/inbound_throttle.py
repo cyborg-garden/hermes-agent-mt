@@ -39,7 +39,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Deque, Dict, Optional, Set
 
@@ -85,7 +85,7 @@ _ALLOW = Verdict(True, "")
 
 
 def _utc_day() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _secure_write(path: Path, data: str) -> None:
@@ -115,14 +115,14 @@ class InboundThrottle:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._user_windows: Dict[str, Deque[float]] = {}
-        self._scope_windows: Dict[str, Deque[float]] = {}
-        self._notify_last: Dict[str, float] = {}
+        self._user_windows: dict[str, deque[float]] = {}
+        self._scope_windows: dict[str, deque[float]] = {}
+        self._notify_last: dict[str, float] = {}
         self._last_ledger_error_log = 0.0
-        self._warned_env_vars: Set[str] = set()
+        self._warned_env_vars: set[str] = set()
         # Last cumulative session total recorded per session key — see
         # record_session_spend. Process-local, like the sliding windows.
-        self._session_spend_baseline: Dict[str, float] = {}
+        self._session_spend_baseline: dict[str, float] = {}
 
     # ── Config (read at check time, malformed → default + one WARNING) ──
 
@@ -171,7 +171,7 @@ class InboundThrottle:
         }
 
     @staticmethod
-    def _exempt_users() -> Set[str]:
+    def _exempt_users() -> set[str]:
         raw = os.getenv("GATEWAY_THROTTLE_EXEMPT_USERS", "")
         return {part.strip() for part in raw.split(",") if part.strip()}
 
@@ -188,7 +188,7 @@ class InboundThrottle:
         if not path.exists():
             # First run: no ledger yet is not an error — start a fresh day.
             return {"day": _utc_day(), "turns": 0, "spend_usd": 0.0}
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
             raise ValueError("ledger is not a JSON object")
         day = data.get("day")
@@ -221,7 +221,7 @@ class InboundThrottle:
     # ── Sliding windows ──
 
     @staticmethod
-    def _window_counts(window: Deque[float], now: float) -> tuple:
+    def _window_counts(window: deque[float], now: float) -> tuple:
         """Prune entries older than 1h; return (count_last_minute, count_last_hour)."""
         cutoff_hour = now - 3600.0
         while window and window[0] <= cutoff_hour:

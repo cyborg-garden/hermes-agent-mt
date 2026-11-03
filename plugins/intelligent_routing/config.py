@@ -56,10 +56,10 @@ _DEFAULT_CHEAP_PROVIDER = "openrouter"
 #
 # NOTE: anything set here is merged into the JSON body LAST by the OpenAI SDK,
 # so it OVERRIDES a same-named typed parameter the transport emitted.
-_DEFAULT_CHEAP_EXTRA_BODY: Dict[str, Any] = {}
+_DEFAULT_CHEAP_EXTRA_BODY: dict[str, Any] = {}
 
 
-def _load_config() -> Dict[str, Any]:
+def _load_config() -> dict[str, Any]:
     """Load the full config dict (``{}`` on any failure). Patched in tests."""
     from hermes_cli.config import load_config
 
@@ -67,10 +67,10 @@ def _load_config() -> Dict[str, Any]:
     return cfg if isinstance(cfg, dict) else {}
 
 
-def _routing_section() -> Dict[str, Any]:
+def _routing_section() -> dict[str, Any]:
     try:
         cfg = _load_config()
-    except Exception as exc:  # noqa: BLE001 — config is best-effort; fail OFF
+    except Exception as exc:
         logger.debug("intelligent_routing: could not load config: %s", exc)
         return {}
     section = cfg.get("routing") if isinstance(cfg, dict) else None
@@ -105,7 +105,7 @@ def cheap_tier_target() -> tuple[str, str]:
     return model, provider
 
 
-def cheap_extra_body() -> Dict[str, Any]:
+def cheap_extra_body() -> dict[str, Any]:
     """Return ``routing.cheap_extra_body`` as a dict (``{}`` when unset/malformed).
 
     Returns a shallow copy so callers cannot mutate the loaded config.

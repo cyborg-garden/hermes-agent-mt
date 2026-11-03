@@ -434,7 +434,7 @@ def _write_app_env(home: Path, *, extra: str = "") -> None:
 
 def _iso_in(seconds: float) -> str:
     return (
-        _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=seconds)
+        _dt.datetime.now(_dt.UTC) + _dt.timedelta(seconds=seconds)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

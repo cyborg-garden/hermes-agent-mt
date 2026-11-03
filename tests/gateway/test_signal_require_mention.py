@@ -14,7 +14,7 @@ from gateway.config import PlatformConfig
 def _make_signal_adapter(monkeypatch, account="+15551234567", **extra):
     """Create a SignalAdapter with test defaults, mirroring test_signal_enhancements."""
     monkeypatch.setenv("SIGNAL_GROUP_ALLOWED_USERS", extra.pop("group_allowed", "*"))
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {

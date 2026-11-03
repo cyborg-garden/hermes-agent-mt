@@ -140,7 +140,7 @@ def test_reactive_fallback_engages_under_a_routed_turn():
     model fails mid-turn, try_activate_fallback treats cheap as the current
     'primary' (since _primary_runtime == cheap and _fallback_activated is False)
     and arms the cheap-provider cooldown correctly."""
-    from agent.chat_completion_helpers import try_activate_fallback  # noqa: F401
+    from agent.chat_completion_helpers import try_activate_fallback
     from agent.error_classifier import FailoverReason
 
     a = _make_agent()

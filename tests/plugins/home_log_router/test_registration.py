@@ -85,7 +85,7 @@ def test_forwards_record_to_send_message_home(monkeypatch):
     sent, evt = _capture_sends(monkeypatch)
     try:
         registration.register(FakeCtx())
-        log = logging.getLogger("gateway.platforms.signal")
+        log = logging.getLogger("plugins.platforms.signal.adapter")
         log.setLevel(logging.DEBUG)
         log.warning("disk full on %s", "agent-7")
         assert evt.wait(timeout=2.0), "log was never forwarded to home"

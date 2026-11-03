@@ -247,6 +247,6 @@ A candid list of what this mode does not do yet:
 ## See also
 
 - [Codex App-Server Runtime](codex-app-server-runtime.md) — the other alternate-runtime integration
-- [Proxy mode](/user-guide/messaging/matrix#proxy-mode-e2ee-on-macos) — delegating to a remote Hermes API server instead
-- [Security](/user-guide/security) — pairing, group approval, command approval
-- [Environment Variables](/reference/environment-variables)
+- [Proxy mode](../messaging/matrix.md#proxy-mode-e2ee-on-macos) — delegating to a remote Hermes API server instead
+- [Security](../security.md) — pairing, group approval, command approval
+- [Environment Variables](../../reference/environment-variables.md)

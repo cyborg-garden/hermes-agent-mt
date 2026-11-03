@@ -120,7 +120,7 @@ class TestTavilySiteOperator:
 
         captured = {}
 
-        def fake_request(endpoint, payload):
+        def fake_request(endpoint, payload, **_kwargs):
             captured["endpoint"] = endpoint
             captured["payload"] = payload
             return {"results": []}
@@ -139,7 +139,7 @@ class TestTavilySiteOperator:
 
         captured = {}
 
-        def fake_request(endpoint, payload):
+        def fake_request(endpoint, payload, **_kwargs):
             captured["payload"] = payload
             return {"results": []}
 

@@ -374,7 +374,7 @@ class TestGatedToolWarningAtStartup:
         )
         out = subprocess.run(
             [sys.executable, "-c", _STARTUP_PROBE],
-            cwd=str(repo), env=env, capture_output=True, text=True, timeout=180,
+            cwd=str(repo), env=env, capture_output=True, text=True, timeout=180, check=False,
         )
         assert out.returncode == 0, out.stderr[-2000:]
         result = json.loads(out.stdout.strip().splitlines()[-1])

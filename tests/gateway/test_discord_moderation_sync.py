@@ -27,10 +27,10 @@ from gateway.config import PlatformConfig
 
 # Importing the production modules triggers the shared discord mock from
 # tests/gateway/conftest.py.
-import plugins.platforms.discord.adapter as discord_platform  # noqa: E402
-from plugins.platforms.discord import moderation_sync  # noqa: E402
-from plugins.platforms.discord.adapter import (  # noqa: E402
-    DiscordAdapter,
+import plugins.platforms.discord.adapter as discord_platform
+from plugins.platforms.discord import moderation_sync
+from plugins.platforms.discord.adapter import DiscordAdapter
+from plugins.platforms.discord.adapter_component_auth import (
     _component_check_auth,
 )
 
@@ -280,7 +280,7 @@ async def _connect_adapter(monkeypatch):
         "gateway.status.acquire_scoped_lock",
         lambda scope, identity, metadata=None: (True, None),
     )
-    monkeypatch.setattr("gateway.status.release_scoped_lock", lambda scope, identity: None)
+    monkeypatch.setattr("gateway.status_scoped_locks.release_scoped_lock", lambda scope, identity: None)
 
     intents = SimpleNamespace(
         message_content=False,

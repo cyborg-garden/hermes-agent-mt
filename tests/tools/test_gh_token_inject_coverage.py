@@ -28,6 +28,14 @@ import tools.environments.local as local_mod
 HOME_FINALIZER = "apply_subprocess_home_env"
 INJECTOR = "_inject_github_app_gh_token"
 
+# Upstream v0.22.4 centralized child-env construction: every scrubbing spawn
+# surface funnels through ``_finalize_child_env`` (the guard every child-env
+# builder shares), which finalizes HOME via ``_apply_profile_home`` ->
+# ``apply_subprocess_home_env``. The injection therefore lives once, in that
+# shared guard, and every builder must reach it.
+SHARED_GUARD = "_finalize_child_env"
+HOME_WRAPPER = "_apply_profile_home"
+
 # Builders known to exist today. Kept as a floor, not as the definition: the
 # scan finds builders, this set only proves the scan is actually finding them.
 KNOWN_BUILDERS = {
@@ -35,6 +43,13 @@ KNOWN_BUILDERS = {
     "hermes_subprocess_env",
     "_make_run_env",
 }
+
+# Functions allowed to finalize HOME without going through the shared guard:
+# the guard itself, the wrapper, and build_subprocess_env's scrub_secrets=False
+# branch, which keeps the base env byte-for-byte (git credential flows,
+# bws/op) — its ambient GitHub credentials are never stripped, so there is no
+# dead hosts.yml fallback to defend against.
+HOME_FINALIZER_ALLOWLIST = {SHARED_GUARD, HOME_WRAPPER, "build_subprocess_env"}
 
 
 def _called_names(node: ast.AST) -> set[str]:
@@ -49,17 +64,40 @@ def _called_names(node: ast.AST) -> set[str]:
     return names
 
 
-def _env_builders() -> dict[str, set[str]]:
+def _functions() -> dict[str, ast.AST]:
     source = Path(local_mod.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    builders: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    return {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _reaches(funcs: dict[str, ast.AST], start: str, target: str) -> bool:
+    """Does ``start`` call ``target`` directly or through module-local helpers?"""
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in funcs:
             continue
-        calls = _called_names(node)
-        if HOME_FINALIZER in calls:
-            builders[node.name] = calls
-    return builders
+        seen.add(name)
+        calls = _called_names(funcs[name])
+        if target in calls:
+            return True
+        stack.extend(calls & funcs.keys())
+    return False
+
+
+def _env_builders() -> dict[str, ast.AST]:
+    """Functions that finalize a child's HOME (and so build a spawn env)."""
+    funcs = _functions()
+    return {
+        name: node for name, node in funcs.items()
+        if name not in HOME_FINALIZER_ALLOWLIST
+        and _reaches(funcs, name, HOME_FINALIZER)
+    }
 
 
 def test_scan_finds_the_known_builders():
@@ -70,11 +108,12 @@ def test_scan_finds_the_known_builders():
 
 
 def test_every_env_builder_injects_a_fresh_gh_token():
+    funcs = _functions()
     offenders = sorted(
-        name for name, calls in _env_builders().items() if INJECTOR not in calls
+        name for name in _env_builders() if not _reaches(funcs, name, INJECTOR)
     )
     assert not offenders, (
-        f"{offenders} build a subprocess environment but never call {INJECTOR}(). "
+        f"{offenders} build a subprocess environment but never reach {INJECTOR}(). "
         f"Without it the spawn authenticates to GitHub out of the boot-written "
         f"~/.config/gh/hosts.yml, which holds a GitHub App token that expires "
         f"within the hour and is refreshed on no schedule the spawn controls. "
@@ -85,34 +124,21 @@ def test_every_env_builder_injects_a_fresh_gh_token():
 def test_injection_runs_after_home_is_final():
     """Ordering is load-bearing: the mint layer derives the agent's .env dir as
     HOME's parent, so injecting before HOME is finalized reads the wrong home
-    (or none) and silently declines to inject."""
-    source = Path(local_mod.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    checked = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        finalize_lines = [
-            c.lineno
-            for c in ast.walk(node)
-            if isinstance(c, ast.Call)
-            and isinstance(c.func, ast.Name)
-            and c.func.id == HOME_FINALIZER
-        ]
-        inject_lines = [
-            c.lineno
-            for c in ast.walk(node)
-            if isinstance(c, ast.Call)
-            and isinstance(c.func, ast.Name)
-            and c.func.id == INJECTOR
-        ]
-        if not finalize_lines or not inject_lines:
-            continue
-        checked += 1
-        assert min(inject_lines) > max(finalize_lines), (
-            f"{node.name}: {INJECTOR}() must run after {HOME_FINALIZER}()"
-        )
-    assert checked == len(KNOWN_BUILDERS), (
-        f"ordering was only checked in {checked} builders; expected "
-        f"{len(KNOWN_BUILDERS)}"
+    (or none) and silently declines to inject. The injection lives in the
+    shared guard; it must come after the guard finalizes HOME."""
+    guard = _functions()[SHARED_GUARD]
+    home_lines = [
+        c.lineno for c in ast.walk(guard)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        and c.func.id in (HOME_WRAPPER, HOME_FINALIZER)
+    ]
+    inject_lines = [
+        c.lineno for c in ast.walk(guard)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        and c.func.id == INJECTOR
+    ]
+    assert home_lines, f"{SHARED_GUARD} no longer finalizes HOME"
+    assert inject_lines, f"{SHARED_GUARD} no longer calls {INJECTOR}()"
+    assert min(inject_lines) > max(home_lines), (
+        f"{SHARED_GUARD}: {INJECTOR}() must run after HOME is finalized"
     )

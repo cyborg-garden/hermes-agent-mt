@@ -97,6 +97,7 @@ def _install_fake_telegram(monkeypatch, *, with_chat_member_handler: bool):
     ext.Application = object
     ext.CommandHandler = object
     ext.CallbackQueryHandler = object
+    ext.InlineQueryHandler = object
     ext.MessageHandler = object
     ext.TypeHandler = object
     ext.ContextTypes = SimpleNamespace(DEFAULT_TYPE=object)

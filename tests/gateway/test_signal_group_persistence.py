@@ -27,7 +27,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
 
     We point HERMES_HOME (the env var ``get_hermes_home`` reads) at ``tmp_path``
     rather than monkeypatching the ``get_hermes_home`` function object. Patching
-    the function via the dotted string ``gateway.platforms.signal.get_hermes_home``
+    the function via the dotted string ``plugins.platforms.signal.adapter.get_hermes_home``
     is a cross-test-pollution hazard: if the signal module has not been imported
     yet, the *first* patch of ``hermes_constants.get_hermes_home`` runs before the
     module is imported, so when the second patch triggers the import, signal.py's
@@ -45,7 +45,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
     if "group_invite_policy" in extra:
         monkeypatch.setenv("SIGNAL_GROUP_INVITE_POLICY", extra.pop("group_invite_policy"))
 
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {
@@ -58,7 +58,7 @@ def _make_signal_adapter(monkeypatch, tmp_path, account="+15551234567", **extra)
 
 @pytest.fixture(autouse=True)
 def _reset_signal_scheduler():
-    from gateway.platforms.signal_rate_limit import _reset_scheduler
+    from plugins.platforms.signal.signal_rate_limit import _reset_scheduler
     _reset_scheduler()
     yield
     _reset_scheduler()
@@ -105,7 +105,7 @@ class TestInviteWritesPersistenceFile:
 
         await _send_invite_envelope(adapter, "group-aaa-111")
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         persistence_file = tmp_path / _APPROVED_GROUPS_FILE
         assert persistence_file.exists(), "Persistence file was not created after invite"
 
@@ -118,7 +118,7 @@ class TestInviteWritesPersistenceFile:
 
         await _send_invite_envelope(adapter, "group-bbb-222")
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         data = json.loads((tmp_path / _APPROVED_GROUPS_FILE).read_text())
         assert "group-bbb-222" in data
 
@@ -136,7 +136,7 @@ class TestInviteWritesPersistenceFile:
             sender_name="Alice",
         )
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         data = json.loads((tmp_path / _APPROVED_GROUPS_FILE).read_text())
         entry = data["group-ccc-333"]
 
@@ -160,7 +160,7 @@ class TestAdapterLoadsPersistedGroups:
 
     def test_init_loads_persisted_groups_from_file(self, monkeypatch, tmp_path):
         """A new adapter must load group IDs from the persistence file into group_allow_from."""
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         existing = {
             "group-persisted-001": {
                 "added_by": "+15559999999",
@@ -190,7 +190,7 @@ class TestPersistenceUnionWithEnvGroups:
 
     def test_persisted_and_env_groups_both_present(self, monkeypatch, tmp_path):
         """group_allow_from must contain groups from both the env var and the file."""
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         existing = {
             "group-from-file": {
                 "added_by": "+15558888888",
@@ -217,7 +217,7 @@ class TestCorruptedFileHandling:
 
     def test_corrupted_json_file_init_succeeds(self, monkeypatch, tmp_path):
         """Corrupted persistence file must not crash init; env groups are preserved."""
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         (tmp_path / _APPROVED_GROUPS_FILE).write_text("{invalid json!!!}")
 
         adapter = _make_signal_adapter(
@@ -231,7 +231,7 @@ class TestCorruptedFileHandling:
 
     def test_corrupted_json_file_does_not_load_bad_groups(self, monkeypatch, tmp_path):
         """Corrupted persistence file must not add any groups (no partial state)."""
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         (tmp_path / _APPROVED_GROUPS_FILE).write_text("{invalid json!!!")
 
         adapter = _make_signal_adapter(monkeypatch, tmp_path)
@@ -319,7 +319,7 @@ class TestReInviteNoduplicates:
 
         await _send_invite_envelope(adapter, "env-group-reinvited")
 
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         persistence_file = tmp_path / _APPROVED_GROUPS_FILE
         assert persistence_file.exists()
         data = json.loads(persistence_file.read_text())
@@ -333,7 +333,7 @@ class TestReInviteNoduplicates:
 class TestHelperDoesNotLeakHermesHome:
     """Regression for a cross-test pollution bug.
 
-    The old helper monkeypatched ``gateway.platforms.signal.get_hermes_home``
+    The old helper monkeypatched ``plugins.platforms.signal.adapter.get_hermes_home``
     via a dotted string. When the signal module was imported for the first
     time *during* that patch (because ``hermes_constants.get_hermes_home`` was
     patched first, then the signal-module patch triggered the import),
@@ -351,10 +351,10 @@ class TestHelperDoesNotLeakHermesHome:
         self, monkeypatch, tmp_path
     ):
         import hermes_constants
-        import gateway.platforms.signal as signal_mod
+        import plugins.platforms.signal.adapter as signal_mod
 
         # Persist a group under this test's home so a leak would be observable.
-        from gateway.platforms.signal import _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import _APPROVED_GROUPS_FILE
         (tmp_path / _APPROVED_GROUPS_FILE).write_text('{"leaked-group": {}}')
 
         _make_signal_adapter(monkeypatch, tmp_path, allowed_users="+15559999999")
@@ -366,7 +366,7 @@ class TestHelperDoesNotLeakHermesHome:
     def test_fresh_adapter_reads_current_hermes_home(self, monkeypatch, tmp_path):
         """After the helper runs for one home, a plain adapter built against a
         different HERMES_HOME must see that new home, proving no stale binding."""
-        from gateway.platforms.signal import SignalAdapter, _APPROVED_GROUPS_FILE
+        from plugins.platforms.signal.adapter import SignalAdapter, _APPROVED_GROUPS_FILE
 
         # First: run the helper pointed at tmp_path with a persisted group.
         (tmp_path / _APPROVED_GROUPS_FILE).write_text('{"old-home-group": {}}')

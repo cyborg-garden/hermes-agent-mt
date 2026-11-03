@@ -67,7 +67,7 @@ def has_approval_intent(text: str) -> bool:
     return approve or hold
 
 
-def parse_reply(text: str, decisions: List[Decision]) -> ParseResult:
+def parse_reply(text: str, decisions: list[Decision]) -> ParseResult:
     if not decisions:
         return ParseResult(matched=False)
     open_ids = [d.id for d in decisions]

@@ -88,7 +88,7 @@ def _rewrite_tool_call_id(tc: Any, old_id: str, new_id: str) -> Any:
     return clone
 
 
-def _mint_unique_id(base_id: str, used: set, counters: Dict[str, int]) -> str:
+def _mint_unique_id(base_id: str, used: set, counters: dict[str, int]) -> str:
     """Derive an unused id from ``base_id``.
 
     Deterministic by construction: the same conversation prefix always yields
@@ -109,7 +109,7 @@ def _mint_unique_id(base_id: str, used: set, counters: Dict[str, int]) -> str:
             return candidate
 
 
-def audit_tool_call_ids(messages: List[Dict[str, Any]]) -> Tuple[int, int, int]:
+def audit_tool_call_ids(messages: list[dict[str, Any]]) -> tuple[int, int, int]:
     """Return ``(tool_results, distinct_ids, results_that_would_be_dropped)``.
 
     A pure read used for logging and for tests.  ``results_that_would_be_dropped``
@@ -134,7 +134,7 @@ def audit_tool_call_ids(messages: List[Dict[str, Any]]) -> Tuple[int, int, int]:
 
 
 def repair_conversation_tool_call_ids(
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
     logger: Optional[Any] = None,
     model: str = "",
@@ -165,12 +165,12 @@ def repair_conversation_tool_call_ids(
     pre_total, pre_distinct, pre_dropped = audit_tool_call_ids(messages)
 
     used: set = set()
-    counters: Dict[str, int] = {}
+    counters: dict[str, int] = {}
     renamed = 0
     # Original id -> queue of ids minted for it in the round being walked.
     # Cleared by every assistant/user/system boundary, which is what makes the
     # pairing positional rather than global.
-    round_map: Dict[str, List[str]] = {}
+    round_map: dict[str, list[str]] = {}
 
     for msg in messages:
         if not isinstance(msg, dict):
@@ -190,7 +190,7 @@ def repair_conversation_tool_call_ids(
         if not isinstance(tcs, list) or not tcs:
             continue
 
-        new_tcs: List[Any] = []
+        new_tcs: list[Any] = []
         within: set = set()
         changed = False
         for tc in tcs:
@@ -231,7 +231,7 @@ def repair_conversation_tool_call_ids(
     return renamed
 
 
-def count_visible_tool_results(messages: List[Dict[str, Any]]) -> Tuple[int, int]:
+def count_visible_tool_results(messages: list[dict[str, Any]]) -> tuple[int, int]:
     """Return ``(tool_result_count, total_content_chars)`` for ``messages``.
 
     Used as a request-time invariant: whatever the assembly pipeline does to

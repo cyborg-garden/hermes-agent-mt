@@ -50,7 +50,7 @@ def _isolate_signal_env(monkeypatch):
 
 def _make_signal_adapter(monkeypatch, account=BOT_PHONE, **extra):
     monkeypatch.setenv("SIGNAL_GROUP_ALLOWED_USERS", extra.pop("group_allowed", "*"))
-    from gateway.platforms.signal import SignalAdapter
+    from plugins.platforms.signal.adapter import SignalAdapter
     config = PlatformConfig()
     config.enabled = True
     config.extra = {

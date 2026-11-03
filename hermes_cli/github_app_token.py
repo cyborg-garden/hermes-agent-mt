@@ -94,7 +94,7 @@ def read_app_credentials(env_path: Path) -> Optional[AppCredentials]:
     the static-PAT path — App auth is strictly opt-in per agent.
     """
     try:
-        content = env_path.read_text(encoding="utf-8")
+        content = env_path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
     app_id = _read_env_var(content, _APP_ID_VAR)
@@ -207,7 +207,7 @@ def resolve_installation_id(jwt_token: str, creds: AppCredentials) -> str:
     return str(installs[0]["id"])
 
 
-def mint_installation_token(creds: AppCredentials) -> Tuple[str, str]:
+def mint_installation_token(creds: AppCredentials) -> tuple[str, str]:
     """Mint a fresh installation token. Returns ``(token, expires_at_iso)``."""
     jwt_token = build_app_jwt(creds.app_id, creds.private_key_pem)
     installation_id = resolve_installation_id(jwt_token, creds)
@@ -236,21 +236,21 @@ def cache_path(home_dir: Path, name: str = "github_app_token.json") -> Path:
 def _expires_epoch(iso: str) -> float:
     # GitHub returns e.g. "2026-01-01T00:00:00Z".
     return _dt.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=_dt.timezone.utc
+        tzinfo=_dt.UTC
     ).timestamp()
 
 
-def _load_cache_raw(path: Path) -> Optional[Tuple[str, str]]:
+def _load_cache_raw(path: Path) -> Optional[tuple[str, str]]:
     """``(token, expires_at_iso)`` from the cache, or ``None`` if absent/corrupt."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         _expires_epoch(data["expires_at"])  # validate parseability
         return data["token"], data["expires_at"]
     except Exception:
         return None  # absent or corrupt → caller re-mints
 
 
-def _load_cache(path: Path) -> Optional[Tuple[str, float]]:
+def _load_cache(path: Path) -> Optional[tuple[str, float]]:
     raw = _load_cache_raw(path)
     return (raw[0], _expires_epoch(raw[1])) if raw else None
 

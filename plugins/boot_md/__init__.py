@@ -69,7 +69,7 @@ def _on_session_start(session_id: str = "", **kwargs) -> None:
     if not boot_file.exists():
         return
 
-    content = boot_file.read_text(encoding="utf-8").strip()
+    content = boot_file.read_text(encoding="utf-8-sig").strip()
     if not content:
         return
 

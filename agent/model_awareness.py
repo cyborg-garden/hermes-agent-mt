@@ -16,17 +16,32 @@ start, before ``restore_primary_runtime``, and are *not* updated by
 agent fields means a fallback turn shows the fallback backend, not the
 configured primary.
 
-Placement: it is appended to the current turn's user message (call-time only,
-never persisted to the session DB), mirroring the existing memory-prefetch /
-``pre_llm_call`` plugin injection. It deliberately never touches the cached
-system prompt — that prefix must stay byte-stable for prompt caching.
+Placement: it is appended to the current turn's user message and stamped into
+that message's ``api_content`` sidecar at turn start, exactly like the
+memory-prefetch / ``pre_llm_call`` injections, so what turn N sends is what
+turn N+1 replays and the prompt-cache prefix stays byte-stable. If a fallback
+swaps the model mid-turn, the wire assembly rewrites the line (and the live
+sidecar) to the new model; that turn's cache is already lost to the model
+change. It never touches the cached system prompt.
+
+Set ``HERMES_MODEL_AWARENESS=0`` to disable (the test suite does, so
+upstream's byte-exact wire tests are unaffected).
 
 Contents are two non-secret slugs (model + provider); no credentials, no PII.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, List
+
+_LINE_PREFIX = "[Current model:"
+_SEPARATOR = "\n\n"
+
+
+def model_awareness_enabled() -> bool:
+    raw = os.environ.get("HERMES_MODEL_AWARENESS", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def format_current_model_line(model: str, provider: str) -> str:
@@ -45,17 +60,23 @@ def format_current_model_line(model: str, provider: str) -> str:
     return f"[Current model: {model}]"
 
 
-def append_current_model_line(injections: List[str], agent: Any) -> None:
-    """Append the live-model line to ``injections``, read from ``agent``.
+def with_current_model_line(content: Any, agent: Any) -> Any:
+    """Return ``content`` ending in exactly one current-model line.
 
-    Reads ``agent.model`` / ``agent.provider`` at call time so that when this
-    runs after ``try_activate_fallback`` has mutated those fields it reflects
-    the fallback backend, not the configured primary. No-op when the model is
-    unknown.
+    Idempotent: a trailing line from an earlier stamp (possibly naming a
+    different model, after a fallback) is replaced, never duplicated.
+    Non-string content, an unknown model, or the feature being disabled
+    returns ``content`` unchanged.
     """
+    if not isinstance(content, str) or not model_awareness_enabled():
+        return content
     line = format_current_model_line(
         getattr(agent, "model", "") or "",
         getattr(agent, "provider", "") or "",
     )
-    if line:
-        injections.append(line)
+    if not line:
+        return content
+    idx = content.rfind(_SEPARATOR + _LINE_PREFIX)
+    if idx != -1 and content.endswith("]") and "\n" not in content[idx + len(_SEPARATOR):]:
+        content = content[:idx]
+    return content + _SEPARATOR + line

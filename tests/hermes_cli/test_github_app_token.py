@@ -171,7 +171,7 @@ def _write_cache(home: Path, token: str, expires_epoch: float) -> None:
 
     cache = gat.cache_path(home)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    iso = dt.datetime.fromtimestamp(expires_epoch, tz=dt.timezone.utc).strftime(
+    iso = dt.datetime.fromtimestamp(expires_epoch, tz=dt.UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     cache.write_text(json.dumps({"token": token, "expires_at": iso}))

@@ -21,6 +21,11 @@ from tests.agent.test_routing_override_revert import _make_agent
 def _agent_with_overrides(overrides=None):
     a = _make_agent()
     a.request_overrides = {} if overrides is None else overrides
+    # Upstream v0.22.4 (#75091): request_overrides travel with the
+    # _primary_runtime snapshot (primary_runtime_snapshot._build_primary_runtime_snapshot),
+    # and restore_primary_runtime reinstates them from it. A real agent's
+    # premium snapshot is taken after its init-time overrides are set.
+    a._primary_runtime["request_overrides"] = dict(a.request_overrides)
     return a
 
 

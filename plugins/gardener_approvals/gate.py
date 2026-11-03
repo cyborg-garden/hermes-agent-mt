@@ -20,7 +20,7 @@ def call_gate(
     decisions_file: Optional[str] = None,
     runner=subprocess.run,
     timeout: int = 60,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     cmd = [
         gate_path,
         "--requester-uuid", uuid,

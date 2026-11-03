@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 
 import pytest
 
@@ -49,17 +50,12 @@ def _child(messages):
 # --------------------------------------------------------------------------
 
 class TestPublishedTranscriptCannotGoStale:
-    def test_compress_context_republishes_session_messages(self):
-        """The choke-point fix — this is what makes the 4 missed sites safe."""
-        import run_agent
-
-        src = inspect.getsource(run_agent.AIAgent._compress_context)
-        assert "_session_messages" in src, (
-            "_compress_context must re-publish the new list. Every caller "
-            "rebinds its local `messages` to the returned list; without this, "
-            "an external holder of _session_messages keeps the abandoned "
-            "pre-compression list and the salvage silently reports stale work."
-        )
+    # test_compress_context_republishes_session_messages was removed in the
+    # v0.22.4 catch-up: upstream now owns `_session_messages` (it re-publishes it
+    # at every turn stage and deliberately lets durable-parent adoption leave it
+    # divergent, see tests/agent/test_compression_rotation_state.py), so
+    # _compress_context must not clobber it. The loop-level choke point below
+    # (_run_phase) still keeps the salvage on the live list.
 
     def test_every_messages_rebind_in_run_conversation_is_accounted_for(self):
         """AST scan, not regex.
@@ -68,49 +64,44 @@ class TestPublishedTranscriptCannotGoStale:
         structurally cannot match the tuple-unpacking form
         `messages, active_system_prompt = agent._compress_context(...)` — that
         is exactly how all four missed sites were written.
+
+        After the upstream loop decomposition the turn body lives in
+        ``_run_conversation_turn`` and phase helpers return a new ``messages``
+        through their verdict, which ``_run_phase`` copies onto the loop state.
+        So: no bare ``messages`` rebind may appear in the turn body, and
+        ``_run_phase`` (the single choke point for verdict rebinds) must
+        re-publish.
         """
         from agent import conversation_loop
 
-        src = inspect.getsource(conversation_loop)
-        tree = ast.parse(src)
-        fn = next(
-            n for n in ast.walk(tree)
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and n.name == "run_conversation"
-        )
+        for fn_name in ("run_conversation", "_run_conversation_turn"):
+            src = inspect.getsource(getattr(conversation_loop, fn_name))
+            tree = ast.parse(textwrap.dedent(src))
+            lines = textwrap.dedent(src).splitlines()
+            unaccounted = []
+            for node in ast.walk(tree):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.NamedExpr)):
+                    targets = [node.target]
+                for t in targets:
+                    for sub in ast.walk(t):
+                        if isinstance(sub, ast.Name) and sub.id == "messages":
+                            stmt = lines[node.lineno - 1]
+                            window = "\n".join(lines[node.lineno - 1:node.lineno + 40])
+                            if "_session_messages = " in window or "_compress_context" in stmt:
+                                continue
+                            unaccounted.append((fn_name, node.lineno, stmt.strip()))
+            assert not unaccounted, (
+                "these rebinds of `messages` leave agent._session_messages "
+                "pointing at an abandoned list, so the delegation timeout salvage "
+                f"would report stale work: {unaccounted}"
+            )
 
-        lines = src.splitlines()
-        unaccounted = []
-        for node in ast.walk(fn):
-            targets = []
-            if isinstance(node, ast.Assign):
-                targets = node.targets
-            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-                targets = [node.target]
-            elif isinstance(node, (ast.For, ast.NamedExpr)):
-                targets = [node.target]
-            for t in targets:
-                for sub in ast.walk(t):
-                    if isinstance(sub, ast.Name) and sub.id == "messages":
-                        stmt = lines[node.lineno - 1]
-                        # Window to the next 40 lines: a fixed-size window is
-                        # brittle (an added comment block silently changes the
-                        # verdict), so make it generously larger than any
-                        # comment while still local to the rebind.
-                        window = "\n".join(lines[node.lineno - 1:node.lineno + 40])
-                        # Accounted for if it re-publishes locally, OR the RHS
-                        # is _compress_context (which re-publishes internally).
-                        if (
-                            "agent._session_messages = messages" in window
-                            or "_compress_context" in stmt
-                        ):
-                            continue
-                        unaccounted.append((node.lineno, stmt.strip()))
-
-        assert not unaccounted, (
-            "these rebinds of `messages` leave agent._session_messages "
-            "pointing at an abandoned list, so the delegation timeout salvage "
-            f"would report stale work: {unaccounted}"
+        phase_src = inspect.getsource(conversation_loop._run_phase)
+        assert "agent._session_messages = value" in phase_src, (
+            "_run_phase must re-publish a verdict's new `messages` list"
         )
 
 
@@ -222,44 +213,3 @@ class TestTallyIsHonest:
         assert len(trace) == 1
 
 
-class TestCompressRepublishAtRuntime:
-    """Prove the mechanism, not just its source text.
-
-    Simulates the exact B1 scenario: the salvage holds _session_messages, the
-    turn compresses (rebinding to a NEW list), the child then appends its real
-    finding to the new list, and only then times out.
-    """
-
-    def test_salvage_sees_post_compression_work(self, monkeypatch):
-        import run_agent
-        from tools.delegate_tool import _salvage_partial_summary
-
-        pre = [{"role": "assistant", "content": "early scratch reasoning"}]
-
-        class Fake:
-            _session_messages = pre
-
-        agent = Fake()
-
-        compressed = [{"role": "assistant", "content": "compacted history"}]
-
-        def fake_compress(_agent, _messages, _system, **kwargs):
-            return compressed, "sys"
-
-        monkeypatch.setattr(
-            "agent.conversation_compression.compress_context", fake_compress
-        )
-
-        new_messages, _sys = run_agent.AIAgent._compress_context(
-            agent, pre, "sys", task_id="t"
-        )
-        assert new_messages is compressed, "sanity: compression returned a new list"
-
-        # The child keeps working on the post-compression list.
-        new_messages.append({"role": "assistant", "content": "THE REAL FINDING"})
-
-        summary, _ = _salvage_partial_summary(agent, 0)
-        assert "THE REAL FINDING" in summary, (
-            "the salvage read the abandoned pre-compression list — this is B1"
-        )
-        assert "early scratch reasoning" not in summary

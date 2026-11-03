@@ -45,8 +45,8 @@ logger = logging.getLogger(__name__)
 # TTFB/stale timeouts, partial-stream drops, and schema-sanitize warnings, and
 # prefix-matching the module would spam the home channel with that lifecycle
 # noise (violates the no-lifecycle-spam rule).
-DEFAULT_LOGGERS: Tuple[str, ...] = (
-    "gateway.platforms.signal",
+DEFAULT_LOGGERS: tuple[str, ...] = (
+    "plugins.platforms.signal",  # Signal adapter (moved from gateway.platforms.signal upstream)
     "agent.conversation_loop",
     "agent.degradation",
     "model_tools",
@@ -58,7 +58,7 @@ class Config(NamedTuple):
     enabled: bool
     platform: str
     level: int
-    loggers: Tuple[str, ...]
+    loggers: tuple[str, ...]
     rate: int
     window: int
     dedup_window: int
@@ -132,7 +132,7 @@ def register(ctx) -> None:
         return  # kill switch engaged
 
     guard = ReentrancyGuard()
-    out_queue: "queue.Queue[str]" = queue.Queue(maxsize=cfg.queue_max)
+    out_queue: queue.Queue[str] = queue.Queue(maxsize=cfg.queue_max)
     handler = HomeLogHandler(RoutePolicy(cfg.loggers, cfg.level), out_queue, guard)
     throttle = Throttle(cfg.rate, cfg.window, cfg.dedup_window, time.monotonic)
     worker = HomeLogWorker(out_queue, throttle, _make_sender(cfg.platform), guard)

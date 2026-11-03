@@ -172,7 +172,7 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
                     _resolved_key = getattr(_client, "api_key", None)
                     if _resolved_key:
                         kwargs["api_key"] = _resolved_key
-        except Exception:  # noqa: BLE001 — never break the turn on a resolve miss
+        except Exception:
             logger.debug(
                 "intelligent_routing: could not pre-resolve endpoint for %s; "
                 "switch_model will fall back to provider defaults",
@@ -180,7 +180,7 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
             )
     try:
         agent.switch_model(target_model, target_provider, **kwargs)
-    except Exception as exc:  # noqa: BLE001 — a routing miss must never break the turn
+    except Exception as exc:
         logger.warning(
             "intelligent_routing: switch to %s/%s failed (%s); staying on %s/%s",
             target_model, target_provider or "?", exc, cur_model, cur_provider,
@@ -225,7 +225,7 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
                 "intelligent_routing: ignoring non-dict extra_body (%s)",
                 type(routed_extra_body).__name__,
             )
-    except Exception:  # noqa: BLE001 — never break the turn over extra_body
+    except Exception:
         logger.debug("intelligent_routing: could not apply extra_body", exc_info=True)
 
     try:
@@ -250,7 +250,7 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
             agent._routing_override_saved_extra_body = saved_extra_body
             agent._routing_override_overrides_ref = overrides_ref
         agent._routing_override_active = True
-    except Exception:  # noqa: BLE001 — best-effort scoping; swap already applied
+    except Exception:
         logger.debug("intelligent_routing: could not scope override to turn",
                      exc_info=True)
 

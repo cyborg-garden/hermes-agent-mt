@@ -79,7 +79,7 @@ class TestSchemaAndRegistration:
         assert "path" in READ_DOCUMENT_SCHEMA["parameters"]["required"]
 
     def test_registered_in_registry(self):
-        import tools.document_tools  # noqa: F401  (self-registers on import)
+        import tools.document_tools
         from tools.registry import registry
 
         assert registry.get_entry("read_document") is not None

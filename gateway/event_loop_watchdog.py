@@ -34,7 +34,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -84,13 +84,13 @@ def dump_diagnostics(dump_path: Path) -> None:
     with open(dump_path, "w", encoding="utf-8") as fh:
         fh.write(
             f"Event loop freeze detected at "
-            f"{datetime.now(timezone.utc).isoformat()}\n\n"
+            f"{datetime.now(UTC).isoformat()}\n\n"
         )
         faulthandler.dump_traceback(file=fh, all_threads=True)
 
 
 def _default_dump_path() -> Path:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return get_hermes_home() / "logs" / f"event_loop_freeze_{ts}.log"
 
 

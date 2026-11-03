@@ -12,6 +12,6 @@ the clean plugin form of upstream PR #43534, per teknium1's steer + his offer to
 extend the plugin interface. Turn-scoped and fail-safe. See ``registration.py``
 and the README.
 """
-from .registration import register  # noqa: F401
+from .registration import register
 
 __all__ = ["register"]
