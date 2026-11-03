@@ -5343,6 +5343,27 @@ def _history_to_messages(history: list[dict]) -> list[dict]:
     return messages
 
 
+def _pop_last_exchange(history: list[dict]) -> int:
+    """Drop the last exchange in place and return how many rows went.
+
+    Observed rows sit inside it but never end it: nobody took a turn by saying
+    them, so chatter on its own leaves nothing to undo.
+    """
+    start = len(history)
+    while start and (
+        history[start - 1].get("observed")
+        or history[start - 1].get("role") in {"assistant", "tool"}
+    ):
+        start -= 1
+    if start and history[start - 1].get("role") == "user":
+        start -= 1
+    if all(row.get("observed") for row in history[start:]):
+        return 0
+    removed = len(history) - start
+    del history[start:]
+    return removed
+
+
 def _coerce_seed_history(value: Any) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -8516,13 +8537,7 @@ def _(rid, params: dict) -> dict:
         )
     removed = 0
     with session["history_lock"]:
-        history = session.get("history", [])
-        while history and history[-1].get("role") in {"assistant", "tool"}:
-            history.pop()
-            removed += 1
-        if history and history[-1].get("role") == "user":
-            history.pop()
-            removed += 1
+        removed = _pop_last_exchange(session.get("history", []))
         if removed:
             session["history_version"] = int(session.get("history_version", 0)) + 1
     return _ok(rid, {"removed": removed})
@@ -14743,13 +14758,7 @@ def _(rid, params: dict) -> dict:
             if result.get("success") and not file_path:
                 removed = 0
                 with session["history_lock"]:
-                    history = session.get("history", [])
-                    while history and history[-1].get("role") in {"assistant", "tool"}:
-                        history.pop()
-                        removed += 1
-                    if history and history[-1].get("role") == "user":
-                        history.pop()
-                        removed += 1
+                    removed = _pop_last_exchange(session.get("history", []))
                     if removed:
                         session["history_version"] = (
                             int(session.get("history_version", 0)) + 1

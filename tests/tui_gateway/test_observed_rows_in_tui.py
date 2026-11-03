@@ -127,3 +127,52 @@ def test_desktop_branch_seed_stores_the_flag_on_first_submit(db):
         (OWNER, False),
         ("noted", False),
     ]
+
+
+UNDO_ROWS = [
+    {"role": "user", "content": OWNER},
+    {"role": "assistant", "content": "noted"},
+    {"role": "user", "content": STRANGER, "observed": True},
+]
+
+
+def test_session_undo_removes_the_turn_not_the_chatter_after_it(db):
+    _live_session("u", "u1", [dict(row) for row in UNDO_ROWS])
+
+    result = _call("session.undo", session_id="u")["result"]
+
+    assert result == {"removed": 3}
+    assert server._sessions["u"]["history"] == []
+
+
+def test_session_undo_leaves_earlier_turns_alone(db):
+    earlier = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "ok"}]
+    _live_session("u", "u1", earlier + [dict(row) for row in UNDO_ROWS])
+
+    assert _call("session.undo", session_id="u")["result"] == {"removed": 3}
+    assert server._sessions["u"]["history"] == earlier
+
+
+def test_session_undo_with_only_chatter_has_nothing_to_undo(db):
+    rows = [{"role": "user", "content": STRANGER, "observed": True}]
+    _live_session("u", "u1", rows)
+
+    assert _call("session.undo", session_id="u")["result"] == {"removed": 0}
+    assert len(server._sessions["u"]["history"]) == 1
+
+
+def test_rollback_restore_removes_the_turn_not_the_chatter_after_it(db):
+    _live_session("r", "r1", [dict(row) for row in UNDO_ROWS])
+
+    class Manager:
+        def restore(self, _cwd, _hash, file_path=None):
+            return {"success": True}
+
+    with (
+        patch.object(server, "_with_checkpoints", lambda _session, go: go(Manager(), "/tmp")),
+        patch.object(server, "_resolve_checkpoint_hash", return_value="abc"),
+    ):
+        result = _call("rollback.restore", session_id="r", hash="abc")["result"]
+
+    assert result["history_removed"] == 3
+    assert server._sessions["r"]["history"] == []

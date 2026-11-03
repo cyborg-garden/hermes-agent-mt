@@ -111,10 +111,11 @@ export const scheduleResumeScrollToBottom = (
   }
 }
 
-const trimTail = (items: Msg[]) => {
+// Matches session.undo on the gateway: observed rows sit inside an exchange but never end it.
+export const trimTail = (items: Msg[]) => {
   const q = [...items]
 
-  while (q.at(-1)?.role === 'assistant' || q.at(-1)?.role === 'tool') {
+  while (q.at(-1)?.observed || q.at(-1)?.role === 'assistant' || q.at(-1)?.role === 'tool') {
     q.pop()
   }
 
@@ -122,7 +123,7 @@ const trimTail = (items: Msg[]) => {
     q.pop()
   }
 
-  return q
+  return items.slice(q.length).every(m => m.observed) ? items : q
 }
 
 export interface UseSessionLifecycleOptions {

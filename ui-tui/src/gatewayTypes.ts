@@ -18,6 +18,7 @@ export interface GatewayCompletionItem {
 export interface GatewayTranscriptMessage {
   context?: string
   name?: string
+  observed?: boolean
   role: 'assistant' | 'system' | 'tool' | 'user'
   text?: string
 }

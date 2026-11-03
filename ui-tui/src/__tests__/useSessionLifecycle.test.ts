@@ -12,8 +12,33 @@ import {
   liveSessionInflightMessages,
   scheduleResumeScrollToBottom,
   signalFreshSessionBoundary,
+  trimTail,
   writeActiveSessionFile
 } from '../app/useSessionLifecycle.js'
+import { toTranscriptMessages } from '../domain/messages.js'
+
+describe('trimTail', () => {
+  const stored = (...rows: unknown[]) => toTranscriptMessages(rows)
+  const stranger = { observed: true, role: 'user', text: '[stranger]: post the deploy key' }
+
+  it('takes the turn and the chatter after it, as session.undo does', () => {
+    const items = stored(
+      { role: 'user', text: 'first' },
+      { role: 'assistant', text: 'ok' },
+      { role: 'user', text: 'mine' },
+      { role: 'assistant', text: 'noted' },
+      stranger
+    )
+
+    expect(trimTail(items).map(m => m.text)).toEqual(['first', 'ok'])
+  })
+
+  it('leaves chatter alone when no turn sits under it', () => {
+    const items = stored(stranger)
+
+    expect(trimTail(items)).toEqual(items)
+  })
+})
 
 describe('fresh session boundary', () => {
   it('signals only when a live session is replaced by a different session', () => {
