@@ -136,6 +136,9 @@ def _shape_message(m: Dict[str, Any], anchor_id: Optional[int] = None) -> Dict[s
         entry["tool_calls"] = m.get("tool_calls")
     if m.get("tool_call_id"):
         entry["tool_call_id"] = m.get("tool_call_id")
+    # Role alone reads as the user's words; these were a stranger's.
+    if m.get("observed"):
+        entry["observed"] = True
     if anchor_id is not None and m.get("id") == anchor_id:
         entry["anchor"] = True
     # Strip None values to keep payload tight, but always keep content
