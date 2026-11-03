@@ -184,12 +184,7 @@ export function planRestore(messages: ChatMessage[], messageId: string, target?:
     throw new Error('Cannot restore an empty message.')
   }
 
-  const truncateOrdinal =
-    target?.userOrdinal === null || target?.userOrdinal === undefined
-      ? visibleUserOrdinal(messages, sourceIndex)
-      : target.userOrdinal
-
-  return { sourceIndex, text, truncateOrdinal }
+  return { sourceIndex, text, truncateOrdinal: visibleUserOrdinal(messages, sourceIndex) }
 }
 
 // ---------------------------------------------------------------------------

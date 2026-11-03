@@ -8,6 +8,7 @@ import { UserMessageText } from '@/components/assistant-ui/thread/user-message-t
 import { Codicon } from '@/components/ui/codicon'
 import { useResizeObserver } from '@/hooks/use-resize-observer'
 import { useI18n } from '@/i18n'
+import { threadUserOrdinal } from '@/lib/chat-runtime'
 import { triggerHaptic } from '@/lib/haptics'
 import { StopFilled } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -120,23 +121,7 @@ export const UserMessage: FC<{
     return null
   })
 
-  const runtimeUserOrdinal = useAuiState(s => {
-    let ordinal = 0
-
-    for (const message of s.thread.messages) {
-      if (message.role !== 'user') {
-        continue
-      }
-
-      if (message.id === s.message.id) {
-        return ordinal
-      }
-
-      ordinal += 1
-    }
-
-    return null
-  })
+  const runtimeUserOrdinal = useAuiState(s => threadUserOrdinal(s.thread.messages, s.message.id))
 
   const attachmentRefs = useAuiState(s => {
     const custom = (s.message.metadata?.custom ?? {}) as { attachmentRefs?: unknown }

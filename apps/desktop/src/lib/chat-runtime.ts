@@ -349,7 +349,9 @@ export function toRuntimeMessage(message: ChatMessage): ThreadMessage {
       content: message.parts.filter((part): part is Extract<ChatMessagePart, { type: 'text' }> => part.type === 'text'),
       attachments: [],
       createdAt,
-      metadata: { custom: { attachmentRefs: message.attachmentRefs ?? [] } }
+      metadata: {
+        custom: { attachmentRefs: message.attachmentRefs ?? [], ...(message.observed ? { observed: true } : {}) }
+      }
     } as ThreadMessage
   }
 
@@ -383,6 +385,25 @@ export function toRuntimeMessage(message: ChatMessage): ThreadMessage {
       custom: {}
     }
   } as ThreadMessage
+}
+
+/** A user row's turn number in the rendered thread, the same count prompt.submit truncates by. */
+export function threadUserOrdinal(messages: readonly ThreadMessage[], messageId: string): null | number {
+  let ordinal = 0
+
+  for (const message of messages) {
+    if (message.role !== 'user' || message.metadata?.custom?.observed) {
+      continue
+    }
+
+    if (message.id === messageId) {
+      return ordinal
+    }
+
+    ordinal += 1
+  }
+
+  return null
 }
 
 export type ToolMergeCache = WeakMap<
