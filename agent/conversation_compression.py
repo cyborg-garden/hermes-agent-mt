@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from agent.model_metadata import estimate_request_tokens_rough
+from agent.observed_context import without_observed_block
 
 # Appended to a stored system prompt by a helper agent that compacted the session.
 # The next real turn sees it and rebuilds the prompt, which removes it.
@@ -417,6 +418,50 @@ def conversation_history_after_compression(agent: Any, messages: list) -> Option
     if bool(getattr(agent, "_last_compaction_in_place", False)):
         return list(messages)
     return None
+
+
+def _settle_current_turn_row(agent: Any, messages: list, compressed: list) -> tuple[list, Optional[int]]:
+    """Find the current turn's message after compaction.
+
+    Returns the rows to store and the row's new index. The persist override is
+    keyed by index into the old list. The row can move, or be summarised away,
+    and a stale index would rewrite someone else's row. The live row keeps its
+    API-only text for the rest of the turn, so the rows to store are a separate
+    list.
+    """
+    from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
+
+    idx = getattr(agent, "_persist_user_message_idx", None)
+    if idx is None:
+        return compressed, None
+    live = messages[idx] if 0 <= idx < len(messages) else None
+    if not isinstance(live, dict) or live.get("role") != "user":
+        return compressed, None
+    live_content = live.get("content")
+    override = getattr(agent, "_persist_user_message_override", None)
+    keep_live = isinstance(live_content, list) and not isinstance(override, list)
+    clean = without_observed_block(live_content) if override is None or keep_live else override
+
+    for i in range(len(compressed) - 1, -1, -1):
+        row = compressed[i]
+        if row.get("role") == "user" and row.get("content") == live_content:
+            durable = {**row, "content": clean}
+            timestamp = getattr(agent, "_persist_user_message_timestamp", None)
+            if timestamp is not None:
+                durable["timestamp"] = timestamp
+            return [*compressed[:i], durable, *compressed[i + 1:]], i
+
+    # Merged into a summary row, which is not this index's to overwrite later:
+    # clean the row itself, so the block goes for the rest of this turn too.
+    for row in compressed:
+        if not row.get(COMPRESSED_SUMMARY_METADATA_KEY) or row.get("role") != "user":
+            continue
+        content = row.get("content")
+        if isinstance(content, str) and isinstance(live_content, str) and live_content in content:
+            row["content"] = content.replace(live_content, str(clean), 1)
+        elif isinstance(content, list):
+            row["content"] = without_observed_block(content)
+    return compressed, None
 
 
 def _ensure_compressed_has_user_turn(original_messages: list, compressed: list) -> None:
@@ -815,6 +860,7 @@ def compress_context(
         if todo_snapshot:
             compressed.append({"role": "user", "content": todo_snapshot})
         _ensure_compressed_has_user_turn(messages, compressed)
+        _rows_to_store, _current_turn_idx = _settle_current_turn_row(agent, messages, compressed)
 
         agent._invalidate_system_prompt()
         new_system_prompt = agent._build_system_prompt(system_message)
@@ -847,7 +893,7 @@ def compress_context(
                     # for search/recovery (Teknium review — keep one durable id
                     # WITHOUT destroying history, unlike a hard replace_messages).
                     # See #38763.
-                    agent._session_db.archive_and_compact(agent.session_id, compressed)
+                    agent._session_db.archive_and_compact(agent.session_id, _rows_to_store)
                     # Reset the flush identity set so the next turn's appends are
                     # diffed against the COMPACTED transcript: the compacted dicts
                     # are passed as conversation_history next turn and skipped by
@@ -991,6 +1037,9 @@ def compress_context(
                     )
                 else:
                     logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
+
+        # Only now: the rotation flush above still writes the old list.
+        agent._persist_user_message_idx = _current_turn_idx
 
         # Compaction-boundary bookkeeping, computed once. `old_session_id` is only
         # bound in the rotation branch; in-place leaves it unset. `_boundary_parent`

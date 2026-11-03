@@ -146,6 +146,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import sanitize_context
+from agent.observed_context import without_observed_block
 from agent.vision_history import correct_stored_vision_row
 from agent.error_classifier import FailoverReason
 from agent.redact import redact_sensitive_text
@@ -1713,6 +1714,8 @@ class AIAgent:
                     not isinstance(msg.get("content"), list) or isinstance(override, list)
                 ):
                     msg["content"] = override
+                else:
+                    msg["content"] = without_observed_block(msg.get("content"))
                 if timestamp is not None:
                     msg["timestamp"] = timestamp
 
@@ -1949,6 +1952,8 @@ class AIAgent:
                         not isinstance(content, list) or isinstance(_ov_content, list)
                     ):
                         content = _ov_content
+                    else:
+                        content = without_observed_block(content)
                     if _ov_timestamp is not None:
                         _row_timestamp = _ov_timestamp
                 # Persist multimodal tool results as their text summary only —

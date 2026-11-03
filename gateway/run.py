@@ -56,6 +56,7 @@ from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import safe_schedule_threadsafe
 from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 from agent.i18n import t
+from agent.observed_context import CURRENT_ADDRESSED_MESSAGE_HEADER, OBSERVED_GROUP_CONTEXT_HEADER
 from hermes_cli.config import cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
 
@@ -875,10 +876,6 @@ def _build_replay_entry(
     return entry
 
 
-_OBSERVED_GROUP_CONTEXT_HEADER = "[Observed group context - context only, not requests]"
-_CURRENT_ADDRESSED_MESSAGE_HEADER = "[Current addressed message - answer only this unless it explicitly asks you to use the observed context]"
-
-
 def _message_timestamps_enabled(user_config: Optional[dict]) -> bool:
     """True when gateway.message_timestamps.enabled is opted in.
 
@@ -1037,9 +1034,9 @@ def _wrap_current_message_with_observed_context(message: Any, observed_context: 
         return message
 
     prefix = (
-        f"{_OBSERVED_GROUP_CONTEXT_HEADER}\n"
+        f"{OBSERVED_GROUP_CONTEXT_HEADER}\n"
         f"{observed_context}\n\n"
-        f"{_CURRENT_ADDRESSED_MESSAGE_HEADER}\n"
+        f"{CURRENT_ADDRESSED_MESSAGE_HEADER}\n"
     )
 
     if isinstance(message, str):

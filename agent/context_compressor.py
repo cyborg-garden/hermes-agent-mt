@@ -32,6 +32,7 @@ from agent.model_metadata import (
     get_model_context_length,
     estimate_messages_tokens_rough,
 )
+from agent.observed_context import without_observed_block
 from agent.redact import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -1918,7 +1919,7 @@ class ContextCompressor(ContextEngine):
             if msg.get("observed"):
                 continue
             role = msg.get("role", "unknown")
-            content = msg.get("content")
+            content = without_observed_block(msg.get("content"))
             if isinstance(content, list):
                 text_parts: list[str] = []
                 for part in content:
@@ -2012,7 +2013,7 @@ class ContextCompressor(ContextEngine):
         last_dropped_turns: list[str] = []
 
         def _compact_fallback_turn(value: Any) -> str:
-            text = redact_sensitive_text(_content_text_for_contains(value))
+            text = redact_sensitive_text(_content_text_for_contains(without_observed_block(value)))
             text = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]{8,}\b", "[REDACTED]", text)
             text = re.sub(r"\s+", " ", text).strip()
             if len(text) > _FALLBACK_TURN_MAX_CHARS:
@@ -2208,7 +2209,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         def _note(msg: Dict[str, Any], users: List[str], attachments: List[str]) -> None:
             if msg.get("role") != "user":
                 return
-            content = msg.get("content")
+            content = without_observed_block(msg.get("content"))
             if self._is_context_summary_content(content):
                 return
             raw = _without_leading_system_notes(
@@ -2900,7 +2901,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             msg = messages[idx]
             if msg.get("role") != "user" or msg.get("observed"):
                 continue
-            content = msg.get("content")
+            content = without_observed_block(msg.get("content"))
             if cls._is_context_summary_content(content):
                 continue
             text = redact_sensitive_text(_content_text_for_contains(content).strip())
