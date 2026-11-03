@@ -134,6 +134,8 @@ def test_aiagent_wrapper_resets_runtime_context_after_turn():
         _conversation_root_id=lambda: "root-session",
         _session_db=None,
         session_id="session-id",
+        _session_messages=[],
+        _apply_persist_user_message_override=lambda _rows: None,
     )
 
     def fake_turn(*_args, **_kwargs):

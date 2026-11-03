@@ -598,6 +598,7 @@ class TestBridgeWiredInRuntime:
             valid_tool_names=set(),
             _sync_external_memory_for_turn=lambda **_: None,
             _spawn_background_review=lambda **_: None,
+            _apply_persist_user_message_override=lambda _rows: None,
             # Usage accounting attrs read by _record_codex_app_server_usage.
             session_api_calls=0,
             session_prompt_tokens=0,
