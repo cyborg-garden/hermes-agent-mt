@@ -493,3 +493,50 @@ def test_memory_providers_get_no_chatter_at_session_end():
     provider = _RecordingProvider()
     _manager_with(provider).on_session_end(_rows_for_memory())
     assert [r["content"] for r in provider.session_end] == [OWNER, "ok"]
+
+
+# A window with no turns
+
+
+def _chatter_only_window():
+    rows = [{"role": "user", "content": "[owner] start"}, {"role": "assistant", "content": "ok"}]
+    rows += [_observed(f"[chat{i}]: hi {'z' * 400}") for i in range(20)]
+    return [*rows, {"role": "user", "content": "[owner] now"}, {"role": "assistant", "content": "yes"}]
+
+
+def _compress_chatter_window(compressor, rows):
+    compressor.protect_first_n = 2
+    compressor.protect_last_n = 2
+    with patch("agent.context_compressor.call_llm") as llm:
+        out = compressor.compress(rows, current_tokens=90_000, force=True)
+    return out, llm
+
+
+def test_window_of_only_chatter_makes_no_summariser_call():
+    compressor = _compressor()
+    rows = _chatter_only_window()
+    out, llm = _compress_chatter_window(compressor, rows)
+    llm.assert_not_called()
+    assert len(out) < len(rows)
+    assert not any(str(r["content"]).startswith("[chat1]") for r in out)
+    assert compressor._last_summary_fallback_used is False
+    assert compressor._last_compress_aborted is False
+    assert _summary_rows(out)
+
+
+def test_window_of_only_chatter_keeps_the_earlier_summary():
+    compressor = _compressor()
+    rows = _chatter_only_window()
+    rows.insert(2, {"role": "assistant", "content": f"{SUMMARY_PREFIX}\nowner wants no music"})
+    out, llm = _compress_chatter_window(compressor, rows)
+    llm.assert_not_called()
+    assert any("owner wants no music" in str(r["content"]) for r in out)
+
+
+def test_window_of_only_chatter_needs_no_summariser_during_a_cooldown():
+    compressor = _compressor()
+    compressor._summary_failure_cooldown_until = float("inf")
+    out, llm = _compress_chatter_window(compressor, _chatter_only_window())
+    llm.assert_not_called()
+    assert compressor._last_summary_fallback_used is False
+    assert _summary_rows(out)

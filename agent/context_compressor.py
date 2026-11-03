@@ -998,6 +998,9 @@ def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_conten
     return f"[{tool_name}]{first_arg} ({content_len:,} chars result)"
 
 
+_NO_TURNS_SUMMARY = "No turns were removed here, only group chatter nobody addressed to you."
+
+
 class ContextCompressor(ContextEngine):
     """Default context engine — compresses conversation context via lossy summarization.
 
@@ -2410,6 +2413,12 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         the middle turns without a summary rather than inject a useless
         placeholder.
         """
+        content_to_summarize = self._serialize_for_summary(turns_to_summarize)
+        # Nothing but observed rows, or nothing at all: no model is needed to
+        # say that no one said anything, and the earlier record still stands.
+        if not content_to_summarize.strip():
+            return self._with_summary_prefix(self._previous_summary or _NO_TURNS_SUMMARY)
+
         now = time.monotonic()
         if now < self._summary_failure_cooldown_until:
             logger.debug(
@@ -2419,7 +2428,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             return None
 
         summary_budget = self._compute_summary_budget(turns_to_summarize)
-        content_to_summarize = self._serialize_for_summary(turns_to_summarize)
 
         # Current date for temporal anchoring (see ## Temporal Anchoring below).
         # Date-only granularity matches system_prompt.py:337 (PR #20451) and the
