@@ -265,6 +265,34 @@ def _looks_like_nonconversational_history_message(content: str) -> bool:
     return any(pattern.match(text) for pattern in _DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS)
 
 
+def _dm_gate_allows(user_id) -> bool:
+    """True when DISCORD_DM_ALLOWED_USERS lets this user act in a DM.
+
+    Unset or empty means nobody, so a new agent starts with DMs off. ``*``
+    turns the gate off. This only narrows: callers still run their usual checks.
+    """
+    allowed = {
+        _clean_discord_id(entry)
+        for entry in os.getenv("DISCORD_DM_ALLOWED_USERS", "").split(",")
+        if entry.strip()
+    }
+    return "*" in allowed or str(user_id) in allowed
+
+
+def _discord_message_is_dm(message) -> bool:
+    """True for a private message, including a group DM.
+
+    A guild message from an uncached guild has ``guild=None`` but its channel
+    still carries ``guild_id``, so a missing guild alone does not mean a DM.
+    """
+    channel = getattr(message, "channel", None)
+    if isinstance(channel, discord.DMChannel):
+        return True
+    if getattr(message, "guild", None) is not None:
+        return False
+    return getattr(channel, "guild_id", None) is None
+
+
 def _clean_discord_id(entry: str) -> str:
     """Strip common prefixes from a Discord user ID or username entry.
 
@@ -1213,6 +1241,10 @@ class DiscordAdapter(BasePlatformAdapter):
                 # not being in DISCORD_ALLOWED_USERS (fixes #4466).
                 _role_authorized = False
                 if getattr(message.author, "bot", False):
+                    if _discord_message_is_dm(message) and not _dm_gate_allows(
+                        message.author.id
+                    ):
+                        return
                     allow_bots = os.getenv("DISCORD_ALLOW_BOTS", "none").lower().strip()
                     if allow_bots == "none":
                         return
@@ -1255,10 +1287,11 @@ class DiscordAdapter(BasePlatformAdapter):
                     # originating guild (prevents cross-guild DM bypass, see
                     # _is_allowed_user docstring).
                     _msg_guild = getattr(message, "guild", None)
-                    _is_dm = isinstance(message.channel, discord.DMChannel) or _msg_guild is None
+                    _is_dm = _discord_message_is_dm(message)
                     _msg_channel_ids = None
-                    if not _is_dm:
-                        # Use the full gate-key set (id, names, thread parent,
+                    if not _is_dm and _msg_guild is not None:
+                        # An uncached guild gets no channel keys, so it can't
+                        # use channel-scoped access. Use the full gate-key set (id, names, thread parent,
                         # category) so channel-scoped authorization sees the
                         # same keys as the allow/ignore gates and the slash
                         # path — a category id in DISCORD_ALLOWED_CHANNELS
@@ -3436,6 +3469,11 @@ class DiscordAdapter(BasePlatformAdapter):
         if _moderation_sync.deny_store().is_denied(user_id):
             return False
 
+        # This sits above every allow branch: being allowed in channels, a
+        # pairing grant and the ALLOW_ALL flags must not open a private DM.
+        if is_dm and not _dm_gate_allows(user_id):
+            return False
+
         # ``getattr`` fallbacks here guard against test fixtures that build
         # an adapter via ``object.__new__(DiscordAdapter)`` and skip __init__
         # (see AGENTS.md pitfall #17 — same pattern as gateway.run).
@@ -3642,7 +3680,12 @@ class DiscordAdapter(BasePlatformAdapter):
         an opaque interaction failure rather than a clean rejection.
         """
         chan_obj = getattr(interaction, "channel", None)
-        in_dm = isinstance(chan_obj, discord.DMChannel) if chan_obj is not None else False
+        # Group DMs and other guildless interactions count as DMs. Every real
+        # guild interaction carries a guild_id.
+        in_dm = (
+            isinstance(chan_obj, discord.DMChannel)
+            or getattr(interaction, "guild_id", None) is None
+        )
 
         channel_ids: set = set()
         channel_keys: set = set()
@@ -7322,6 +7365,10 @@ def _component_check_auth(
     if _denied_uid and _moderation_sync.deny_store().is_denied(_denied_uid):
         return False
 
+    # A button in a DM follows the same DM gate as a message there.
+    if getattr(interaction, "guild_id", None) is None and not _dm_gate_allows(user.id):
+        return False
+
     if os.getenv("DISCORD_ALLOW_ALL_USERS", "").strip().lower() in {"true", "1", "yes"}:
         return True
     if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").strip().lower() in {"true", "1", "yes"}:
@@ -8180,6 +8227,12 @@ def _define_discord_view_classes() -> None:
             )
 
         async def _on_cancel(self, interaction: discord.Interaction):
+            if not self._check_auth(interaction):
+                await interaction.response.send_message(
+                    "You're not authorized~", ephemeral=True
+                )
+                return
+
             self.resolved = True
             self.clear_items()
             await interaction.response.edit_message(

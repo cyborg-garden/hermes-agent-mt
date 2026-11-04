@@ -275,6 +275,7 @@ For cloud sandbox backends, persistence is filesystem-oriented. `TERMINAL_LIFETI
 | `TELEGRAM_PROXY` | Proxy URL for Telegram connections — overrides `HTTPS_PROXY`. Supports `http://`, `https://`, `socks5://` |
 | `DISCORD_BOT_TOKEN` | Discord bot token |
 | `DISCORD_ALLOWED_USERS` | Comma-separated Discord user IDs allowed to use the bot |
+| `DISCORD_DM_ALLOWED_USERS` | Comma-separated Discord user IDs who may DM the bot. Unset or empty means nobody can. Listed users must also pass `DISCORD_ALLOWED_USERS` or the other checks. `*` turns this gate off. |
 | `DISCORD_ALLOW_ALL_USERS` | Allow any Discord user to trigger the bot (dev only). |
 | `DISCORD_ALLOWED_ROLES` | Comma-separated Discord role IDs allowed to use the bot (OR with `DISCORD_ALLOWED_USERS`). Auto-enables the Members intent. Useful when moderation teams churn — role grants propagate automatically. |
 | `DISCORD_ALLOWED_BOT_ROLES` | Comma-separated role IDs. When set (or `DISCORD_ALLOWED_BOT_USERS` is), a bot sender admitted by `DISCORD_ALLOW_BOTS` must also hold one of these roles in the originating server, or be listed in `DISCORD_ALLOWED_BOT_USERS`. Never passes in DMs; fails closed when roles can't be read. Unset = unchanged. |
