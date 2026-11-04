@@ -1243,8 +1243,9 @@ class TestDiscordVoiceChannelMethods:
         assert adapter._is_allowed_user("42") is True
         assert adapter._is_allowed_user("123456789012345678") is True
 
-    def test_is_allowed_user_wildcard_in_dm(self):
+    def test_is_allowed_user_wildcard_in_dm(self, monkeypatch):
         """Wildcard short-circuits before role-auth gating, so DMs honor it too."""
+        monkeypatch.setenv("DISCORD_DM_ALLOWED_USERS", "*")
         adapter = self._make_adapter()
         adapter._allowed_user_ids = {"*"}
         assert adapter._is_allowed_user("42", is_dm=True) is True

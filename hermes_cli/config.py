@@ -4248,6 +4248,13 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "messaging",
     },
+    "DISCORD_DM_ALLOWED_USERS": {
+        "description": "Comma-separated Discord user IDs who may DM the bot. Unset means nobody can; '*' turns this gate off",
+        "prompt": "Discord user IDs allowed to DM the bot (comma-separated)",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+    },
     "DISCORD_REPLY_TO_MODE": {
         "description": "Discord reply threading mode: 'off' (no reply references), 'first' (reply on first message only, default), 'all' (reply on every chunk)",
         "prompt": "Discord reply mode (off/first/all)",

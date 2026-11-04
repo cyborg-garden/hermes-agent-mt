@@ -105,6 +105,7 @@ def test_dm_role_auth_requires_explicit_guild_optin(monkeypatch):
 
     The user has the role in the opted-in guild — allowed.
     """
+    monkeypatch.setenv("DISCORD_DM_ALLOWED_USERS", "*")
     trusted_guild, _ = _guild_with_member(
         guild_id=222222,
         member_id=42,
@@ -237,7 +238,8 @@ def test_guild_message_rejects_author_roles_from_different_guild(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_user_id_allowlist_works_in_dm():
+def test_user_id_allowlist_works_in_dm(monkeypatch):
+    monkeypatch.setenv("DISCORD_DM_ALLOWED_USERS", "*")
     adapter = _make_adapter(allowed_users=["42"])
     assert (
         adapter._is_allowed_user("42", author=None, guild=None, is_dm=True)

@@ -3436,6 +3436,21 @@ class DiscordAdapter(BasePlatformAdapter):
         if _moderation_sync.deny_store().is_denied(user_id):
             return False
 
+        # DMs are closed unless DISCORD_DM_ALLOWED_USERS lists the user, and
+        # unset means closed, so a new agent starts with DMs off. This sits
+        # above every allow branch: being allowed in channels, a pairing grant
+        # and the ALLOW_ALL flags must not open a private DM. It only narrows.
+        # A listed user still has to pass the checks below. ``*`` turns the
+        # gate off and leaves the ordinary allowlist behaviour.
+        if is_dm:
+            dm_allowed = {
+                entry.strip()
+                for entry in os.getenv("DISCORD_DM_ALLOWED_USERS", "").split(",")
+                if entry.strip()
+            }
+            if "*" not in dm_allowed and str(user_id) not in dm_allowed:
+                return False
+
         # ``getattr`` fallbacks here guard against test fixtures that build
         # an adapter via ``object.__new__(DiscordAdapter)`` and skip __init__
         # (see AGENTS.md pitfall #17 — same pattern as gateway.run).
