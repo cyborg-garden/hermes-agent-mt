@@ -388,6 +388,15 @@ documents = [
   "pypdf==6.21.2",
   "pymupdf==1.27.2.3; sys_platform != 'win32' or platform_machine != 'ARM64'",
 ]
+# Office authoring libraries anchor (upstream's `documents` renamed to avoid collision with the
+# fork's `documents` extra which also ships pymupdf for read_document). No pymupdf here.
+documents-office = [
+  "python-docx==1.2.0",
+  "openpyxl==3.1.5",
+  "python-pptx==1.0.2",
+  "reportlab==5.1.0",
+  "pypdf==6.21.2",
+]
 # PDF text extraction and rasterization for skills/productivity/pdf. Only in
 # the skills' side environment (`hermes pm environment documents --extra
 # documents --extra documents-pdf`), never baked: ~17 MB of pdfminer/pdfium.
