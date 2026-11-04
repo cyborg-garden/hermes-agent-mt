@@ -60,9 +60,7 @@ ANCHORS: dict[str, str | tuple[str, ...]] = {
     "acp": "acp",
     "web": "fastapi",
     "doc-extract": "anydoc",
-    # Fork #24: read_document tool (PDF/EPUB/XPS via pymupdf). Ships in the image
-    # (`--extra documents`); this anchor lets ensure_import("documents") self-heal elsewhere.
-    "documents": "fitz",
+    "documents-office": ("docx", "openpyxl", "pptx", "reportlab", "pypdf"),
     "documents-pdf": ("pdfplumber", "pypdfium2"),
     "computer-use": "mcp",
     "trace-upload": "huggingface_hub",
