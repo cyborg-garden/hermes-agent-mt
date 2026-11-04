@@ -371,6 +371,7 @@ def test_slash_authorization_rejects_cross_guild_role_in_guild(monkeypatch):
         channel=SimpleNamespace(id=9999),  # not a DMChannel instance
         channel_id=9999,
         guild=trusted_guild,
+        guild_id=222222,
     )
 
     allowed, reason = adapter._evaluate_slash_authorization(interaction)

@@ -6,15 +6,22 @@ unset so a newly created agent starts with DMs off.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import discord
 import pytest
 
 from plugins.platforms.discord.adapter import (
     DiscordAdapter,
+    ModelPickerView,
     _component_check_auth,
     _discord_message_is_dm,
+)
+
+from tests.gateway.test_discord_bot_role_gate import (  # noqa: E402
+    _connected_adapter,
+    _member,
+    _message,
 )
 
 OWNER = "100"
@@ -176,3 +183,106 @@ class TestButtons:
 
     def test_guild_click_is_untouched(self):
         assert _component_check_auth(self._click(MEMBER, 42), {MEMBER}, set()) is True
+
+
+async def _delivered(monkeypatch, message_for):
+    """Run a message through the real on_message closure from connect()."""
+    adapter, bot, handle = await _connected_adapter(monkeypatch)
+    try:
+        await bot._events["on_message"](message_for(bot))
+        return handle.await_count == 1
+    finally:
+        await adapter.disconnect()
+
+
+def _human(uid=OWNER):
+    return _member(int(uid), bot=False)
+
+
+class TestOnMessage:
+    @pytest.mark.asyncio
+    async def test_dm_from_allowlisted_user_is_dropped(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+        assert await _delivered(
+            monkeypatch, lambda b: _message(_human(), dm=True, client_user=b.user)
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_dm_from_listed_user_arrives(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+        monkeypatch.setenv("DISCORD_DM_ALLOWED_USERS", OWNER)
+        assert await _delivered(
+            monkeypatch, lambda b: _message(_human(), dm=True, client_user=b.user)
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_group_dm_is_dropped(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+
+        def group_dm(bot):
+            message = _message(_human(), client_user=bot.user)
+            message.guild = None
+            message.channel = SimpleNamespace(id=7, name="group")
+            return message
+
+        assert await _delivered(monkeypatch, group_dm) is False
+
+    @pytest.mark.asyncio
+    async def test_bot_dm_is_dropped(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOW_BOTS", "all")
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+        assert await _delivered(
+            monkeypatch,
+            lambda b: _message(_member(555, bot=True), dm=True, client_user=b.user),
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_guild_message_arrives(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+        assert await _delivered(
+            monkeypatch, lambda b: _message(_human(), client_user=b.user)
+        ) is True
+
+    @staticmethod
+    def _uncached_guild(uid):
+        def build(bot):
+            message = _message(_human(uid), client_user=bot.user)
+            message.guild = None
+            message.channel = SimpleNamespace(id=222, name="general", guild_id=42)
+            return message
+
+        return build
+
+    @pytest.mark.asyncio
+    async def test_uncached_guild_keeps_listed_users(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", OWNER)
+        assert await _delivered(monkeypatch, self._uncached_guild(OWNER)) is True
+
+    @pytest.mark.asyncio
+    async def test_uncached_guild_gets_no_channel_scoped_access(self, monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "*")
+        assert await _delivered(monkeypatch, self._uncached_guild(MEMBER)) is False
+
+
+@pytest.mark.asyncio
+async def test_model_picker_cancel_needs_auth():
+    async def _noop(*_a, **_k):
+        return ""
+
+    view = ModelPickerView(
+        providers=[],
+        current_model="m",
+        current_provider="p",
+        session_key="sess-1",
+        on_model_selected=_noop,
+        allowed_user_ids={OWNER},
+        allowed_role_ids=set(),
+    )
+    click = SimpleNamespace(
+        user=SimpleNamespace(id=int(MEMBER)),
+        guild_id=42,
+        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock()),
+    )
+    await view._on_cancel(click)
+    assert view.resolved is False
+    click.response.edit_message.assert_not_awaited()

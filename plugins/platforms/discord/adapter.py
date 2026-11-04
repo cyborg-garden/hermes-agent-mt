@@ -1289,8 +1289,9 @@ class DiscordAdapter(BasePlatformAdapter):
                     _msg_guild = getattr(message, "guild", None)
                     _is_dm = _discord_message_is_dm(message)
                     _msg_channel_ids = None
-                    if not _is_dm:
-                        # Use the full gate-key set (id, names, thread parent,
+                    if not _is_dm and _msg_guild is not None:
+                        # An uncached guild gets no channel keys, so it can't
+                        # use channel-scoped access. Use the full gate-key set (id, names, thread parent,
                         # category) so channel-scoped authorization sees the
                         # same keys as the allow/ignore gates and the slash
                         # path — a category id in DISCORD_ALLOWED_CHANNELS
@@ -8226,6 +8227,12 @@ def _define_discord_view_classes() -> None:
             )
 
         async def _on_cancel(self, interaction: discord.Interaction):
+            if not self._check_auth(interaction):
+                await interaction.response.send_message(
+                    "You're not authorized~", ephemeral=True
+                )
+                return
+
             self.resolved = True
             self.clear_items()
             await interaction.response.edit_message(
