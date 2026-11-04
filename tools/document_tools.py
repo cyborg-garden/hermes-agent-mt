@@ -164,8 +164,8 @@ def check_document_requirements() -> bool:
 READ_DOCUMENT_SCHEMA = {
     "name": "read_document",
     "description": (
-        "Extract the text of a document (PDF, EPUB, XPS, and similar) from a "
-        "local file path. Use this whenever the user sends or references a "
+        "Extract text from a document file (PDF, EPUB, XPS) at a local path. "
+        "Use this whenever the user sends or references a "
         "document file (a PDF attachment, a .pdf path in their message, a file "
         "saved by another tool). Prefer this over writing your own code to "
         "parse the file. For image-only / scanned documents with no text "
