@@ -105,6 +105,8 @@ class GatewayBackgroundMixin:
                     **{k: getattr(source, k) for k in (
                         "user_id", "user_id_alt", "user_name", "chat_id", "chat_name", "chat_type", "thread_id",
                     )},
+                    # mt: per-channel memory scoping for background tasks.
+                    context_id=self._context_id_for_source(source),
                     session_db=getattr(self._session_db, "_db", self._session_db),
                     # Reload from disk — do not reuse the startup snapshot.
                     # See #60955.
