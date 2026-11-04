@@ -397,6 +397,7 @@ def test_slash_authorization_allows_in_scope_guild_role(monkeypatch):
         channel=SimpleNamespace(id=9999),
         channel_id=9999,
         guild=trusted_guild,
+        guild_id=222222,
     )
 
     allowed, reason = adapter._evaluate_slash_authorization(interaction)

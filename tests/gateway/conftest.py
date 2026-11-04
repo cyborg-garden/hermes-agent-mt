@@ -465,3 +465,12 @@ def pytest_configure(config):
         else:
             cache_file.write_text("clean", encoding="utf-8")
 
+
+@pytest.fixture(autouse=True)
+def _discord_dm_gate_open(monkeypatch):
+    """Keep ordinary allowlist behaviour unless a test is about the DM gate.
+
+    Many fixtures build interactions with no guild_id, which the gate reads as
+    a DM. tests/gateway/test_discord_dm_gate.py clears this to test the default.
+    """
+    monkeypatch.setenv("DISCORD_DM_ALLOWED_USERS", "*")
