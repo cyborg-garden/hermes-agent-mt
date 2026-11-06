@@ -3429,31 +3429,27 @@ class DiscordAdapter(BasePlatformAdapter):
             return False
 
     def _history_author_role_allowed(self, user_id: str, author, guild) -> bool:
-        """Whether a human in fetched history passes the role allowlist at intake.
+        """Whether a human in fetched history would pass intake's own user/role check.
 
-        Only the role branch: the user allowlist is what the gateway callback
-        already checked, and channel-scoped access is deliberately not
-        re-granted here. History authors usually come without roles, so the
-        member is looked up in the guild cache; an uncached member stays
-        unverified (fail closed: this only changes the label).
+        Delegates to ``_is_allowed_user`` (deny store, guild-scoped roles) with
+        no channel context, so channel-scoped access is not re-granted here.
+        History authors usually come without roles, so the member is looked up
+        in the guild cache; an uncached member stays unverified (fail closed:
+        this only changes the label).
         """
         if not user_id or guild is None or not getattr(self, "_allowed_role_ids", set()):
             return False
-        member = author
-        if getattr(member, "roles", None) is None:
-            try:
-                member = guild.get_member(int(user_id)) or author
-            except Exception:
-                return False
-        if getattr(member, "roles", None) is None:
+        member = None
+        try:
+            member = guild.get_member(int(user_id))
+        except Exception:
+            member = None
+        if member is None:
             return False
         try:
-            if _moderation_sync.deny_store().is_denied(user_id):
-                return False
+            return bool(self._is_allowed_user(user_id, member, guild=guild, is_dm=False, channel_ids=None))
         except Exception:
             return False
-        role_ids = {str(getattr(r, "id", r)) for r in (member.roles or [])}
-        return bool(role_ids & {str(r) for r in self._allowed_role_ids})
 
     def _is_allowed_user(
         self,
