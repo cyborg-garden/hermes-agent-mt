@@ -2571,6 +2571,22 @@ def _context_id_for_source(source) -> Optional[str]:
     )
 
 
+def _strip_already_sent_media(result, sent_paths):
+    """Drop MEDIA tags for files an interim message already delivered, so a final reply that repeats
+    the last interim message (as some runtimes do) does not send the same file twice."""
+    if not sent_paths or not isinstance(result, dict):
+        return result
+    text = result.get("final_response")
+    if not isinstance(text, str) or "MEDIA:" not in text:
+        return result
+    import re as _re
+    for path in sent_paths:
+        text = _re.sub(r"\*{0,3}[`\"']?MEDIA:\s*[`\"']?" + _re.escape(str(path)) + r"[`\"']?\*{0,3}", "", text)
+    result = dict(result)
+    result["final_response"] = text.strip()
+    return result
+
+
 def _channel_override_lookup_keys(
     chat_id: str,
     *,
@@ -18746,26 +18762,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         multiplexing is off this is a transparent pass-through — zero behavior
         change for single-profile gateways.
         """
-        if not getattr(getattr(self, "config", None), "multiplex_profiles", False):
-            return await self._run_agent_inner(
-                message, context_prompt, history, source, session_id,
-                session_key=session_key, run_generation=run_generation,
-                _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
-                channel_prompt=channel_prompt, moa_config=moa_config,
-                persist_user_message=persist_user_message,
-                persist_user_timestamp=persist_user_timestamp,
-            )
-
-        profile_home = self._resolve_profile_home_for_source(source)
-        with _profile_runtime_scope(profile_home):
-            return await self._run_agent_inner(
-                message, context_prompt, history, source, session_id,
-                session_key=session_key, run_generation=run_generation,
-                _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
-                channel_prompt=channel_prompt, moa_config=moa_config,
-                persist_user_message=persist_user_message,
-                persist_user_timestamp=persist_user_timestamp,
-            )
+        _media_key = (session_id, run_generation, _interrupt_depth)
+        try:
+            if not getattr(getattr(self, "config", None), "multiplex_profiles", False):
+                result = await self._run_agent_inner(
+                    message, context_prompt, history, source, session_id,
+                    session_key=session_key, run_generation=run_generation,
+                    _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
+                    channel_prompt=channel_prompt, moa_config=moa_config,
+                    persist_user_message=persist_user_message,
+                    persist_user_timestamp=persist_user_timestamp,
+                )
+            else:
+                profile_home = self._resolve_profile_home_for_source(source)
+                with _profile_runtime_scope(profile_home):
+                    result = await self._run_agent_inner(
+                        message, context_prompt, history, source, session_id,
+                        session_key=session_key, run_generation=run_generation,
+                        _interrupt_depth=_interrupt_depth, event_message_id=event_message_id,
+                        channel_prompt=channel_prompt, moa_config=moa_config,
+                        persist_user_message=persist_user_message,
+                        persist_user_timestamp=persist_user_timestamp,
+                    )
+        finally:
+            _already_sent_media = self.__dict__.setdefault("_interim_media_sent", {}).pop(_media_key, None)
+        return _strip_already_sent_media(result, _already_sent_media)
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
         """Resolve the profile name for an inbound source via configured routes.
@@ -20038,16 +20059,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _interim_media, display_text = None, text
                     if _interim_media:
                         from types import SimpleNamespace as _NS
+                        self.__dict__.setdefault("_interim_media_sent", {}).setdefault(
+                            (session_id, run_generation, _interrupt_depth), set()
+                        ).update(str(p) for p, _ in _interim_media)
+                        _shim = _NS(source=source, message_id=event_message_id, reply_to_message_id=None)
+                        _media_text = str(text)
+                        _cleaned = display_text
+
+                        async def _text_then_media():
+                            # Text first, then the files, as the final reply does.
+                            if _stream_consumer is None and not already_streamed and str(_cleaned or "").strip():
+                                await _status_adapter.send(_status_chat_id, _cleaned, metadata=_status_thread_metadata)
+                            elif _stream_consumer is not None and str(_cleaned or "").strip():
+                                # The consumer sends commentary on its own loop; give it a moment.
+                                for _ in range(60):
+                                    try:
+                                        if _stream_consumer.has_delivered_text(_cleaned):
+                                            break
+                                    except Exception:
+                                        break
+                                    await asyncio.sleep(0.05)
+                            await self._deliver_media_from_response(_media_text, _shim, _status_adapter)
+
                         safe_schedule_threadsafe(
-                            self._deliver_media_from_response(
-                                str(text),
-                                _NS(source=source, message_id=event_message_id, reply_to_message_id=None),
-                                _status_adapter,
-                            ),
-                            _loop_for_step,
-                            logger=logger,
-                            log_message="interim media delivery error",
+                            _text_then_media(), _loop_for_step,
+                            logger=logger, log_message="interim media delivery error",
                         )
+                        if _stream_consumer is None:
+                            return
                 if _stream_consumer is not None:
                     if already_streamed:
                         _stream_consumer.on_segment_break()

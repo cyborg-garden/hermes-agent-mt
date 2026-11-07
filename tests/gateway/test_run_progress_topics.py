@@ -1691,8 +1691,14 @@ class MediaCaptureAdapter(ProgressCaptureAdapter):
     def __init__(self, platform=Platform.TELEGRAM):
         super().__init__(platform=platform)
         self.images = []
+        self.order = []
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None) -> SendResult:
+        self.order.append("text")
+        return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
 
     async def send_multiple_images(self, chat_id, images, metadata=None, **kwargs):
+        self.order.append("images")
         self.images.extend(images)
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, metadata=None, **kwargs):
@@ -1700,13 +1706,13 @@ class MediaCaptureAdapter(ProgressCaptureAdapter):
         return SendResult(success=True, message_id="img-1")
 
 
-def _media_agent(path):
+def _media_agent(path, final="done"):
     class MediaCommentaryAgent(CommentaryAgent):
         def run_conversation(self, message, conversation_history=None, task_id=None):
             if self.interim_assistant_callback:
                 self.interim_assistant_callback(f"Pick one:\n\nMEDIA:{path}", already_streamed=False)
             time.sleep(0.3)
-            return {"final_response": "done", "messages": [], "api_calls": 1}
+            return {"final_response": final.format(path=path), "messages": [], "api_calls": 1}
     return MediaCommentaryAgent
 
 
@@ -1722,3 +1728,18 @@ async def test_interim_commentary_delivers_media_tags(monkeypatch, tmp_path):
     assert "MEDIA:" not in sent_text, "the tag is not shown as text"
     assert "Pick one:" in sent_text
     assert any(str(img) in str(i) for i in adapter.images), adapter.images
+
+
+
+@pytest.mark.asyncio
+async def test_interim_media_text_comes_first_and_final_does_not_resend(monkeypatch, tmp_path):
+    img = tmp_path / "b.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    adapter, result = await _run_with_agent(
+        monkeypatch, tmp_path, _media_agent(img, final="Pick one:\n\nMEDIA:{path}"),
+        session_id="sess-interim-media-dup", adapter_cls=MediaCaptureAdapter,
+        config_data={"streaming": {"enabled": False}},
+    )
+    first_text = adapter.order.index("text")
+    assert "images" in adapter.order and first_text < adapter.order.index("images"), (adapter.order, adapter.sent)
+    assert "MEDIA:" not in result.get("final_response", ""), "the final reply won't send the same file again"
