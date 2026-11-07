@@ -3428,6 +3428,29 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception:
             return False
 
+    def _history_author_role_allowed(self, user_id: str, author, guild) -> bool:
+        """Whether a human in fetched history would pass intake's own user/role check.
+
+        Delegates to ``_is_allowed_user`` (deny store, guild-scoped roles) with
+        no channel context, so channel-scoped access is not re-granted here.
+        History authors usually come without roles, so the member is looked up
+        in the guild cache; an uncached member stays unverified (fail closed:
+        this only changes the label).
+        """
+        if not user_id or guild is None or not getattr(self, "_allowed_role_ids", set()):
+            return False
+        member = None
+        try:
+            member = guild.get_member(int(user_id))
+        except Exception:
+            member = None
+        if member is None:
+            return False
+        try:
+            return bool(self._is_allowed_user(user_id, member, guild=guild, is_dm=False, channel_ids=None))
+        except Exception:
+            return False
+
     def _is_allowed_user(
         self,
         user_id: str,
@@ -5615,6 +5638,17 @@ class DiscordAdapter(BasePlatformAdapter):
                         chat_type="thread" if is_thread_channel else "group",
                         chat_id=channel_id,
                     )
+                    if is_authorized is False and self._history_author_role_allowed(
+                        author_id, msg.author, getattr(channel, "guild", None),
+                    ):
+                        # The gateway callback sees no roles for history lines
+                        # (REST history carries no member data and the source
+                        # it builds has no platform identity), so a person let
+                        # in by DISCORD_ALLOWED_ROLES was tagged [unverified] in
+                        # their own thread and their quoted notes were demoted
+                        # to "not instructions". Admit them here exactly as
+                        # intake would: the same role check, deny store first.
+                        is_authorized = True
                     if is_authorized is False:
                         trust_tag = "[unverified] "
                         has_unverified = True
