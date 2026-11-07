@@ -2581,9 +2581,13 @@ def _strip_already_sent_media(result, sent_paths):
         return result
     import re as _re
     for path in sent_paths:
-        text = _re.sub(r"\*{0,3}[`\"']?MEDIA:\s*[`\"']?" + _re.escape(str(path)) + r"[`\"']?\*{0,3}", "", text)
+        text = _re.sub(r"\*{0,3}[`\"']?MEDIA:\s*[`\"']?" + _re.escape(str(path)) + r"(?![^\s`\"'*])[`\"']?\*{0,3}", "", text)
     result = dict(result)
     result["final_response"] = text.strip()
+    if not result["final_response"]:
+        # Everything in the reply was already delivered mid-turn: nothing is missing, so don't
+        # let the empty-reply handler tell the user no response was generated.
+        result["interim_delivered_all"] = True
     return result
 
 
@@ -2780,6 +2784,9 @@ def _normalize_empty_agent_response(
     """
     if response:
         return response
+
+    if agent_result.get("interim_delivered_all") and not agent_result.get("failed"):
+        return ""  # the whole reply went out mid-turn; there is nothing left to say
 
     if agent_result.get("failed"):
         error_detail = agent_result.get("error", "unknown error")

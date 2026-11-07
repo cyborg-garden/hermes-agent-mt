@@ -1743,3 +1743,15 @@ async def test_interim_media_text_comes_first_and_final_does_not_resend(monkeypa
     first_text = adapter.order.index("text")
     assert "images" in adapter.order and first_text < adapter.order.index("images"), (adapter.order, adapter.sent)
     assert "MEDIA:" not in result.get("final_response", ""), "the final reply won't send the same file again"
+
+
+
+def test_strip_already_sent_media_marks_an_emptied_reply_sent():
+    import gateway.run as gr
+    out = gr._strip_already_sent_media({"final_response": "MEDIA:/x/a.png", "api_calls": 2}, {"/x/a.png"})
+    assert out["final_response"] == "" and out["interim_delivered_all"] is True
+    assert gr._normalize_empty_agent_response(out, out["final_response"]) == "", "no false 'no response' error"
+    out = gr._strip_already_sent_media({"final_response": "see MEDIA:/x/a.png.jpg"}, {"/x/a.png"})
+    assert out["final_response"] == "see MEDIA:/x/a.png.jpg", "a longer file name is a different file"
+    same = {"final_response": "no tags"}
+    assert gr._strip_already_sent_media(same, {"/x/a.png"}) is same
