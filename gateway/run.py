@@ -20028,6 +20028,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if not _run_still_current():
                     return
                 display_text = text
+                # MEDIA: tags were only honoured in the final reply, so an image an
+                # agent attached mid-turn ("here are A and B, pick one") arrived as
+                # text and the picture never came. Deliver those files now too.
+                if _status_adapter is not None and "MEDIA:" in str(text or ""):
+                    try:
+                        _interim_media, display_text = _status_adapter.extract_media(str(text))
+                    except Exception:
+                        _interim_media, display_text = None, text
+                    if _interim_media:
+                        from types import SimpleNamespace as _NS
+                        safe_schedule_threadsafe(
+                            self._deliver_media_from_response(
+                                str(text),
+                                _NS(source=source, message_id=event_message_id, reply_to_message_id=None),
+                                _status_adapter,
+                            ),
+                            _loop_for_step,
+                            logger=logger,
+                            log_message="interim media delivery error",
+                        )
                 if _stream_consumer is not None:
                     if already_streamed:
                         _stream_consumer.on_segment_break()
