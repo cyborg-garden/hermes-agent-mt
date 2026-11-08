@@ -69,3 +69,26 @@ def test_bulk_rewrite_keeps_it(tmp_path):
     conn.commit()
     got = [r[0] for r in conn.execute("select served_by from messages order by id")]
     assert n == 2 and got == ["Fireworks", None]
+
+
+def test_a_transcript_rewrite_keeps_the_host(tmp_path):
+    """/retry, /undo and rewind reload the conversation and re-store it."""
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session("s1", "cli")
+    db.append_message("s1", "user", content="hi")
+    db.append_message("s1", "assistant", content="hello", served_by="Fireworks")
+    conv = db.get_messages_as_conversation("s1")
+    assert conv[-1]["_served_by"] == "Fireworks"
+    db.replace_messages("s1", conv)
+    got = [r[0] for r in sqlite3.connect(tmp_path / "state.db").execute(
+        "select served_by from messages where role='assistant'")]
+    assert got == ["Fireworks"]
+
+
+def test_the_sdk_chunk_type_keeps_the_field():
+    from openai.types.chat import ChatCompletionChunk
+    chunk = ChatCompletionChunk.model_validate({
+        "id": "x", "object": "chat.completion.chunk", "created": 0, "model": "m",
+        "choices": [], "provider": "Fireworks",
+    })
+    assert served_by_from_response(chunk) == "Fireworks"

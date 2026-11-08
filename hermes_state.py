@@ -4842,7 +4842,7 @@ class SessionDB:
             rows = self._conn.execute(
                 "SELECT role, content, tool_call_id, tool_calls, tool_name, effect_disposition, "
                 "finish_reason, reasoning, reasoning_content, reasoning_details, "
-                "codex_reasoning_items, codex_message_items, platform_message_id, observed, timestamp "
+                "codex_reasoning_items, codex_message_items, platform_message_id, observed, timestamp, served_by "
                 f"FROM messages WHERE session_id IN ({placeholders})"
                 # Order by AUTOINCREMENT id (true insertion order), NOT timestamp:
                 # append_message stamps rows with time.time(), which is not
@@ -4897,6 +4897,10 @@ class SessionDB:
             if row["role"] == "assistant":
                 if row["finish_reason"]:
                     msg["finish_reason"] = row["finish_reason"]
+                # Carried as an internal (_-prefixed, never sent) key so a
+                # transcript rewrite (retry, undo, rewind) re-stores it.
+                if row["served_by"]:
+                    msg["_served_by"] = row["served_by"]
                 if row["reasoning"]:
                     msg["reasoning"] = row["reasoning"]
                 if row["reasoning_content"] is not None:

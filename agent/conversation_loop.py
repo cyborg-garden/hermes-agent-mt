@@ -1289,6 +1289,7 @@ def run_conversation(
 
         finish_reason = "stop"
         response = None  # Guard against UnboundLocalError if all retries fail
+        agent._last_served_by = None  # set again by each call that returns
         api_kwargs = None  # Guard against UnboundLocalError in except handler
         api_request_id = f"{turn_id}:api:{api_call_count}"
         agent._current_api_request_id = api_request_id
@@ -1539,6 +1540,11 @@ def run_conversation(
                     api_call_count=api_call_count,
                     middleware_trace=list(_llm_middleware_trace),
                 )
+                # Record the serving host the moment this call returns, so every
+                # message built from it (including the length/truncation branches
+                # below) carries this call's host, never the previous one's.
+                from agent.chat_completion_helpers import served_by_from_response
+                agent._last_served_by = served_by_from_response(response)
                 
                 api_duration = time.time() - api_start_time
                 
@@ -4508,10 +4514,6 @@ def run_conversation(
             normalized = _transport.normalize_response(response, **_normalize_kwargs)
             assistant_message = normalized
             finish_reason = normalized.finish_reason
-            # Which upstream host answered (OpenRouter's ``provider``), stamped on the
-            # assistant message by build_assistant_message and stored as served_by.
-            from agent.chat_completion_helpers import served_by_from_response
-            agent._last_served_by = served_by_from_response(response)
             
             # Normalize content to string — some OpenAI-compatible servers
             # (llama-server, etc.) return content as a dict or list instead
