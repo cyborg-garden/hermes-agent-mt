@@ -4508,6 +4508,10 @@ def run_conversation(
             normalized = _transport.normalize_response(response, **_normalize_kwargs)
             assistant_message = normalized
             finish_reason = normalized.finish_reason
+            # Which upstream host answered (OpenRouter's ``provider``), stamped on the
+            # assistant message by build_assistant_message and stored as served_by.
+            from agent.chat_completion_helpers import served_by_from_response
+            agent._last_served_by = served_by_from_response(response)
             
             # Normalize content to string — some OpenAI-compatible servers
             # (llama-server, etc.) return content as a dict or list instead

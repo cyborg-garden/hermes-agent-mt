@@ -1120,6 +1120,28 @@ def build_api_kwargs(agent, api_messages: list) -> dict:
 
 
 
+def served_by_from_response(response) -> Optional[str]:
+    """The upstream host a router reports for a response, if any.
+
+    OpenRouter adds a top-level ``provider`` (e.g. "Fireworks") to chat
+    completion responses and stream chunks. The OpenAI SDK keeps unknown fields
+    as attributes or in ``model_extra``; a plain dict keeps them as keys.
+    """
+    if response is None:
+        return None
+    try:
+        value = getattr(response, "provider", None)
+        if not value:
+            extra = getattr(response, "model_extra", None)
+            if isinstance(extra, dict):
+                value = extra.get("provider")
+        if not value and isinstance(response, dict):
+            value = response.get("provider")
+    except Exception:
+        return None
+    return str(value)[:120] if isinstance(value, str) and value.strip() else None
+
+
 def build_assistant_message(agent, assistant_message, finish_reason: str) -> dict:
     """Build a normalized assistant message dict from an API response message.
 
@@ -1196,6 +1218,11 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         "reasoning": reasoning_text,
         "finish_reason": finish_reason,
     }
+    # ``_``-prefixed, so the transport strips it before any request; the session
+    # flush stores it as messages.served_by.
+    _served_by = getattr(agent, "_last_served_by", None)
+    if _served_by:
+        msg["_served_by"] = _served_by
 
     raw_reasoning_content = getattr(assistant_message, "reasoning_content", None)
     if raw_reasoning_content is None and hasattr(assistant_message, "model_extra"):
@@ -2499,6 +2526,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         _active_slot_by_idx: dict = {}  # raw_index -> current slot in tool_calls_acc
         finish_reason = None
         model_name = None
+        served_by = None
         role = "assistant"
         reasoning_parts: list = []
         usage_obj = None
@@ -2539,6 +2567,8 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             if agent._interrupt_requested:
                 break
 
+            if served_by is None:
+                served_by = served_by_from_response(chunk)
             if not chunk.choices:
                 if hasattr(chunk, "model") and chunk.model:
                     model_name = chunk.model
@@ -2765,6 +2795,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 model=model_name,
                 choices=[mock_choice],
                 usage=usage_obj,
+                provider=served_by,
                 _dropped_tool_names=_dropped_names or None,
             )
 
@@ -2789,6 +2820,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             model=model_name,
             choices=[mock_choice],
             usage=usage_obj,
+            provider=served_by,
         )
 
     def _call_anthropic():
