@@ -72,3 +72,23 @@ def test_a_file_that_is_not_a_database_still_fails_only_on_read(tmp_path):
     db = SessionDB(db_path=bad, read_only=True)
     with pytest.raises(sqlite3.DatabaseError):
         db.list_sessions_rich()
+
+
+@pytest.mark.parametrize("dropped", [("served_by",), ("served_by", "observed")])
+def test_a_file_from_before_served_by_reads(tmp_path, dropped):
+    path = tmp_path / "state.db"
+    current = SessionDB(path)
+    current.create_session("s1", source="cli")
+    current.append_message("s1", "assistant", "reply", served_by="Fireworks")
+    current.close()
+    old = sqlite3.connect(path)
+    for trig in ("messages_fts_delete", "messages_fts_update",
+                 "messages_fts_trigram_delete", "messages_fts_trigram_update"):
+        old.execute(f"DROP TRIGGER IF EXISTS {trig}")
+    for col in dropped:
+        old.execute(f"ALTER TABLE messages DROP COLUMN {col}")
+    old.commit()
+    old.close()
+    db = SessionDB(db_path=path, read_only=True)
+    conv = db.get_messages_as_conversation("s1")
+    assert [m["content"] for m in conv] == ["reply"] and "_served_by" not in conv[0]

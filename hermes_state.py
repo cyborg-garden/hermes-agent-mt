@@ -1446,9 +1446,13 @@ class SessionDB:
         """
         try:
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)")}
-            if columns and "observed" not in columns:
+            # Columns newer than the file, with the value their default would give.
+            fills = [expr for name, expr in (("observed", "0 AS observed"),
+                                             ("served_by", "NULL AS served_by"))
+                     if name not in columns]
+            if columns and fills:
                 self._conn.execute(
-                    "CREATE TEMP VIEW messages AS SELECT *, 0 AS observed FROM main.messages"
+                    "CREATE TEMP VIEW messages AS SELECT *, " + ", ".join(fills) + " FROM main.messages"
                 )
         except sqlite3.Error:
             # Unreadable or busy: the caller's own read reports it per profile.
