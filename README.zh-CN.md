@@ -4,6 +4,15 @@
 
 # Hermes Agent ☤
 
+> **🔀 多租户分支（Multi-Tenant Fork）** —— 这里是 `hermes-agent-mt`，在上游基础上为多租户部署打了补丁：按上下文（群组 / 私信）隔离记忆、群组访问策略，以及与 [Swarm Map](https://github.com/cyborg-garden/swarm-map/blob/main/README.zh-CN.md) 的集成。一个智能体可以同时服务多个群组和多位用户，而不会把一个群的记忆带进另一个群。
+>
+> - **主要改动：** 记忆写入按上下文隔离，而非全局共享；平台上下文 ID 规范化为安全的文件路径；Signal、Mattermost、Telegram 适配器的准入控制与群组隔离改进。详见 [FORK-NOTICE.md](FORK-NOTICE.md)（英文）。
+> - **与上游的关系：** 尽量保持最小差异，对上游有益的补丁会以 PR 形式提交回 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)。
+> - **镜像：** `ghcr.io/cyborg-garden/hermes-agent-mt:latest`。旧路径 `ghcr.io/nimblecoorg/...` 已失效；`ghcr.io/nimblecoai/...` 仍可拉取但已冻结在旧版本——拉取会成功但返回迁移前的旧代码，且不报错，比拉取失败更危险。请改用新路径。
+> - **欢迎用中文提 issue 和 PR。**
+>
+> 下文为上游 README 的中文版。
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
