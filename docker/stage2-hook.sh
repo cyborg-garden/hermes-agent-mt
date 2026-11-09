@@ -334,7 +334,7 @@ fi
 # entries of hermes_cli.profile_distribution.USER_OWNED_EXCLUDE plus the
 # runtime lock files; keep them in sync if that set changes.
 for f in \
-    auth.json auth.lock .env \
+    auth.json auth.lock .env github-broker.json \
     state.db state.db-shm state.db-wal \
     hermes_state.db \
     response_store.db response_store.db-shm response_store.db-wal \

@@ -1383,6 +1383,18 @@ class TestExportImport:
     # ---------------------------------------------------------------
 
 
+    def test_export_leaves_out_the_github_broker_secret(self, profile_env, tmp_path):
+        """It is this agent's identity, on default and named profiles alike."""
+        create_profile("coder", no_alias=True)
+        for name in ("default", "coder"):
+            home = get_profile_dir(name)
+            (home / "config.yaml").write_text("ok")
+            (home / "github-broker.json").write_text('{"secret": "x"}')
+            output = tmp_path / f"{name}.tar.gz"
+            export_profile(name, str(output))
+            with tarfile.open(str(output), "r:gz") as tf:
+                assert f"{name}/github-broker.json" not in tf.getnames()
+
     def test_export_default_includes_profile_data(self, profile_env, tmp_path):
         """Profile data files end up in the archive (credentials excluded)."""
         # Write through HERMES_HOME, not get_profile_dir("default"): the latter resolves to the

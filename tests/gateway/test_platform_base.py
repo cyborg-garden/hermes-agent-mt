@@ -663,6 +663,26 @@ class TestMediaDeliveryDefaultMode:
         assert BasePlatformAdapter.validate_media_delivery_path(str(secret)) is None
 
 
+    def test_denylist_blocks_github_broker_secret(self, tmp_path, monkeypatch):
+        """github-broker.json holds the agent's long-lived broker secret. A
+        prompt-injected MEDIA tag must not post it to chat, however old the
+        file is. Its mtime never changes, so recency is no protection.
+        """
+        self._patch_roots(monkeypatch)
+
+        fake_home = tmp_path / "home"
+        hermes_dir = fake_home / ".hermes"
+        hermes_dir.mkdir(parents=True)
+        secret = hermes_dir / "github-broker.json"
+        secret.write_text('{"url": "http://test", "secret": "not-a-real-secret"}')
+        old = time.time() - 300 * 86400
+        os.utime(secret, (old, old))
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setattr("gateway.platforms.base._HERMES_HOME", hermes_dir)
+        monkeypatch.setattr("gateway.platforms.base._HERMES_ROOT", hermes_dir)
+
+        assert BasePlatformAdapter.validate_media_delivery_path(str(secret)) is None
+
     def test_denylist_blocks_google_token_default_mode(self, tmp_path, monkeypatch):
         """Integration credentials at the HERMES_HOME root (google_token.json)
         must never be deliverable, even though they aren't the historically

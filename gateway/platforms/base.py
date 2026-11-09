@@ -797,7 +797,7 @@ def _sqlite_files(name: str) -> tuple[str, ...]:
 _ROOT_CREDENTIAL_PATHS = (
     ".env", "auth.json", "auth.lock", "credentials", "config.yaml", ".anthropic_oauth.json",
     "google_token.json", "google_oauth_pending.json", os.path.join("auth", "google_oauth.json"),
-    "webhook_subscriptions.json", os.path.join("cache", "bws_cache.json"),
+    "github-broker.json", "webhook_subscriptions.json", os.path.join("cache", "bws_cache.json"),
     os.path.join("cache", "bws_cache.enc.json"), "pairing", "mcp-tokens",
     # Whole conversation history (every secret ever pasted into a chat) and the copied browser
     # cookie/login store; sessions/ is the legacy transcript dir. SQLite sidecars are listed

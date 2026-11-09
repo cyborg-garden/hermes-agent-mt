@@ -964,10 +964,12 @@ class WebhookAdapter(BasePlatformAdapter):
             # Running it inline froze every adapter and timer on the gateway event loop for the duration
             # (Pattern A, #91912 class). asyncio.to_thread keeps the loop serving while the subprocess runs;
             # the worker thread is bounded by the subprocess timeout below.
+            # Also off-loop: it can ask the token broker over the network.
+            env = await asyncio.to_thread(self._github_env, delivery.get("profile"))
             result = await asyncio.to_thread(
                 subprocess.run, ["gh", "pr", "comment", str(pr_int), "--repo", repo, "--body", content],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
-                env=self._github_env(delivery.get("profile")))
+                env=env)
             if result.returncode == 0:
                 logger.info("[webhook] Posted comment on %s#%s", repo, pr_number)
                 return SendResult(success=True)
@@ -984,15 +986,21 @@ class WebhookAdapter(BasePlatformAdapter):
         """``gh`` environment for a delivery: a routed profile authenticates with ITS ``GH_TOKEN`` /
         ``GITHUB_TOKEN`` from the profile secret scope; under multiplex ``os.environ`` carries the default
         profile's, so those keys are dropped when the profile has none (fail closed, ``gh`` then falls to
-        its own stored login). ``None`` (inherit) for bare/default-bound routes."""
+        its own stored login). ``None`` (inherit) for bare/default-bound routes.
+
+        A home on the token broker gets its token here too: this process runs with HOME=/opt/data, so
+        ``gh`` can't see the login under ``home/``, and that ``.env`` holds no GitHub token."""
+        from hermes_cli.git_credentials import add_broker_gh_token
         if not profile or not isinstance(profile, str) or profile == "default":
-            return None
+            env = dict(os.environ)
+            return env if add_broker_gh_token(env) else None
         from agent.secret_scope import get_secret
         env = {k: v for k, v in os.environ.items() if k not in _GH_TOKEN_VARS}
         with self._profile_scope(profile):
             for name in _GH_TOKEN_VARS:
                 if value := get_secret(name):
                     env[name] = value
+            add_broker_gh_token(env)
         return env
 
     def _find_adapter(self, target_platform: Platform, profile: Optional[str]):

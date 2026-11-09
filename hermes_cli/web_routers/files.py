@@ -73,6 +73,7 @@ _SENSITIVE_MANAGED_FILE_BASENAMES = frozenset({
     "google_token.json", "google_oauth_pending.json", "google_oauth.json",
     "webhook_subscriptions.json", "bws_cache.json", "bws_cache.enc.json",
     ".git-credentials",  # git's credential-store cache (file_safety blocks it too)
+    "github-broker.json",  # the agent's secret for the host-side GitHub token broker
 })
 
 # Directory names whose whole subtree is credential material (the canonical

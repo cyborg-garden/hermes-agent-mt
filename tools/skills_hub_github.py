@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
+from hermes_constants import get_hermes_home
 from hermes_cli._subprocess_compat import windows_hide_flags
 from agent.retry_utils import parse_retry_after_seconds
 from tools.skills_guard import TRUSTED_REPOS
@@ -71,8 +72,10 @@ def _is_rate_limit_response(resp: httpx.Response) -> bool:
 
 
 class GitHubAuth:
-    """GitHub API authentication, tried in priority order: GITHUB_TOKEN / GH_TOKEN (PAT), `gh auth token`
-    (gh CLI), GitHub App JWT + installation token, then unauthenticated (60 req/hr, public repos only)."""
+    """GitHub API authentication, tried in priority order: GITHUB_TOKEN / GH_TOKEN (PAT), the host token
+    broker (the gateway needs this: it runs with HOME=/opt/data, so `gh` can't see the login under
+    /opt/data/home), `gh auth token` (gh CLI), GitHub App JWT + installation token, then unauthenticated
+    (60 req/hr, public repos only)."""
 
     def __init__(self):
         self._cached_token: Optional[str] = None
@@ -91,19 +94,22 @@ class GitHubAuth:
         return self._resolve_token() is not None
 
     def auth_method(self) -> str:
-        """'pat', 'gh-cli', 'github-app', or 'anonymous'."""
+        """'pat', 'github-broker', 'gh-cli', 'github-app', or 'anonymous'."""
         self._resolve_token()
         return self._cached_method or "anonymous"
 
     def _resolve_token(self) -> Optional[str]:
-        if self._cached_token and (self._cached_method != "github-app" or time.time() < self._app_token_expiry):
+        if self._cached_token and (
+            self._cached_method not in ("github-app", "github-broker") or time.time() < self._app_token_expiry
+        ):
             return self._cached_token
         if self._cached_method == "anonymous":
             # The chain already came up empty: re-running `gh auth token` (5 s timeout when gh has no
             # login / no keyring) before every API call stretched one install past four minutes.
             return None
         for method, resolve in (
-            ("pat", self._try_pat), ("gh-cli", self._try_gh_cli), ("github-app", self._try_github_app),
+            ("pat", self._try_pat), ("github-broker", self._try_broker), ("gh-cli", self._try_gh_cli),
+            ("github-app", self._try_github_app),
         ):
             token = None if method in self._rejected_methods else resolve()
             if token and token not in self._rejected_tokens:
@@ -122,7 +128,7 @@ class GitHubAuth:
             return
         self._rejected_tokens.add(token)
         if token == self._cached_token and self._cached_method:
-            label = {"pat": "GITHUB_TOKEN/GH_TOKEN", "gh-cli": "`gh auth token`"}.get(
+            label = {"pat": "GITHUB_TOKEN/GH_TOKEN", "github-broker": "the token broker", "gh-cli": "`gh auth token`"}.get(
                 self._cached_method, "the GitHub App token")
             self._rejected_methods.add(self._cached_method)
             self.rejected.append(label)
@@ -134,6 +140,24 @@ class GitHubAuth:
         # Profile-scoped secret lookup (multiplexed gateway safe).
         from agent.secret_scope import get_secret
         return get_secret("GITHUB_TOKEN") or get_secret("GH_TOKEN")
+
+    def _try_broker(self) -> Optional[str]:
+        """The host token broker, if this home is on it. A failure drops to the next method, not an error."""
+        from hermes_cli.github_app_token import (
+            REMINT_MARGIN_SECONDS, get_installation_token_detail, read_broker_config,
+        )
+        home = get_hermes_home()
+        if read_broker_config(home) is None:
+            return None
+        try:
+            detail = get_installation_token_detail(home)
+        except Exception as e:
+            logger.warning("Skills Hub got no token from the token broker (%s)", type(e).__name__)
+            return None
+        if detail is None:
+            return None
+        self._app_token_expiry = detail.expires_epoch - REMINT_MARGIN_SECONDS
+        return detail.token
 
     def _try_gh_cli(self) -> Optional[str]:
         # Shared with git clones: strips GH_TOKEN/GITHUB_TOKEN, which gh would otherwise echo back

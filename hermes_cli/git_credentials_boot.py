@@ -52,6 +52,7 @@ from typing import Optional
 from hermes_cli.github_app_token import (
     get_installation_token_detail,
     read_app_credentials,
+    read_broker_config,
 )
 
 GIT_HOST = "github.com"
@@ -327,6 +328,24 @@ def provision_git_credentials(
     resolved_name = name or home_dir.name
     resolved_email = email or f"{resolved_name}@users.noreply.github.com"
 
+    # The host broker beats everything: an agent on it holds nothing of its own.
+    # It runs the App-mode path, since both are mint-on-demand. A PAT from before
+    # the move can still be sitting in .git-credentials, so that goes too.
+    if read_broker_config(home_dir) is not None:
+        existing_creds = _read_text(cred_path)
+        if existing_creds is not None and is_managed_git_credentials(existing_creds):
+            cred_path.unlink()
+        return _provision_app_mode(
+            home_dir,
+            subprocess_home=subprocess_home,
+            cfg_path=cfg_path,
+            gh_hosts_path=gh_hosts_path,
+            name=resolved_name,
+            email=resolved_email,
+            force=force,
+            source="GITHUB_BROKER",
+        )
+
     # GitHub App mode takes precedence over a static PAT: an org-owned App is
     # the credential we want winning wherever both are configured (an agent
     # mid-migration may still carry its legacy PAT in .env).
@@ -411,6 +430,7 @@ def _provision_app_mode(
     name: str,
     email: str,
     force: bool,
+    source: str = "GITHUB_APP",
 ) -> ProvisionResult:
     """Provision GitHub App auth: helper-based ``.gitconfig`` + a lifetime-refreshed ``gh``.
 
@@ -469,14 +489,14 @@ def _provision_app_mode(
             home_dir,
             False,
             reason="git+gh already current",
-            source="GITHUB_APP",
+            source=source,
             identity=name,
         )
     return ProvisionResult(
         home_dir,
         True,
         reason="wrote " + "+".join(wrote),
-        source="GITHUB_APP",
+        source=source,
         identity=name,
     )
 
