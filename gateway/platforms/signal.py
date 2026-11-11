@@ -647,6 +647,63 @@ class SignalAdapter(BasePlatformAdapter):
     # Group allowlist persistence
     # ------------------------------------------------------------------
 
+    def _sender_explicitly_approved(self, sender: str, sender_uuid: str) -> bool:
+        """True only for a sender named in SIGNAL_ALLOWED_USERS (not "*" or empty)."""
+        if not self.dm_allow_from or "*" in self.dm_allow_from:
+            return False
+        return bool(
+            (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
+            or (sender and sender in self.dm_allow_from)
+            or (sender_uuid and sender_uuid in self.dm_allow_from)
+        )
+
+    def _message_mentions_bot(self, data_message: dict) -> bool:
+        account_norm = self._account_normalized
+        own_uuid = self._own_uuid
+        for m in data_message.get("mentions") or []:
+            if not isinstance(m, dict):
+                continue
+            if (account_norm and m.get("number") == account_norm) or (
+                own_uuid and m.get("uuid") == own_uuid
+            ):
+                return True
+        text = data_message.get("message") or ""
+        return bool(account_norm and f"@{account_norm}" in text)
+
+    def _vouch_for_group(
+        self,
+        group_id: Optional[str],
+        data_message: dict,
+        sender: str,
+        sender_uuid: str,
+        sender_name: str,
+    ) -> bool:
+        """Approve an unknown group when an approved user @mentions the bot in it.
+
+        Requires both: the sender is named in SIGNAL_ALLOWED_USERS, and the
+        message @mentions this bot. Being in a group with the bot is not
+        enough, and an open allowlist ("*") vouches for nobody.
+        """
+        if not group_id:
+            return False
+        if not self._sender_explicitly_approved(sender, sender_uuid):
+            return False
+        if not self._message_mentions_bot(data_message):
+            return False
+        self.group_allow_from.add(group_id)
+        logger.info(
+            "Signal: group %s approved because approved user %s mentioned the bot there",
+            group_id[:12], (sender_uuid or sender or "?")[:12],
+        )
+        try:
+            self._persist_approved_group(group_id, sender, sender_uuid, sender_name)
+        except Exception:
+            logger.warning(
+                "Signal: could not persist approved group %s (non-fatal)",
+                group_id[:12], exc_info=True,
+            )
+        return True
+
     def _persist_approved_group(
         self,
         group_id: str,
@@ -969,12 +1026,16 @@ class SignalAdapter(BasePlatformAdapter):
         # - Env var set with group IDs → only those groups allowed
         # - Env var set with "*" → all groups allowed
         # DM auth is fully handled by run.py (_is_user_authorized)
-        if is_group:
-            if not self.group_allow_from:
-                logger.debug("Signal: ignoring group message (no SIGNAL_GROUP_ALLOWED_USERS)")
-                return
-            if "*" not in self.group_allow_from and group_id not in self.group_allow_from:
-                logger.debug("Signal: group %s not in allowlist", group_id[:8] if group_id else "?")
+        if is_group and "*" not in self.group_allow_from and group_id not in self.group_allow_from:
+            # A group the bot joined at creation never sends an invite envelope
+            # (swarm-map#102), so the invite path can't approve it. An approved
+            # user @mentioning the bot there is an explicit act of vouching,
+            # unlike merely sharing a group with the bot (#56).
+            if not self._vouch_for_group(group_id, data_message, sender, sender_uuid, sender_name):
+                if not self.group_allow_from:
+                    logger.debug("Signal: ignoring group message (no SIGNAL_GROUP_ALLOWED_USERS)")
+                else:
+                    logger.debug("Signal: group %s not in allowlist", group_id[:8] if group_id else "?")
                 return
 
         # Build chat info
