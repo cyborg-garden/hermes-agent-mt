@@ -41,15 +41,33 @@ is shared across all chats and cannot expire with one of them.
 Changing the timer works like Signal: the new timer applies to new messages.
 Turning it off stops new messages being deleted; older ones still go on time.
 
+Conversation summaries (written when a long chat is compressed) are deleted as
+soon as anything they summarise is due, and the bot's in-memory copy is dropped
+too. That can be earlier than the summary's own timer, never later.
+
+A single "timer off" report doesn't stop deletion, since a member on an old or
+linked client can send one while the chat still has a timer. Two in a row do,
+counted from the first.
+
+Deleted pages are overwritten (`secure_delete`), the search index is optimised
+so old words leave it, and the write-ahead log is checkpointed.
+
 ## What it cannot do
 
 - It deletes copies on this host only. It cannot reach people's phones,
   Signal's servers, model providers, or host backups.
-- Files a tool copies somewhere else (for example a transcription job folder)
-  are that tool's job to clean up.
-- A conversation summary made when a long chat is compressed is a new message,
-  so it lasts its own full timer.
-- It does not delete log lines written before it was turned on.
+- External memory providers (anything wired through the memory manager's
+  `sync_turn`) still receive each turn. The built-in memory tool is blocked;
+  if an agent uses an external provider, turn it off for that agent or accept
+  that it keeps a copy.
+- Files a tool copies somewhere else (for example the papareo-transcribe
+  long-job folder) are that tool's job to clean up.
+- If compaction runs in the middle of a turn, that turn's newest messages are
+  rewritten with a fresh timestamp, so in a chat with a very short timer they
+  can last up to about twice the timer.
+- It does not delete log lines written before it was turned on, and only
+  blanks previews on lines that name the chat or session.
+- One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
 
 ## How it works
 

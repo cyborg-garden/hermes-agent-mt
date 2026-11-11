@@ -72,7 +72,8 @@ def test_sent_at_uses_signal_time_but_never_the_future():
     assert sent_at(int((T0 - 5) * 1000), T0) == T0 - 5
     assert sent_at(int((T0 + 5) * 1000), T0) == T0
     assert sent_at(None, T0) == T0
-    assert sent_at(int((T0 - 3 * 86400) * 1000), T0) == T0  # skewed, ignored
+    assert sent_at(int((T0 - 3 * 86400) * 1000), T0) == T0 - 3 * 86400  # backlog counts
+    assert sent_at(int((T0 - 60 * 86400) * 1000), T0) == T0  # implausible, ignored
 
 
 def test_early_margin_is_small_and_never_eats_a_short_timer():
@@ -133,7 +134,9 @@ def test_turning_the_timer_off_keeps_new_messages_but_old_ones_still_go(env):
     _msg(env, "s1", "during", T0 + 1)
     env.clock.t = T0 + 10
     env.r.observe("signal", GROUP, 0, int((T0 + 10) * 1000))
-    _msg(env, "s1", "afteroff", T0 + 11)
+    env.clock.t = T0 + 11
+    env.r.observe("signal", GROUP, 0, int((T0 + 11) * 1000))
+    _msg(env, "s1", "afteroff", T0 + 12)
     env.clock.t = T0 + 10_000
     env.r.sweep()
     assert _texts(env, "s1") == ["afteroff"]
@@ -156,8 +159,100 @@ def test_timer_change_applies_to_new_messages_only(env):
 
 def test_two_changes_at_the_same_instant_both_count(env):
     env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    env.r.observe("signal", GROUP, 0, int(T0 * 1000))
-    assert [sp.ttl_s for sp in env.r.spans("signal", GROUP)] == [60, 0]
+    env.r.observe("signal", GROUP, 120, int(T0 * 1000))
+    assert [sp.ttl_s for sp in env.r.spans("signal", GROUP)] == [60, 120]
+
+
+def test_one_stray_zero_does_not_stop_deletion(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
+    env.clock.t = T0 + 5
+    assert env.r.observe("signal", GROUP, 0, int((T0 + 5) * 1000)) == 60  # stale client
+    _msg(env, "s1", "fromstale", T0 + 6)
+    env.clock.t = T0 + 7
+    env.r.observe("signal", GROUP, 60, int((T0 + 7) * 1000))
+    env.clock.t = T0 + 1000
+    env.r.sweep()
+    assert _texts(env, "s1") == []
+
+
+def test_two_zeros_turn_it_off_from_the_first_one(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
+    env.clock.t = T0 + 5
+    env.r.observe("signal", GROUP, 0, int((T0 + 5) * 1000))
+    _msg(env, "s1", "betweenzeros", T0 + 6)
+    env.clock.t = T0 + 8
+    assert env.r.observe("signal", GROUP, 0, int((T0 + 8) * 1000)) == 0
+    env.clock.t = T0 + 1000
+    env.r.sweep()
+    assert _texts(env, "s1") == ["betweenzeros"]
+
+
+def test_message_sent_earlier_but_delivered_late_is_still_deleted(env):
+    _session(env, "s1")
+    env.clock.t = T0 + 10
+    env.r.observe("signal", GROUP, 60, int((T0 + 10) * 1000))  # first seen
+    env.r.observe("signal", GROUP, 60, int((T0 + 2) * 1000))   # sent earlier, arrived later
+    _msg(env, "s1", "lateone", T0 + 2)
+    _msg(env, "s1", "firstseen", T0 + 10)
+    env.clock.t = T0 + 1000
+    env.r.sweep()
+    assert _texts(env, "s1") == []
+
+
+def test_backlog_after_downtime_counts_from_send_time(env):
+    _session(env, "s1")
+    old = T0 - 2 * 86400
+    env.r.observe("signal", GROUP, 3600, int(old * 1000))
+    _msg(env, "s1", "backlog", old)
+    env.r.sweep()
+    assert _texts(env, "s1") == []
+
+
+def test_summary_goes_when_what_it_summarises_goes(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
+    _msg(env, "s1", "originalwords", T0 + 1)
+    _msg(env, "s1", "[CONTEXT COMPACTION — REFERENCE ONLY] they said originalwords", T0 + 50)
+    env.clock.t = T0 + 70  # original due, summary's own timestamp not yet
+    env.r.sweep()
+    assert _texts(env, "s1") == []
+    assert _fts_hits(env, "originalwords") == 0
+
+
+def test_delegation_records_are_swept(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
+    _msg(env, "s1", "x", T0 + 1)
+    with sqlite3.connect(env.home / "state.db") as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(async_delegations)")]
+        if not cols:
+            pytest.skip("no async_delegations table")
+        row = {"delegation_id": "d1", "origin_session": "s1", "state": "done",
+               "dispatched_at": T0 + 2, "updated_at": T0 + 2}
+        c.execute(f"INSERT INTO async_delegations ({','.join(row)}) VALUES ({','.join('?' * len(row))})",
+                  tuple(row.values()))
+    env.clock.t = T0 + 1000
+    assert env.r.sweep().delegations_deleted == 1
+
+
+def test_sweep_reports_sessions_to_drop_from_memory(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
+    _msg(env, "s1", "x", T0 + 1)
+    env.clock.t = T0 + 1000
+    keys = env.r.sweep().touched_session_keys
+    assert keys == {"agent:main:signal:group:testgroupid"}
+
+
+def test_observe_never_waits_on_a_running_sweep(env):
+    env.r._sweep_lock.acquire()
+    try:
+        assert env.r.observe("signal", GROUP, 60, int(T0 * 1000)) == 60
+        assert env.r.sweep().messages_deleted == 0  # a second sweep just skips
+    finally:
+        env.r._sweep_lock.release()
 
 
 def test_other_chats_are_untouched(env):
@@ -295,6 +390,21 @@ def test_log_previews_are_blanked_for_disappearing_chats_only(plugin, env):
     assert "secret" not in turn
     other = fmt("inbound message: platform=%s chat=%s msg=%r", "signal", OTHER, "fine to keep")
     assert "fine to keep" in other
+    paren = fmt("delivery (chat=%s) msg=%r", GROUP, "secret words")
+    assert "secret" not in paren
+
+
+def test_only_one_sweeper_thread(plugin, monkeypatch):
+    import threading
+    started = []
+    monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self.name))
+    real = threading.enumerate
+    monkeypatch.setattr(threading, "enumerate", lambda: real())
+    plugin._start_sweeper()
+    fake = type("T", (), {"name": plugin.SWEEPER_THREAD_NAME, "is_alive": lambda self: True})()
+    monkeypatch.setattr(threading, "enumerate", lambda: [fake])
+    plugin._start_sweeper()
+    assert started == [plugin.SWEEPER_THREAD_NAME]
 
 
 # ---------------------------------------------------------------- adapter field

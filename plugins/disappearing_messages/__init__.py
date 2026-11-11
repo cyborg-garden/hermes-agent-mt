@@ -15,9 +15,8 @@ Hooks:
 A background thread sweeps every ``DISAPPEARING_SWEEP_SECONDS`` (default 30).
 
 Limits, stated plainly: this deletes our copies on this host. It cannot reach
-other people's devices, Signal itself, model providers, files a tool copied
-elsewhere, or host backups. A compression summary is a new row and is kept
-until its own timer runs out.
+other people's devices, Signal itself, model providers, external memory
+providers, files a tool copied elsewhere, or host backups. See README.md.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ import logging
 import os
 import re
 import threading
+import weakref
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
@@ -39,9 +39,10 @@ MEMORY_READ_ACTIONS = {"read", "list", "view", "search", "get"}
 
 _retention: Optional[Retention] = None
 _init_lock = threading.Lock()
-_sweeper: Optional[threading.Thread] = None
 _stop = threading.Event()
 _filter: Optional["RedactFilter"] = None
+_gateway_ref: Optional["weakref.ReferenceType"] = None
+SWEEPER_THREAD_NAME = "disappearing-sweeper"
 
 
 def _home() -> Path:
@@ -64,8 +65,8 @@ def _get() -> Retention:
 # --------------------------------------------------------------------- logging
 
 _PREVIEW_RE = re.compile(r"\b(msg|reply_to_text)=('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")")
-_CHAT_RE = re.compile(r"\bchat=(\S+)")
-_SESSION_RE = re.compile(r"\bsession=(\S+)")
+_CHAT_RE = re.compile(r"\bchat=([^\s,;)\]]+)")
+_SESSION_RE = re.compile(r"\bsession=([^\s,;)\]]+)")
 
 
 class RedactFilter(logging.Filter):
@@ -154,6 +155,12 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
         meta = (getattr(event, "metadata", None) or {}).get(platform) or {}
         if "expires_in_seconds" not in meta:
             return None  # adapter predates the timer field
+        global _gateway_ref
+        if gateway is not None:
+            try:
+                _gateway_ref = weakref.ref(gateway)
+            except TypeError:
+                pass
         if session_store is not None and getattr(session_store, "sessions_dir", None):
             r = _get()
             d = Path(session_store.sessions_dir)
@@ -210,27 +217,45 @@ def _sweep_interval() -> float:
         return 30.0
 
 
+def _evict(session_keys) -> None:
+    """Drop cached agents so nothing deleted lingers in memory (e.g. a summary)."""
+    gw = _gateway_ref() if _gateway_ref is not None else None
+    evict = getattr(gw, "_evict_cached_agent", None)
+    if evict is None:
+        return
+    for key in session_keys:
+        try:
+            evict(key)
+        except Exception:
+            logger.debug("disappearing: could not evict a cached agent", exc_info=True)
+
+
+def _sweep_once() -> None:
+    result = _get().sweep()
+    if result.touched_session_keys:
+        _evict(result.touched_session_keys)
+    _refresh_filter_chats()
+    _install_filter()
+
+
 def _sweep_loop() -> None:
     interval = _sweep_interval()
-    while not _stop.wait(interval):
+    while True:
+        # First pass straight away: anything that fell due while we were down.
         try:
-            _get().sweep()
-            _refresh_filter_chats()
-            _install_filter()
+            _sweep_once()
         except Exception:
             logger.exception("disappearing: sweep failed; will retry")
+        if _stop.wait(interval):
+            return
 
 
 def _start_sweeper() -> None:
-    global _sweeper
-    if _sweeper is not None and _sweeper.is_alive():
-        return
-    try:
-        _get().sweep()  # overdue deletions first, before new work
-    except Exception:
-        logger.exception("disappearing: startup sweep failed; will retry")
-    _sweeper = threading.Thread(target=_sweep_loop, name="disappearing-sweeper", daemon=True)
-    _sweeper.start()
+    """One sweeper per process, even if the plugin module is loaded again."""
+    for t in threading.enumerate():
+        if t.name == SWEEPER_THREAD_NAME and t.is_alive():
+            return
+    threading.Thread(target=_sweep_loop, name=SWEEPER_THREAD_NAME, daemon=True).start()
 
 
 def register(ctx) -> None:
