@@ -733,9 +733,25 @@ class SignalAdapter(BasePlatformAdapter):
         """
         if self.group_invite_policy == "allow-all":
             return ("", "", "allow-all-policy")
-        if not self.dm_allow_from or "*" in self.dm_allow_from:
+        # Only an operator who deliberately opened the bot to everyone gets
+        # every group approved. An unset allowlist means nobody, not everybody:
+        # otherwise anyone could add the bot to a group and use it.
+        if self._is_explicitly_open():
             return ("", "", "open-mode")
         return None
+
+    @staticmethod
+    def _is_explicitly_open() -> bool:
+        """True only when the operator set allow-all or an explicit ``*``."""
+        truthy = {"true", "1", "yes"}
+        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+        for env_name in ("SIGNAL_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS"):
+            if "*" in {x.strip() for x in os.getenv(env_name, "").split(",")}:
+                return True
+        return False
 
     async def _reconcile_groups(self) -> None:
         """Auto-approve groups the agent is already a member of.
@@ -1015,15 +1031,9 @@ class SignalAdapter(BasePlatformAdapter):
                 if self.group_invite_policy == "allow-all":
                     inviter_approved = True
                 else:
-                    # Check if the inviter is an approved user.
-                    # Prefer UUID match (stable) with phone-number fallback.
-                    inviter_approved = (
-                        not self.dm_allow_from  # no allowlist = open mode
-                        or "*" in self.dm_allow_from  # wildcard = accept all
-                        or (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
-                        or sender in self.dm_allow_from
-                        or sender_uuid in self.dm_allow_from
-                    )
+                    # The inviter must be named in the allowlist. An unset
+                    # allowlist approves nobody (same rule as /approve-group).
+                    inviter_approved = self._is_approved_user(sender, sender_uuid)
                 if not inviter_approved:
                     logger.warning(
                         "Signal: rejecting group invite from unapproved user %s for group %s",

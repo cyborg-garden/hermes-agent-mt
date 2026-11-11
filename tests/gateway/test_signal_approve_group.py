@@ -375,9 +375,21 @@ class TestExplicitAllowlistRequired:
         adapter.send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_legacy_invite_unset_allowlist_unchanged(self, monkeypatch, tmp_path):
-        # Legacy groupV2 invite path keeps its old semantics (dm_allow_from).
+    async def test_legacy_invite_unset_allowlist_approves_nobody(self, monkeypatch, tmp_path):
+        # An unset allowlist means nobody, not everybody: otherwise anyone
+        # could add the bot to a group and use it.
         adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+
+        calls = await _send_invite_envelope(
+            adapter, GID, sender=STRANGER, sender_uuid=STRANGER_UUID,
+        )
+
+        assert "joinGroup" not in calls
+        assert GID not in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_legacy_invite_explicit_star_still_accepts(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users="*")
 
         calls = await _send_invite_envelope(
             adapter, GID, sender=STRANGER, sender_uuid=STRANGER_UUID,
