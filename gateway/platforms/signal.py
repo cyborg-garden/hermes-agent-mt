@@ -922,7 +922,12 @@ class SignalAdapter(BasePlatformAdapter):
                 exc_info=True,
             )
         try:
-            await self.send(f"group:{group_id}", "This group is approved.")
+            sent = await self.send(f"group:{group_id}", "This group is approved.")
+            if sent is not None and not getattr(sent, "success", True):
+                logger.warning(
+                    "Signal: group %s approved, but the confirmation was not delivered: %s",
+                    gid_short, getattr(sent, "error", None) or "unknown error",
+                )
         except Exception:
             logger.warning(
                 "Signal: could not send approval confirmation to group %s",
