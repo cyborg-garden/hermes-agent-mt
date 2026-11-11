@@ -236,7 +236,7 @@ class Platform(Enum):
     WECOM = "wecom"
     WECOM_CALLBACK = "wecom_callback"
     WEIXIN = "weixin"
-    YUANBAO = "yuanbao"
+    YUANBAO = "yuanbao"  # fork-only: upstream deleted this in v0.23.1; kept because plugins/platforms/yuanbao/ depends on it
     BLUEBUBBLES = "bluebubbles"
     QQBOT = "qqbot"
     RELAY = "relay"  # generic relay adapter fronted by the connector (EXPERIMENTAL)
