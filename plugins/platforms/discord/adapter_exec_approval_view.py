@@ -24,7 +24,7 @@ def build_exec_approval_view(discord, base, *, unauthorized):
             require_admin: bool = False, admin_user_ids: Optional[set] = None,
             approver_roles: Optional[set] = None,
             allow_permanent: bool = True, allow_session: bool = True, smart_denied: bool = False,
-            request_id: Optional[str] = None,
+            request_id: Optional[str] = None, allow_once: bool = True, approval_extra: Optional[dict] = None,
         ):
             super().__init__(allowed_user_ids, allowed_role_ids, timeout=_read_discord_prompt_timeout())
             self.session_key = session_key
@@ -36,6 +36,8 @@ def build_exec_approval_view(discord, base, *, unauthorized):
             self.admin_user_ids = {str(a).strip() for a in (admin_user_ids or set()) if str(a).strip()}
             # Fork: role IDs or names; a holder in the prompt's guild may also approve.
             self.approver_roles = {str(r).strip() for r in (approver_roles or set()) if str(r).strip()}
+            # The platform block: its admins answer any approval even with require_admin off (approval_actor).
+            self.approval_extra = approval_extra
             self._localize_buttons(
                 allow_once="gateway.exec_approval.action_once", allow_session="gateway.exec_approval.action_session",
                 allow_always="gateway.exec_approval.action_always", deny="gateway.exec_approval.action_deny")
@@ -44,6 +46,8 @@ def build_exec_approval_view(discord, base, *, unauthorized):
                 self.remove_item(self.allow_always)
             elif not allow_permanent:
                 self.remove_item(self.allow_always)
+            if not allow_once:  # Deny-only card: the command could not be shown in full
+                self.remove_item(self.allow_once)
 
         def _check_auth(self, interaction: discord.Interaction) -> bool:
             """Base admission always required; with ``require_admin`` the clicker must
@@ -108,14 +112,22 @@ def build_exec_approval_view(discord, base, *, unauthorized):
                 unauth_msg=unauthorized(),
             ):
                 return
+            from gateway.approval_actor import approval_refusal, refusal_text
+            # Admins of the approval's own chat scope (``extra``), as ``/approve``: never the DM-only
+            # ``admin_user_ids``, which stays this view's own require_admin click gate.
+            if requester := approval_refusal(self.session_key, getattr(interaction.user, "id", ""),
+                                             extra=self.approval_extra or {}, request_id=self.request_id):
+                return await interaction.response.send_message(refusal_text(requester), ephemeral=True)
             label = t(label_key)
             self.resolved = True
             self._backend_settled = True
             # Unblock the waiting agent thread FIRST. A click after the approval
             # wait timed out (count == 0) must not claim "Approved".
             try:
-                from tools.approval import resolve_gateway_approval
-                count = resolve_gateway_approval(self.session_key, choice, request_id=self.request_id)
+                from tools.approval import resolve_gateway_approval_card
+                count = resolve_gateway_approval_card(
+                    self.session_key, choice, self.request_id, actor_id=getattr(interaction.user, "id", ""),
+                    extra=self.approval_extra or {})
                 logger.info(
                     "Discord button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                     count, self.session_key, choice, interaction.user.display_name,
