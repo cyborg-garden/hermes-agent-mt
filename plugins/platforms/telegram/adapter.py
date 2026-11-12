@@ -4529,6 +4529,21 @@ class TelegramAdapter(TelegramContactMixin, TelegramHeldInboundMixin, TelegramRe
             approval_id = int(parts[2])
         except (ValueError, IndexError):
             return await answer_callback(query, _toast("platform.telegram.approval.toast_invalid_data"))
+        # Admin-only approval gating (fork): an allowlisted tapper must ALSO be an approval admin
+        # (same authority as the typed /approve path). Checked before the pending entry is claimed so a
+        # refused tap leaves the approval open for an admin. Fails closed if the check itself raises.
+        if not await self._callback_authorized(query, cb, _unauthorized()):
+            return
+        try:
+            from tools import approval_context
+            if approval_context._get_approval_config().get("admin_only", True) and not self._is_user_admin(
+                str(getattr(query.from_user, "id", "")), chat_id=cb["chat_id"],
+                chat_type=str(cb["chat_type"]) if cb["chat_type"] is not None else None,
+                thread_id=str(cb["thread_id"]) if cb["thread_id"] is not None else None, user_name=cb["user_name"]):
+                return await answer_callback(query, "⛔ Not authorized — only admin users can approve commands.")
+        except Exception as _admin_err:
+            logger.warning("Admin-only approval check failed: %s", _admin_err)
+            return await answer_callback(query, "⛔ Could not verify approval permissions — denied.")
         resolved = _toast("platform.telegram.approval.toast_already_resolved")
         if not (session_key := await self._claim_callback_state(
                 query, cb, self._approval_state, approval_id, _unauthorized(), resolved, pop=False)):

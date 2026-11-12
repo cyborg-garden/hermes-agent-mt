@@ -207,6 +207,7 @@ class TestTelegramApprovalCallback:
         adapter = _make_adapter()
         # Set up approval state
         adapter._approval_state[1] = "agent:main:telegram:group:12345:99"
+        adapter._approval_request_ids[1] = "req-1"  # an id-less card tap settles nothing (upstream 677e352ad2)
 
         # Mock callback query
         query = AsyncMock()
@@ -228,7 +229,7 @@ class TestTelegramApprovalCallback:
                 with patch("tools.approval.resolve_gateway_approval", return_value=1) as mock_resolve:
                     await adapter._handle_callback_query(update, context)
 
-        mock_resolve.assert_called_once_with("agent:main:telegram:group:12345:99", "once")
+        mock_resolve.assert_called_once_with("agent:main:telegram:group:12345:99", "once", request_id="req-1")
         query.answer.assert_called_once()
         query.edit_message_text.assert_called_once()
 
@@ -332,6 +333,7 @@ class TestTelegramApprovalCallback:
     async def test_deny_button(self):
         adapter = _make_adapter()
         adapter._approval_state[2] = "some-session"
+        adapter._approval_request_ids[2] = "req-2"  # an id-less card tap settles nothing (upstream 677e352ad2)
 
         query = AsyncMock()
         query.data = "ea:deny:2"
@@ -352,7 +354,7 @@ class TestTelegramApprovalCallback:
                 with patch("tools.approval.resolve_gateway_approval", return_value=1) as mock_resolve:
                     await adapter._handle_callback_query(update, context)
 
-        mock_resolve.assert_called_once_with("some-session", "deny")
+        mock_resolve.assert_called_once_with("some-session", "deny", request_id="req-2")
         edit_kwargs = query.edit_message_text.call_args[1]
         assert "Denied" in edit_kwargs["text"]
 

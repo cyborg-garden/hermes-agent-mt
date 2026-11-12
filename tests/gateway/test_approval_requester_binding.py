@@ -46,7 +46,11 @@ def write_approvers(approvers):
     """Write the profile's config.yaml as a user would (``DEFAULT`` leaves the key out)."""
     from hermes_constants import get_hermes_home
 
-    approvals = {"mode": "manual", **({} if approvers == DEFAULT else {"approvers": approvers})}
+    # Fork: ``approvals.admin_only`` defaults to True here and gates /approve and /deny ahead of the
+    # requester binding (tests/gateway/test_approval_admin_gating.py). These cases cover the binding
+    # alone, so the profile turns the fork gate off, as an operator relying on ``approvers`` would.
+    approvals = {"mode": "manual", "admin_only": False,
+                 **({} if approvers == DEFAULT else {"approvers": approvers})}
     (get_hermes_home() / "config.yaml").write_text(yaml.safe_dump({"approvals": approvals}), encoding="utf-8")
 
 
