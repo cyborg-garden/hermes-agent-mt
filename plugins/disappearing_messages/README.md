@@ -90,6 +90,14 @@ edit skills (including from the background skill review). Both are shared
 across all chats and cannot expire with one of them. If the check itself fails,
 the write is refused.
 
+## Copies made by other tools
+
+`scrub.py` blanks a disappearing chat's text in a *copy* of `state.db`, by the
+same rules as deletion, so tools that copy the whole database don't carry it
+past the timer. The Failure Atlas nightly export calls it on its snapshot
+inside the container. Roles, tool names, timings and finish reasons stay; every
+other chat keeps its text. Usage: `python3 scrub.py <copy.db> [<agent home>]`.
+
 ## What it cannot do
 
 - It deletes copies on this host only. It cannot reach people's phones,
