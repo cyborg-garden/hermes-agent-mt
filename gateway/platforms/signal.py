@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -732,9 +733,25 @@ class SignalAdapter(BasePlatformAdapter):
         """
         if self.group_invite_policy == "allow-all":
             return ("", "", "allow-all-policy")
-        if not self.dm_allow_from or "*" in self.dm_allow_from:
+        # Only an operator who deliberately opened the bot to everyone gets
+        # every group approved. An unset allowlist means nobody, not everybody:
+        # otherwise anyone could add the bot to a group and use it.
+        if self._is_explicitly_open():
             return ("", "", "open-mode")
         return None
+
+    @staticmethod
+    def _is_explicitly_open() -> bool:
+        """True only when the operator set allow-all or an explicit ``*``."""
+        truthy = {"true", "1", "yes"}
+        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").strip().lower() in truthy:
+            return True
+        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").strip().lower() in truthy:
+            return True
+        for env_name in ("SIGNAL_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS"):
+            if "*" in {x.strip() for x in os.getenv(env_name, "").split(",")}:
+                return True
+        return False
 
     async def _reconcile_groups(self) -> None:
         """Auto-approve groups the agent is already a member of.
@@ -796,6 +813,142 @@ class SignalAdapter(BasePlatformAdapter):
             logger.info(
                 "Signal: group reconciliation approved %d pre-existing group(s)",
                 approved,
+            )
+
+    # ------------------------------------------------------------------
+    # Explicit group approval ("@bot /approve-group")
+    # ------------------------------------------------------------------
+
+    def _is_approved_user(self, sender: str, sender_uuid: str) -> bool:
+        """Whether *sender* may approve a group with /approve-group.
+
+        Fail-closed, and mirrors ``GatewayRunner._is_individual_allowlisted``
+        in gateway/run.py (the "approved = admin" set) rather than
+        ``dm_allow_from``: ``dm_allow_from`` defaults to ``{"*"}`` when
+        SIGNAL_ALLOWED_USERS is unset, which would let any stranger approve a
+        group (and, through the group allowlist, authorize every member).
+
+        Approves only when:
+          - SIGNAL_ALLOW_ALL_USERS or GATEWAY_ALLOW_ALL_USERS is truthy, or
+          - SIGNAL_ALLOWED_USERS / GATEWAY_ALLOWED_USERS is set explicitly and
+            contains ``*`` (run.py treats an explicit ``*`` as allow-all), or
+            lists the sender's phone or UUID (including the UUID a listed
+            phone resolved to at startup, for sealed-sender messages).
+
+        An unset or empty allowlist never approves. Narrower than run.py in
+        one way: the DM pairing store is not consulted (the adapter has no
+        access to it); list approvers in SIGNAL_ALLOWED_USERS instead.
+        """
+        truthy = {"true", "1", "yes"}
+        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in truthy:
+            return True
+
+        explicit = set()
+        for env_name in ("SIGNAL_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS"):
+            explicit.update(
+                x.strip() for x in os.getenv(env_name, "").split(",") if x.strip()
+            )
+        if not explicit:
+            return False
+        if "*" in explicit:
+            return True
+
+        check_ids = {i for i in (sender, sender_uuid) if i}
+        if check_ids & explicit:
+            return True
+        # UUIDs resolved at startup from phones listed in SIGNAL_ALLOWED_USERS.
+        # Only explicit entries are ever resolved, so this cannot widen access.
+        return bool(check_ids & (self.dm_allow_from_uuids or set()))
+
+    def _bot_mention_ids(self) -> set:
+        """Identifiers a rendered @mention of the bot may carry."""
+        ids = set()
+        account = self._account_normalized
+        if account:
+            ids.add(account)
+            ids.add(account.lstrip("+"))
+            mapped = self._recipient_uuid_by_number.get(account)
+            if mapped:
+                ids.add(mapped)
+        if self._own_uuid:
+            ids.add(self._own_uuid)
+        return {i for i in ids if i}
+
+    def _is_approve_group_command(self, data_message: dict, group_info) -> bool:
+        """True when the message text is exactly /approve-group (case-insensitive),
+        optionally with @mentions of the bot. Any other text, including a
+        mention of someone else, is not the command. Group UPDATE events are
+        never the command. When require_mention is on, the bot must be
+        @mentioned with a real Signal mention (mention metadata), not just
+        "@<number>" typed as text."""
+        if isinstance(group_info, dict) and str(group_info.get("type") or "").upper() == "UPDATE":
+            return False
+        raw = data_message.get("message") or ""
+        if "/approve-group" not in raw.lower():
+            return False
+        mentions = data_message.get("mentions") or []
+        text = _render_mentions(raw, mentions) if mentions else raw
+        bot_ids = self._bot_mention_ids()
+        mentioned = any(
+            m.get("number") in bot_ids or m.get("uuid") in bot_ids
+            for m in mentions
+            if isinstance(m, dict)
+        )
+        # Strip bot mentions (rendered or typed) so the remaining text can be
+        # compared, but only mention metadata counts as "mentioned".
+        for ident in sorted(bot_ids, key=len, reverse=True):
+            pattern = "@" + re.escape(ident)
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+        if self.require_mention and not mentioned:
+            return False
+        return text.strip().lower() == "/approve-group"
+
+    async def _handle_approve_group(
+        self,
+        group_id: str,
+        sender: str,
+        sender_uuid: str,
+        sender_name: str,
+    ) -> None:
+        """Approve a not-yet-allowed group on an approved user's explicit command.
+
+        Unapproved senders are ignored silently (no reply), so the bot does
+        not reveal itself in groups nobody approved.
+        """
+        gid_short = group_id[:12] if group_id else "?"
+        who = sender_uuid[:12] if sender_uuid else (sender or "?")
+        if not self._is_approved_user(sender, sender_uuid):
+            logger.info(
+                "Signal: ignoring /approve-group from unapproved user %s in group %s",
+                who, gid_short,
+            )
+            return
+        self.group_allow_from.add(group_id)
+        logger.info(
+            "Signal: group %s approved via /approve-group by %s", gid_short, who,
+        )
+        try:
+            self._persist_approved_group(group_id, sender, sender_uuid, sender_name)
+        except Exception:
+            logger.warning(
+                "Signal: could not persist approved group %s (non-fatal)",
+                gid_short,
+                exc_info=True,
+            )
+        try:
+            sent = await self.send(f"group:{group_id}", "This group is approved.")
+            if sent is not None and not getattr(sent, "success", True):
+                logger.warning(
+                    "Signal: group %s approved, but the confirmation was not delivered: %s",
+                    gid_short, getattr(sent, "error", None) or "unknown error",
+                )
+        except Exception:
+            logger.warning(
+                "Signal: could not send approval confirmation to group %s",
+                gid_short,
+                exc_info=True,
             )
 
     # ------------------------------------------------------------------
@@ -878,15 +1031,9 @@ class SignalAdapter(BasePlatformAdapter):
                 if self.group_invite_policy == "allow-all":
                     inviter_approved = True
                 else:
-                    # Check if the inviter is an approved user.
-                    # Prefer UUID match (stable) with phone-number fallback.
-                    inviter_approved = (
-                        not self.dm_allow_from  # no allowlist = open mode
-                        or "*" in self.dm_allow_from  # wildcard = accept all
-                        or (sender_uuid and sender_uuid in self.dm_allow_from_uuids)
-                        or sender in self.dm_allow_from
-                        or sender_uuid in self.dm_allow_from
-                    )
+                    # The inviter must be named in the allowlist. An unset
+                    # allowlist approves nobody (same rule as /approve-group).
+                    inviter_approved = self._is_approved_user(sender, sender_uuid)
                 if not inviter_approved:
                     logger.warning(
                         "Signal: rejecting group invite from unapproved user %s for group %s",
@@ -969,11 +1116,25 @@ class SignalAdapter(BasePlatformAdapter):
         # - Env var set with group IDs → only those groups allowed
         # - Env var set with "*" → all groups allowed
         # DM auth is fully handled by run.py (_is_user_authorized)
+        #
+        # Explicit approval: in a group not yet allowed, an approved user can
+        # send "@bot /approve-group" to add it (see _handle_approve_group).
+        # Every other message in an unapproved group is silently dropped.
         if is_group:
+            group_allowed = bool(self.group_allow_from) and (
+                "*" in self.group_allow_from or group_id in self.group_allow_from
+            )
+            if self._is_approve_group_command(data_message, group_info):
+                if not group_allowed:
+                    await self._handle_approve_group(
+                        group_id, sender, sender_uuid, sender_name,
+                    )
+                # Already allowed: no-op. Never forwarded to the agent.
+                return
             if not self.group_allow_from:
                 logger.debug("Signal: ignoring group message (no SIGNAL_GROUP_ALLOWED_USERS)")
                 return
-            if "*" not in self.group_allow_from and group_id not in self.group_allow_from:
+            if not group_allowed:
                 logger.debug("Signal: group %s not in allowlist", group_id[:8] if group_id else "?")
                 return
 
@@ -2403,7 +2564,9 @@ class SignalAdapter(BasePlatformAdapter):
             return False
         if event is not None:
             sender = getattr(getattr(event, "source", None), "user_id", None)
-            if sender and "*" not in self.dm_allow_from and sender not in self.dm_allow_from:
+            # An unset allowlist defaults dm_allow_from to {"*"}; that must not
+            # mean "react to everyone", or strangers learn a bot is listening.
+            if sender and not self._is_explicitly_open() and sender not in self.dm_allow_from:
                 # Sender not matched by user_id. Sealed-sender messages may carry
                 # the UUID as user_id_alt — match it against the allowlist (incl.
                 # resolved UUIDs) before denying. "approved = admin": the

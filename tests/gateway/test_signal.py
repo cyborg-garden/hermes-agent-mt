@@ -2581,7 +2581,8 @@ class TestObserveOnlyReactionSuppression:
 
     @pytest.mark.asyncio
     async def test_normal_event_still_gets_reactions(self, monkeypatch):
-        """Non-observe_only events should still trigger reactions normally."""
+        """Non-observe_only events from an approved sender still get reactions."""
+        monkeypatch.setenv("SIGNAL_ALLOWED_USERS", "+15559999999")
         adapter = _make_signal_adapter(monkeypatch)
         adapter.send_reaction = AsyncMock()
 

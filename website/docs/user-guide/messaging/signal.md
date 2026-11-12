@@ -141,6 +141,40 @@ Group access is controlled by the `SIGNAL_GROUP_ALLOWED_USERS` env var:
 | Set with group IDs | Only listed groups are monitored (e.g., `groupId1,groupId2`). |
 | Set to `*` | The bot responds in any group it's a member of. |
 
+#### Approving a new group
+
+Groups the bot joins later are added to the allowlist explicitly. **To approve
+a group, an approved user sends `@bot /approve-group` in it.** The bot adds the
+group, remembers it across restarts, and replies once: "This group is
+approved."
+
+- "Approved user" means a sender explicitly listed in `SIGNAL_ALLOWED_USERS`
+  (or `GATEWAY_ALLOWED_USERS`) by phone number or UUID; sealed-sender
+  messages that carry only a UUID match too. **If neither variable is set,
+  nobody can approve a group this way.** This is the same rule the gateway
+  uses for dangerous-command approvers.
+- An explicit `SIGNAL_ALLOWED_USERS=*`, or `SIGNAL_ALLOW_ALL_USERS=true` /
+  `GATEWAY_ALLOW_ALL_USERS=true`, lets any group member approve, matching how
+  the gateway treats those settings for individuals. Only use them if that
+  is what you want.
+- DM pairing does not count here: list approvers in `SIGNAL_ALLOWED_USERS`.
+- The command is case-insensitive and may be surrounded by spaces. With
+  `SIGNAL_REQUIRE_MENTION=true` a real Signal @mention of the bot is required
+  (typing "@+1555..." as plain text does not count); otherwise
+  `/approve-group` alone also works.
+- From anyone else the command is ignored without a reply, like every other
+  message in an unapproved group.
+- In a group that is already approved the command does nothing.
+- Being added to a group never approves it by itself. Current signal-cli
+  reports the add as a group update that does not say who added whom, so the
+  bot cannot safely infer approval from it.
+
+`SIGNAL_GROUP_INVITE_POLICY` (`approved-only` default, or `allow-all`) still
+governs the older signal-cli invite envelope, which some versions send when
+the bot is invited: with `approved-only` an invite from an approved user
+auto-joins and approves the group; with `allow-all` any invite does. It does
+not change who may use `/approve-group`.
+
 ---
 
 ## Features
@@ -254,5 +288,6 @@ The adapter monitors the SSE connection and automatically reconnects if:
 | `SIGNAL_ACCOUNT` | Yes | — | Bot phone number (E.164) |
 | `SIGNAL_ALLOWED_USERS` | No | — | Comma-separated phone numbers/UUIDs |
 | `SIGNAL_GROUP_ALLOWED_USERS` | No | — | Group IDs to monitor, or `*` for all (omit to disable groups) |
+| `SIGNAL_GROUP_INVITE_POLICY` | No | `approved-only` | Who can approve a group through a legacy invite envelope (`approved-only` or `allow-all`). To approve a group, a user explicitly listed in `SIGNAL_ALLOWED_USERS` sends `@bot /approve-group` in it; if `SIGNAL_ALLOWED_USERS` is unset, nobody can. |
 | `SIGNAL_ALLOW_ALL_USERS` | No | `false` | Allow any user to interact (skip allowlist) |
 | `SIGNAL_HOME_CHANNEL` | No | — | Default delivery target for cron jobs |

@@ -220,9 +220,19 @@ class TestReconcilePolicyParity:
         assert "grp-aa" in adapter.group_allow_from
 
     @pytest.mark.asyncio
-    async def test_open_mode_no_allowlist_approves_member_group(self, monkeypatch, tmp_path):
-        # No SIGNAL_ALLOWED_USERS configured = open mode (mirrors invite handler).
+    async def test_no_allowlist_approves_no_member_group(self, monkeypatch, tmp_path):
+        # No SIGNAL_ALLOWED_USERS means nobody, not open mode: otherwise anyone
+        # who adds the bot to a group gets it approved at the next connect.
         adapter = _make_signal_adapter(monkeypatch, tmp_path)
+        _mock_list_groups(adapter, [_group("grp-open", admin_number="+15550000000")])
+
+        await adapter._reconcile_groups()
+
+        assert "grp-open" not in adapter.group_allow_from
+
+    @pytest.mark.asyncio
+    async def test_explicit_star_approves_member_group(self, monkeypatch, tmp_path):
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users="*")
         _mock_list_groups(adapter, [_group("grp-open", admin_number="+15550000000")])
 
         await adapter._reconcile_groups()
@@ -232,7 +242,7 @@ class TestReconcilePolicyParity:
     @pytest.mark.asyncio
     async def test_open_mode_persists_reconciled_group(self, monkeypatch, tmp_path):
         # A policy-level approval is persisted so it survives a restart.
-        adapter = _make_signal_adapter(monkeypatch, tmp_path)
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users="*")
         _mock_list_groups(adapter, [_group("grp-persist", admin_number="+15550000000")])
 
         await adapter._reconcile_groups()
@@ -270,7 +280,7 @@ class TestReconcileRobustness:
     async def test_non_dict_group_entry_does_not_raise(self, monkeypatch, tmp_path):
         # open-mode would approve the well-formed group; a non-dict entry must be
         # skipped without breaking the loop.
-        adapter = _make_signal_adapter(monkeypatch, tmp_path)
+        adapter = _make_signal_adapter(monkeypatch, tmp_path, allowed_users="*")
         _mock_list_groups(
             adapter,
             ["i am not a dict", _group("grp-ok", admin_number="+15550000000")],
