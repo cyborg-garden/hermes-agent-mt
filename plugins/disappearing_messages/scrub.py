@@ -18,6 +18,11 @@ the shape of the conversation. Search indexes are dropped from the copy (they
 hold the text too), and the file is switched out of WAL and vacuumed so
 blanked text isn't left in a log or free pages.
 
+Tool-call ids are kept so calls still pair with their results. When a
+provider gives no id, Hermes derives one from a hash of the call (name and
+arguments), so a very short argument could in principle be guessed back from
+it.
+
 Known gap: a copy made by /retry or /branch in the half-minute since the
 sweep last ran isn't marked as a copy yet, so if it sits in a timer-off period
 its text survives this scrub (the sweep catches it on its next run).
@@ -132,6 +137,8 @@ def _strip_arguments(raw):
                 call["arguments"] = ""
             if "input" in call:
                 call["input"] = {}
+            # Opaque, but derived from the model's reasoning (Gemini).
+            call.pop("extra_content", None)
     return json.dumps(calls)
 
 

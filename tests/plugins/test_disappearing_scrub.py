@@ -111,14 +111,16 @@ def test_tool_calls_keep_their_shape_but_lose_their_arguments(env, tmp_path):
     import json
     env.r.observe("signal", GROUP, 3600, sender="moana")
     env.db.append_message("s1", "assistant", content="", tool_calls=[
-        {"id": "call_1", "type": "function", "function": {"name": "web_search", "arguments": '{"q": "secretquery"}'}}
+        {"id": "call_1", "type": "function", "extra_content": {"google": {"thought_signature": "secretsig"}},
+         "function": {"name": "web_search", "arguments": '{"q": "secretquery"}'}}
     ])
     snap = _snapshot(env, tmp_path)
     scrub(snap, env.home)
     calls = json.loads(_row(snap, "s1", "tool_calls")[0])
     assert calls[0]["id"] == "call_1" and calls[0]["function"]["name"] == "web_search"
     assert calls[0]["function"]["arguments"] == ""
-    assert b"secretquery" not in snap.read_bytes()
+    assert "extra_content" not in calls[0]
+    assert b"secretquery" not in snap.read_bytes() and b"secretsig" not in snap.read_bytes()
 
 
 def test_delegated_task_text_is_blanked(env, tmp_path):
