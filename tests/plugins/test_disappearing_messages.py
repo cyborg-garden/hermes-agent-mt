@@ -635,3 +635,54 @@ def test_memory_block_fails_closed(plugin, env, monkeypatch):
     monkeypatch.setattr(env.r, "session_chat", broken)
     res = plugin._on_pre_tool_call(tool_name="memory", args={"action": "add"}, session_id="s1")
     assert res and res["action"] == "block"
+
+
+def test_summary_of_copies_goes_with_them(env):
+    _session(env, "s1")
+    _session(env, "s2", chat_id=OTHER)
+    env.r.observe("signal", GROUP, 86400, sender="moana")
+    _msg(env, "s1", "SECRET-hour0")
+    _at(env, T0 + 30)
+    _msg(env, "s2", "e1")
+    _at(env, T0 + 20 * 3600)
+    _replace_messages(env, "s1")             # /retry at hour 20
+    _at(env, T0 + 20 * 3600 + 30)
+    _msg(env, "s2", "e2")
+    _at(env, T0 + 22 * 3600)
+    # in-place compaction at hour 22: archive the copies, write a summary
+    with sqlite3.connect(env.home / "state.db") as c:
+        c.execute("UPDATE messages SET active=0, compacted=1 WHERE session_id='s1'")
+    _msg(env, "s1", "SUMMARY: SECRET-hour0")
+    _at(env, T0 + 22 * 3600 + 30)
+    _at(env, T0 + 24 * 3600)
+    assert _texts(env, "s1") == []
+
+
+def test_rotation_child_seen_while_empty_still_inherits(env):
+    _session(env, "s1")
+    _session(env, "s2", chat_id=OTHER)
+    env.r.observe("signal", GROUP, 3600, sender="moana")
+    _msg(env, "s1", "parentwords")
+    _at(env, T0 + 30)
+    _msg(env, "s2", "e1")
+    _at(env, T0 + 3000)
+    _session(env, "s1c", chat_id="", parent="s1")   # created empty
+    _at(env, T0 + 3030)                              # a sweep lands in the gap
+    _msg(env, "s1c", "summary of parentwords")      # written at the next LLM call
+    _at(env, T0 + 3060)
+    _at(env, T0 + 3600)
+    assert _texts(env, "s1c") == []
+
+
+def test_text_merges_keep_the_shortest_timer():
+    from gateway.platforms.base import merge_pending_message_event, MessageType
+    first = SimpleNamespace(message_type=MessageType.TEXT, text="hi", media_urls=[], media_types=[],
+                            source=SimpleNamespace(is_bot=False),
+                            metadata={"signal": {"expires_in_seconds": 0}})
+    second = SimpleNamespace(message_type=MessageType.TEXT, text="secret", media_urls=[], media_types=[],
+                             source=SimpleNamespace(is_bot=False),
+                             metadata={"signal": {"expires_in_seconds": 3600}})
+    pending = {"k": first}
+    merge_pending_message_event(pending, "k", second, merge_text=True)
+    assert pending["k"].text.endswith("secret")
+    assert pending["k"].metadata["signal"]["expires_in_seconds"] == 3600

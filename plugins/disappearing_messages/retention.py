@@ -493,8 +493,18 @@ class Retention:
         """Copy the log into the database and empty it, so deleted text leaves
         the -wal file. Needs a moment with no readers; retried each sweep."""
         try:
-            busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            self._wal_pending = bool(busy and busy[0])
+            # PASSIVE never blocks. Only when it has copied the whole log is a
+            # TRUNCATE tried, with a short wait so the agent's writes don't stall.
+            busy, log, done = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+            if busy or (log >= 0 and done < log):
+                self._wal_pending = True
+            else:
+                conn.execute("PRAGMA busy_timeout=100")
+                try:
+                    busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    self._wal_pending = bool(busy and busy[0])
+                finally:
+                    conn.execute(f"PRAGMA busy_timeout={STATE_BUSY_TIMEOUT_MS}")
         except sqlite3.Error:
             self._wal_pending = True
         if self._wal_pending:
@@ -656,12 +666,33 @@ class Retention:
             for sid, lo, hi, at, ttl in self._copies_for(sids):
                 if at + ttl - early_margin(ttl) > now:
                     continue
+                was_compacted = conn.execute(
+                    "SELECT MAX(compacted) FROM messages WHERE session_id=? AND id > ? AND id <= ?",
+                    (sid, lo, hi),
+                ).fetchone()[0]
                 cur = conn.execute(
                     "DELETE FROM messages WHERE session_id=? AND id > ? AND id <= ?", (sid, lo, hi)
                 )
                 if cur.rowcount:
                     deleted += cur.rowcount
                     touched.add(sid)
+                if was_compacted:
+                    # The copies were themselves compacted: the summary of
+                    # them is a newer row and goes with them.
+                    reset = {sid}
+                    frontier = [sid]
+                    while frontier:
+                        kids = [s for s, (_, parent) in sessions.items()
+                                if parent in frontier and s not in reset]
+                        reset.update(kids)
+                        frontier = kids
+                    rmarks = ",".join("?" * len(reset))
+                    cur = conn.execute(
+                        f"DELETE FROM messages WHERE session_id IN ({rmarks}) AND id > ?{keep_sql}",
+                        (*sorted(reset), min(floor_id, lo), *keep_args),
+                    )
+                    deleted += cur.rowcount or 0
+                    touched.update(reset)
                 self._drop_copy(sid, lo)
 
             if touched:
@@ -714,10 +745,25 @@ class Retention:
                     "SELECT COALESCE(MAX(id), 0) FROM messages WHERE session_id=?", (sid,)
                 ).fetchone()[0])
                 seen = self._seen(ledger, sid)
-                if seen is None:
+                if seen is None or int(seen[0]) == 0:
+                    # New, or seen only while still empty (rotation creates the
+                    # child before writing to it). Inherit the parent's age.
                     pseen = self._seen(ledger, parent) if parent else None
-                    if pseen is not None and pseen[2] is not None and cur_max > 0:
-                        self._add_copy(ledger, sid, 0, cur_max, float(pseen[2]), int(pseen[3]))
+                    inherit = None
+                    if seen is not None and seen[2] is not None:
+                        inherit = (float(seen[2]), int(seen[3]))
+                    elif pseen is not None and pseen[2] is not None:
+                        inherit = (float(pseen[2]), int(pseen[3]))
+                    if inherit is None:
+                        continue
+                    if cur_max > 0:
+                        self._add_copy(ledger, sid, 0, cur_max, *inherit)
+                    else:
+                        ledger.execute(
+                            "INSERT OR IGNORE INTO sessions_seen (session_id, last_max_id, last_count, "
+                            "oldest_at, oldest_ttl) VALUES (?, 0, 0, ?, ?)",
+                            (sid, inherit[0], inherit[1]),
+                        )
                     continue
                 last_max, last_count, oldest_at, oldest_ttl = seen
                 if oldest_at is None or cur_max <= last_max:
@@ -792,6 +838,8 @@ class Retention:
                     ).fetchone()
                     if left and (best is None or at + ttl < best[0] + best[1]):
                         best = (at, ttl)
+                if cur_max == 0 and prev is not None and prev[2] is not None:
+                    continue  # an empty child still waiting for its inherited rows
                 ledger.execute(
                     "INSERT INTO sessions_seen (session_id, last_max_id, last_count, oldest_at, oldest_ttl) "
                     "VALUES (?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET "

@@ -38,7 +38,8 @@ A "timer off" report only counts from someone whose client has sent a timer
 before, because an old or linked client always reports "off" while the chat
 still has a timer. It takes two such reports in a row, and only messages after
 the second are kept. When a busy bot merges several queued messages into one
-turn, the merged turn keeps the shortest timer among them.
+turn (text, photos or other media), the merged turn keeps the shortest timer
+among them.
 
 ## What gets deleted
 
@@ -89,6 +90,16 @@ the write is refused.
   written before then. It only blanks previews on log lines that name the chat
   or one of its sessions, and a brand-new session is only known after the next
   sweep.
+- Copies of history from before the timer was turned on (made by `/retry`,
+  `/branch` or compaction after the timer is on) expire with the timer. The
+  originals are kept; the copies are deleted early.
+- With `busy_input_mode: steer`, a message steered into a running turn never
+  reaches the plugin's hook, so its timer isn't seen. The default interrupt mode
+  and the queue mode are covered.
+- Turning on FTS secure-delete changes the search index's on-disk format, so
+  `state.db` can't be read by SQLite older than 3.42. Production runs 3.46.
+- If reading the database is stalled at the moment a timer is first turned on,
+  up to one sweep of earlier rows can be counted under the new timer.
 - One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
 - If the host clock jumps backwards, deadlines for rows stored after the jump
   are late by the size of the jump. A warning is logged.

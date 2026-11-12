@@ -2314,6 +2314,7 @@ def merge_pending_message_event(
             and getattr(existing, "message_type", None) == MessageType.TEXT
             and event.message_type == MessageType.TEXT
         ):
+            _merge_retention_metadata(existing, event)
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
             return
@@ -4509,6 +4510,7 @@ class BasePlatformAdapter(ABC):
             )
             store[session_key] = state
         else:
+            _merge_retention_metadata(state.event, event)
             if event.text:
                 state.event.text = (
                     f"{state.event.text}\n{event.text}"
