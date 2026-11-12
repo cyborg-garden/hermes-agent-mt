@@ -744,9 +744,9 @@ class SignalAdapter(BasePlatformAdapter):
     def _is_explicitly_open() -> bool:
         """True only when the operator set allow-all or an explicit ``*``."""
         truthy = {"true", "1", "yes"}
-        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").lower() in truthy:
+        if os.getenv("SIGNAL_ALLOW_ALL_USERS", "").strip().lower() in truthy:
             return True
-        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in truthy:
+        if os.getenv("GATEWAY_ALLOW_ALL_USERS", "").strip().lower() in truthy:
             return True
         for env_name in ("SIGNAL_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS"):
             if "*" in {x.strip() for x in os.getenv(env_name, "").split(",")}:
@@ -2564,7 +2564,9 @@ class SignalAdapter(BasePlatformAdapter):
             return False
         if event is not None:
             sender = getattr(getattr(event, "source", None), "user_id", None)
-            if sender and "*" not in self.dm_allow_from and sender not in self.dm_allow_from:
+            # An unset allowlist defaults dm_allow_from to {"*"}; that must not
+            # mean "react to everyone", or strangers learn a bot is listening.
+            if sender and not self._is_explicitly_open() and sender not in self.dm_allow_from:
                 # Sender not matched by user_id. Sealed-sender messages may carry
                 # the UUID as user_id_alt — match it against the allowlist (incl.
                 # resolved UUIDs) before denying. "approved = admin": the

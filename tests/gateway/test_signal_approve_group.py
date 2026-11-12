@@ -492,3 +492,23 @@ class TestEverythingElseUnchanged:
 
         assert "joinGroup" in calls
         assert GID in adapter.group_allow_from
+
+
+class TestReactionsDontRevealTheBot:
+
+    def _event(self, sender):
+        from types import SimpleNamespace
+        return SimpleNamespace(source=SimpleNamespace(user_id=sender, user_id_alt=None))
+
+    def test_no_reaction_for_strangers_when_allowlist_unset(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        assert adapter._reactions_enabled(self._event(STRANGER)) is False
+
+    def test_reaction_for_everyone_when_explicitly_open(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users="*")
+        assert adapter._reactions_enabled(self._event(STRANGER)) is True
+
+    def test_allow_all_flag_with_stray_space_still_counts(self, monkeypatch, tmp_path):
+        adapter = _adapter(monkeypatch, tmp_path, allowed_users=None)
+        monkeypatch.setenv("SIGNAL_ALLOW_ALL_USERS", " true ")
+        assert adapter._is_explicitly_open() is True
