@@ -585,12 +585,24 @@ class Retention:
         folder = self.ledger_path.parent
         done_path = folder / self.DONE_FILE
         try:
-            done = json.loads(done_path.read_text()).get("ids", []) if done_path.exists() else []
-        except (OSError, ValueError, AttributeError):
-            done = []
+            body = json.loads(done_path.read_text()) if done_path.exists() else {}
+            done, answered = body.get("ids", []), float(body.get("due_written_at", 0) or 0)
+        except (OSError, ValueError, AttributeError, TypeError):
+            done, answered = [], 0.0
         for aid in done:
             if isinstance(aid, str):
-                conn.execute("DELETE FROM signal_cli_files WHERE attachment_id=?", (aid,))
+                # Only rows that were already due when the host read the list:
+                # a row re-added later for the same id must not be confirmed by
+                # an old answer.
+                conn.execute(
+                    "DELETE FROM signal_cli_files WHERE attachment_id=? AND expires_at <= ?",
+                    (aid, answered),
+                )
+        if done_path.exists():
+            try:
+                done_path.unlink()  # anything still due is listed, and confirmed, again
+            except OSError:
+                pass
         # Bound the table if the host sweeper is never installed.
         conn.execute("DELETE FROM signal_cli_files WHERE expires_at < ?", (now - self.FORGET_UNCONFIRMED_S,))
         rows = conn.execute(

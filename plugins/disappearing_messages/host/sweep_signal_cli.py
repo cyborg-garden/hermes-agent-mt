@@ -34,20 +34,24 @@ DUE_FILE = "signal_cli_due.json"
 DONE_FILE = "signal_cli_done.json"
 
 
-def _read_ids(path: str) -> list[str]:
+def _read_due(path: str) -> tuple[list[str], float]:
     try:
         with open(path, encoding="utf-8") as fh:
-            ids = json.load(fh).get("ids", [])
-    except (OSError, ValueError, AttributeError):
-        return []
-    return [i for i in ids if isinstance(i, str) and ID_RE.match(i)]
+            body = json.load(fh)
+        ids, written = body.get("ids", []), float(body.get("written_at", 0) or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return [], 0.0
+    return [i for i in ids if isinstance(i, str) and ID_RE.match(i)], written
 
 
-def _write_done(folder: str, ids: list[str]) -> None:
+def _write_done(folder: str, ids: list[str], due_written_at: float) -> None:
     path = os.path.join(folder, DONE_FILE)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"written_at": time.time(), "ids": sorted(set(ids))}, fh)
+        # due_written_at ties this answer to the list it answers, so the plugin
+        # never applies it to a row added after that list.
+        json.dump({"written_at": time.time(), "due_written_at": due_written_at,
+                   "ids": sorted(set(ids))}, fh)
     os.replace(tmp, path)
 
 
@@ -56,10 +60,10 @@ def sweep(signal_data: str, homes: str, now: float | None = None, dry_run: bool 
     if not os.path.isdir(attachments):
         print(f"signal-cli attachments folder not found: {attachments}", file=sys.stderr)
         return (0, 0)
-    by_home: dict[str, list[str]] = {}
+    by_home: dict[str, tuple[list[str], float]] = {}
     for due_path in glob.glob(os.path.join(os.path.expanduser(homes), "disappearing", DUE_FILE)):
-        by_home[os.path.dirname(due_path)] = _read_ids(due_path)
-    wanted = {i for ids in by_home.values() for i in ids}
+        by_home[os.path.dirname(due_path)] = _read_due(due_path)
+    wanted = {i for ids, _ in by_home.values() for i in ids}
     if not wanted:
         return (0, 0)
     stems = {i.split(".", 1)[0] for i in wanted}
@@ -79,10 +83,16 @@ def sweep(signal_data: str, homes: str, now: float | None = None, dry_run: bool 
     if not dry_run:
         # Whatever was listed is now gone (deleted here, or already absent).
         present = {e.name.split(".", 1)[0] for e in os.scandir(attachments)}
-        for folder, ids in by_home.items():
+        absent = len(wanted) - deleted
+        if absent:
+            # Normal for a file signal-cli never kept; many of these can mean
+            # --signal-data points at the wrong folder.
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} signal-cli attachments: "
+                  f"{absent} due ids had no file to delete", file=sys.stderr)
+        for folder, (ids, written) in by_home.items():
             gone = [i for i in ids if i.split(".", 1)[0] not in present]
             try:
-                _write_done(folder, gone)
+                _write_done(folder, gone, written)
             except OSError as e:
                 print(f"could not confirm deletions to {folder}: {e.strerror}", file=sys.stderr)
     return (len(wanted), deleted)

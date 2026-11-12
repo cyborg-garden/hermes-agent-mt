@@ -845,3 +845,24 @@ def test_attachment_only_messages_are_recorded_without_a_turn(plugin, env, monke
     sig._notify_retention(GROUP, "moana", {"expires_in_seconds": 60, "attachment_ids": ["bigVideo001"]})
     with sqlite3.connect(env.r.ledger_path) as c:
         assert c.execute("SELECT attachment_id FROM signal_cli_files").fetchall() == [("bigVideo001",)]
+
+
+
+def test_an_old_confirmation_cannot_wipe_a_readded_row(env, tmp_path):
+    mod = _host_sweeper()
+    data = _attachments(tmp_path, "reusedId001.m4a")
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["reusedId001"])
+    _at(env, T0 + 1000)
+    mod.sweep(str(data), str(env.home))       # confirms reusedId001
+    # The same id turns up again before the plugin reads the confirmation.
+    (data / "attachments" / "reusedId001.m4a").write_bytes(b"x")
+    env.r.observe("signal", GROUP, 3600, sender="moana", signal_attachment_ids=["reusedId001"])
+    with sqlite3.connect(env.r.ledger_path) as c:
+        c.execute("UPDATE signal_cli_files SET expires_at=? WHERE attachment_id='reusedId001'", (T0 + 1000 + 3600,))
+    _at(env, T0 + 1030)                       # plugin reads the old confirmation
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT COUNT(*) FROM signal_cli_files").fetchone()[0] == 1
+    assert not (env.r.ledger_path.parent / "signal_cli_done.json").exists()
+    _at(env, T0 + 1000 + 3600)
+    mod.sweep(str(data), str(env.home))
+    assert not (data / "attachments" / "reusedId001.m4a").exists()
