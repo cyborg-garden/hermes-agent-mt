@@ -165,6 +165,7 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
             meta.get("expires_in_seconds"),
             list(getattr(event, "media_urls", None) or []),
             sender=getattr(source, "user_id", None),
+            signal_attachment_ids=list(meta.get("attachment_ids") or []),
         )
         if _filter is not None:
             if ttl and ttl > 0:
@@ -253,9 +254,34 @@ def _start_sweeper() -> None:
     threading.Thread(target=_sweep_loop, name=SWEEPER_THREAD_NAME, daemon=True).start()
 
 
+def _on_signal_untracked(chat_id: str, sender: str, meta: Dict[str, Any]) -> None:
+    """An attachment-only Signal message that never became a turn."""
+    try:
+        _get().observe(
+            "signal", chat_id, meta.get("expires_in_seconds"),
+            sender=sender, signal_attachment_ids=list(meta.get("attachment_ids") or []),
+        )
+    except Exception:
+        logger.exception("disappearing: could not record an attachment-only message")
+
+
+def _listen_to_signal() -> None:
+    try:
+        from gateway.platforms import signal as signal_adapter
+    except Exception:
+        return
+    listeners = getattr(signal_adapter, "RETENTION_LISTENERS", None)
+    if listeners is None:
+        return
+    # A reload must not add a second listener.
+    listeners[:] = [fn for fn in listeners if getattr(fn, "__name__", "") != "_on_signal_untracked"]
+    listeners.append(_on_signal_untracked)
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_gateway_dispatch", _on_pre_gateway_dispatch)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    _listen_to_signal()
     _install_filter()
     _refresh_filter_chats()
     _start_sweeper()

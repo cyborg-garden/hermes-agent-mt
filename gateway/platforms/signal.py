@@ -167,6 +167,20 @@ def _ext_to_mime(ext: str) -> str:
     return _EXT_TO_MIME.get(ext.lower(), "application/octet-stream")
 
 
+# Retention plugins that must hear about attachments even when a message never
+# becomes an agent turn (an uncaptioned attachment that couldn't be fetched).
+# Each listener is called as fn(chat_id, sender, meta) and must not raise.
+RETENTION_LISTENERS: List[Any] = []
+
+
+def _notify_retention(chat_id: str, sender: str, meta: Dict[str, Any]) -> None:
+    for fn in list(RETENTION_LISTENERS):
+        try:
+            fn(chat_id, sender, meta)
+        except Exception:
+            logger.debug("Signal: retention listener failed", exc_info=True)
+
+
 def parse_expires_in_seconds(value: Any) -> Optional[int]:
     """Read signal-cli's ``dataMessage.expiresInSeconds``.
 
@@ -1331,6 +1345,16 @@ class SignalAdapter(BasePlatformAdapter):
                 "Signal: skipping contentless envelope from %s (%d attachments)",
                 redact_phone(sender), len(media_urls) if media_urls else 0,
             )
+            # signal-cli still saved any attachment it couldn't hand us (too
+            # large, failed fetch, attachments ignored): let retention know.
+            ids = [str(a.get("id")) for a in (data_message.get("attachments") or [])
+                   if isinstance(a, dict) and a.get("id")]
+            if ids:
+                _notify_retention(chat_id, sender, {
+                    "expires_in_seconds": parse_expires_in_seconds(data_message.get("expiresInSeconds")),
+                    "timestamp_ms": envelope_data.get("timestamp", 0),
+                    "attachment_ids": ids,
+                })
             return
 
         # Build session source
@@ -1392,6 +1416,12 @@ class SignalAdapter(BasePlatformAdapter):
                         data_message.get("expiresInSeconds")
                     ),
                     "timestamp_ms": ts_ms,
+                    # signal-cli keeps its own copy of every received attachment,
+                    # named by this id, whether or not we fetched it.
+                    "attachment_ids": [
+                        str(a.get("id")) for a in (data_message.get("attachments") or [])
+                        if isinstance(a, dict) and a.get("id")
+                    ],
                 },
             },
             reply_to_message_id=reply_to_id,

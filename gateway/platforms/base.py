@@ -2237,6 +2237,11 @@ def _merge_retention_metadata(existing: Any, incoming: Any) -> None:
                 # chat's existing timer rather than treating it as off.
                 cur["expires_in_seconds"] = b if "expires_in_seconds" not in cur else None
             cur.setdefault("timestamp_ms", meta.get("timestamp_ms"))
+            ids = list(cur.get("attachment_ids") or []) + [
+                i for i in (meta.get("attachment_ids") or []) if i not in (cur.get("attachment_ids") or [])
+            ]
+            if ids:
+                cur["attachment_ids"] = ids
     except Exception:
         logger.debug("could not merge retention metadata", exc_info=True)
 
