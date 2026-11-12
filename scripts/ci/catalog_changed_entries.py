@@ -61,7 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         outside = non_data_paths() if changed else []
     except subprocess.CalledProcessError as exc:
         return exc.returncode
-    if outside:
+    if outside and os.environ.get("IS_UPSTREAM_SYNC") == "true":
+        # Fork: an upstream-sync PR (upstream-sync-auto label) is a gardener-generated merge of a
+        # known upstream tag, so it legitimately bundles catalog additions with source changes.
+        # Only the data-only gate is skipped; the pinned-source validation still runs.
+        print(f"Upstream-sync PR (upstream-sync-auto label): skipping data-only gate for "
+              f"{len(outside)} non-catalog file(s)")
+    elif outside:
         print("::error::catalog entry PRs may only touch plugin-catalog/** and "
               "contributors/emails/**, found:")
         # Filenames are PR-controlled; a newline in one could smuggle a workflow command into
