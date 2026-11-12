@@ -838,8 +838,8 @@ class Retention:
                     ).fetchone()
                     if left and (best is None or at + ttl < best[0] + best[1]):
                         best = (at, ttl)
-                if cur_max == 0 and prev is not None and prev[2] is not None:
-                    continue  # an empty child still waiting for its inherited rows
+                if cur_max == 0 and prev is not None and int(prev[0]) == 0 and prev[2] is not None:
+                    continue  # a child that has never had rows, still waiting for its copies
                 ledger.execute(
                     "INSERT INTO sessions_seen (session_id, last_max_id, last_count, oldest_at, oldest_ttl) "
                     "VALUES (?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET "

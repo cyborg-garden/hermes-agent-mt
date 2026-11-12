@@ -686,3 +686,20 @@ def test_text_merges_keep_the_shortest_timer():
     merge_pending_message_event(pending, "k", second, merge_text=True)
     assert pending["k"].text.endswith("secret")
     assert pending["k"].metadata["signal"]["expires_in_seconds"] == 3600
+
+
+def test_chat_that_fully_expired_keeps_new_messages(env):
+    """Idle longer than the timer, everything expires, then people write again."""
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 3600, sender="moana")
+    _msg(env, "s1", "first")
+    _msg(env, "s1", "reply", role="assistant")
+    for t in range(180, 3 * 3600, 180):     # sweeps every 3 minutes, as live
+        _at(env, T0 + t)
+    assert _texts(env, "s1") == []
+    env.r.observe("signal", GROUP, 3600, sender="moana")
+    _msg(env, "s1", "back again")
+    _msg(env, "s1", "welcome back", role="assistant")
+    for t in range(3 * 3600 + 30, 3 * 3600 + 1800, 180):
+        _at(env, T0 + t)
+    assert _texts(env, "s1") == ["back again", "welcome back"]

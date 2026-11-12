@@ -91,8 +91,9 @@ the write is refused.
   or one of its sessions, and a brand-new session is only known after the next
   sweep.
 - Copies of history from before the timer was turned on (made by `/retry`,
-  `/branch` or compaction after the timer is on) expire with the timer. The
-  originals are kept; the copies are deleted early.
+  `/branch` or compaction after the timer is on) expire with the timer, early.
+  `/branch` and compaction keep the originals; `/retry` replaces them, so after
+  a `/retry` that earlier history is gone once the timer runs out.
 - With `busy_input_mode: steer`, a message steered into a running turn never
   reaches the plugin's hook, so its timer isn't seen. The default interrupt mode
   and the queue mode are covered.
