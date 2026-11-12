@@ -35,7 +35,8 @@ from .retention import Retention
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PLATFORMS = {"signal"}
-MEMORY_TOOLS = {"memory"}
+# Long-term stores that are shared across chats and can't expire with one.
+MEMORY_TOOLS = {"memory", "skill_manage"}
 MEMORY_READ_ACTIONS = {"read", "list", "view", "search", "get"}
 
 _retention: Optional[Retention] = None
@@ -163,6 +164,7 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
             chat_id,
             meta.get("expires_in_seconds"),
             list(getattr(event, "media_urls", None) or []),
+            sender=getattr(source, "user_id", None),
         )
         if _filter is not None:
             if ttl and ttl > 0:
@@ -183,18 +185,21 @@ def _on_pre_tool_call(tool_name: str = "", args: Optional[Dict[str, Any]] = None
     action = str((args or {}).get("action") or "").lower()
     if action in MEMORY_READ_ACTIONS:
         return None
+    block = {
+        "action": "block",
+        "message": (
+            "This chat has disappearing messages on, so nothing from it is saved to "
+            "long-term memory or skills. Carry on without saving it."
+        ),
+    }
     try:
         owner = _get().session_chat(session_id)
+        if owner and owner[0] in SUPPORTED_PLATFORMS and _get().is_disappearing(*owner):
+            return block
     except Exception:
-        owner = None
-    if owner and owner[0] in SUPPORTED_PLATFORMS and _get().is_disappearing(*owner):
-        return {
-            "action": "block",
-            "message": (
-                "This chat has disappearing messages on, so nothing from it is saved to "
-                "long-term memory. Carry on without saving it."
-            ),
-        }
+        # If we can't tell, don't save: the safeguard fails closed.
+        logger.warning("disappearing: could not check a memory write; refusing it", exc_info=True)
+        return block
     return None
 
 

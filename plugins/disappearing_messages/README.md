@@ -29,31 +29,40 @@ because they can be wrong or forged, and a forged one could otherwise keep a
 message for ever.
 
 Deletion can be early, never late: by up to one sweep (30 seconds) plus a small
-margin (10% of the timer, at most 30 seconds).
+margin (10% of the timer, at most 30 seconds). A message arriving after a quiet
+spell is still counted from when it arrived.
 
 Changing the timer works like Signal: the new timer applies to new messages.
 Turning it off stops new messages being deleted; older ones still go on time.
-A single "timer off" report doesn't stop deletion, since a member on an old or
-linked client can send one while the chat still has a timer. It takes two in a
-row, and only messages after the second are kept.
+A "timer off" report only counts from someone whose client has sent a timer
+before, because an old or linked client always reports "off" while the chat
+still has a timer. It takes two such reports in a row, and only messages after
+the second are kept. When a busy bot merges several queued messages into one
+turn, the merged turn keeps the shortest timer among them.
 
 ## What gets deleted
 
 - The person's messages and the bot's replies in `state.db`, including tool
   results and rows archived by compaction, and their search-index entries
   (FTS secure-delete is switched on, so terms leave the index straight away).
-- Conversation summaries and other copies made by context compaction. Once any
-  archived content in a session is due, every later row in that session goes
-  too, and so does any session branched from it. This resets the bot's working
-  context for that chat early, which is allowed; it never keeps a copy late.
-  Rows from a period when the timer was off are left alone.
+- Copies. `/retry`, `/branch`, compaction and forks write old content again as
+  new rows. The sweep doesn't need to know each path: when a session loses rows
+  it didn't delete and gains new ones, or a new session branches from a tracked
+  one, the new rows get the age of the oldest content their source still held.
+  For in-place compaction, once an archived original is due, every later row in
+  that session goes too, and so does any session branched from it. Rows from a
+  period when the timer was off are left alone. This can reset the bot's working
+  context for the chat early, which is allowed; it never keeps a copy late.
 - Delegated-task records for the chat's sessions.
 - Attachments the bot downloaded: voice notes, photos, documents.
 - Session snapshot files and request dumps for the chat.
 - The session title, which is written from the conversation.
 
-Deleted pages are overwritten (`secure_delete`) and the write-ahead log is
-checkpointed after each sweep that deletes something. After a delete, the bot's
+Deleted pages are overwritten (`secure_delete`), and after each sweep that
+deletes something the write-ahead log (`state.db-wal`) is copied in and emptied.
+That needs a moment when nothing is reading the database, so if the agent is
+busy it is retried every sweep until it succeeds; until then the deleted text
+can still be in the `-wal` file. After a delete, the bot's
 cached agent for that chat is dropped, so nothing deleted stays in memory. In a
 chat with a short timer that means the agent is rebuilt often, which costs a
 little prompt caching.
@@ -61,8 +70,10 @@ little prompt caching.
 Log lines about the chat keep who, where and when, but the message preview is
 replaced with `<disappearing>`.
 
-In a disappearing chat the bot will not write to long-term memory. That memory
-is shared across all chats and cannot expire with one of them.
+In a disappearing chat the bot will not write to long-term memory or create or
+edit skills (including from the background skill review). Both are shared
+across all chats and cannot expire with one of them. If the check itself fails,
+the write is refused.
 
 ## What it cannot do
 
@@ -79,6 +90,10 @@ is shared across all chats and cannot expire with one of them.
   or one of its sessions, and a brand-new session is only known after the next
   sweep.
 - One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
+- If the host clock jumps backwards, deadlines for rows stored after the jump
+  are late by the size of the jump. A warning is logged.
+- A message that is merged into an existing queued message keeps the shortest
+  timer of the two, which may delete it early.
 
 ## How it works
 
