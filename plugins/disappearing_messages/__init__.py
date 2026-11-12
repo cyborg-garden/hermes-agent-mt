@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PLATFORMS = {"signal"}
 # Long-term stores that are shared across chats and can't expire with one.
-MEMORY_TOOLS = {"memory", "skill_manage"}
+MEMORY_TOOLS = {"memory", "skill_manage", "remember_person"}
 MEMORY_READ_ACTIONS = {"read", "list", "view", "search", "get"}
 
 _retention: Optional[Retention] = None

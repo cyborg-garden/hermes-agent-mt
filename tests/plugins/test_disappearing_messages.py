@@ -703,3 +703,10 @@ def test_chat_that_fully_expired_keeps_new_messages(env):
     for t in range(3 * 3600 + 30, 3 * 3600 + 1800, 180):
         _at(env, T0 + t)
     assert _texts(env, "s1") == ["back again", "welcome back"]
+
+
+def test_person_notes_are_refused_in_a_disappearing_chat(plugin, env):
+    _session(env, "s1")
+    plugin._on_pre_gateway_dispatch(event=_event())
+    res = plugin._on_pre_tool_call(tool_name="remember_person", args={"note": "likes x"}, session_id="s1")
+    assert res and res["action"] == "block"
