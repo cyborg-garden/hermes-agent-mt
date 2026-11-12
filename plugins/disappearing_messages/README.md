@@ -71,7 +71,8 @@ little prompt caching.
 Log lines about the chat keep who, where and when, but the message preview is
 replaced with `<disappearing>`.
 
-In a disappearing chat the bot will not write to long-term memory or create or
+In a disappearing chat the bot will not write to long-term memory, save notes
+about a person (`remember_person`, from the person_memory plugin), or create or
 edit skills (including from the background skill review). Both are shared
 across all chats and cannot expire with one of them. If the check itself fails,
 the write is refused.
@@ -101,6 +102,8 @@ the write is refused.
   `state.db` can't be read by SQLite older than 3.42. Production runs 3.46.
 - If reading the database is stalled at the moment a timer is first turned on,
   up to one sweep of earlier rows can be counted under the new timer.
+- The person_memory plugin still records who someone is (display name, ids,
+  first and last seen) on its person card. That is metadata, not what they said.
 - One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
 - If the host clock jumps backwards, deadlines for rows stored after the jump
   are late by the size of the jump. A warning is logged.
