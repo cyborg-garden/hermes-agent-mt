@@ -2208,6 +2208,39 @@ def _is_cross_sender_with_discord_bot(a: Any, b: Any) -> bool:
     return str(getattr(sa, "user_id", "")) != str(getattr(sb, "user_id", "")) or _bot(sa) != _bot(sb)
 
 
+
+def _merge_retention_metadata(existing: Any, incoming: Any) -> None:
+    """Keep the shortest disappearing-message timer when two events merge.
+
+    Merging a queued message with a newer one must not let the newer one's
+    timer be lost: whatever is merged lasts no longer than its shortest timer.
+    """
+    try:
+        inc = getattr(incoming, "metadata", None) or {}
+        ex = getattr(existing, "metadata", None)
+        if ex is None:
+            existing.metadata = ex = {}
+        for platform, meta in inc.items():
+            if not isinstance(meta, dict) or "expires_in_seconds" not in meta:
+                continue
+            cur = ex.setdefault(platform, {})
+            if not isinstance(cur, dict):
+                continue
+            a, b = cur.get("expires_in_seconds"), meta.get("expires_in_seconds")
+            positives = [v for v in (a, b) if isinstance(v, int) and v > 0]
+            if positives:
+                cur["expires_in_seconds"] = min(positives)
+            elif "expires_in_seconds" in cur and a is not None and b is not None:
+                cur["expires_in_seconds"] = 0
+            else:
+                # Either side unknown: report unknown, so the plugin keeps the
+                # chat's existing timer rather than treating it as off.
+                cur["expires_in_seconds"] = b if "expires_in_seconds" not in cur else None
+            cur.setdefault("timestamp_ms", meta.get("timestamp_ms"))
+    except Exception:
+        logger.debug("could not merge retention metadata", exc_info=True)
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -2248,6 +2281,9 @@ def merge_pending_message_event(
         existing_has_media = bool(existing.media_urls)
         incoming_has_media = bool(event.media_urls)
 
+        if existing_has_media or incoming_has_media or (existing_is_photo and incoming_is_photo):
+            _merge_retention_metadata(existing, event)
+
         if existing_is_photo and incoming_is_photo:
             existing.media_urls.extend(event.media_urls)
             existing.media_types.extend(event.media_types)
@@ -2278,6 +2314,7 @@ def merge_pending_message_event(
             and getattr(existing, "message_type", None) == MessageType.TEXT
             and event.message_type == MessageType.TEXT
         ):
+            _merge_retention_metadata(existing, event)
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
             return
@@ -4473,6 +4510,7 @@ class BasePlatformAdapter(ABC):
             )
             store[session_key] = state
         else:
+            _merge_retention_metadata(state.event, event)
             if event.text:
                 state.event.text = (
                     f"{state.event.text}\n{event.text}"

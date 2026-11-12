@@ -167,6 +167,25 @@ def _ext_to_mime(ext: str) -> str:
     return _EXT_TO_MIME.get(ext.lower(), "application/octet-stream")
 
 
+def parse_expires_in_seconds(value: Any) -> Optional[int]:
+    """Read signal-cli's ``dataMessage.expiresInSeconds``.
+
+    Returns the disappearing-message timer in seconds, ``0`` when the chat
+    does not expire messages (signal-cli sends 0 or omits the field), and
+    ``None`` when the value is present but unusable. ``None`` means "unknown",
+    so a retention plugin can fail closed rather than treat it as "keep".
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def _remux_aac_to_m4a(aac_data: bytes) -> Optional[Tuple[bytes, str]]:
     """Losslessly remux raw ADTS AAC bytes into an MP4 (.m4a) container.
 
@@ -1365,6 +1384,15 @@ class SignalAdapter(BasePlatformAdapter):
                 "sender": sender,
                 "timestamp_ms": ts_ms,
                 "quote": quote_data if quote_data else None,
+            },
+            # Disappearing-message timer, for retention plugins. Content-free.
+            metadata={
+                "signal": {
+                    "expires_in_seconds": parse_expires_in_seconds(
+                        data_message.get("expiresInSeconds")
+                    ),
+                    "timestamp_ms": ts_ms,
+                },
             },
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,

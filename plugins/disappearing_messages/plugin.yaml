@@ -1,0 +1,7 @@
+name: disappearing_messages
+version: 0.1.0
+description: "When a Signal chat has disappearing messages on, delete everything this agent keeps from it (messages, replies, attachments, session copies) on the same timer."
+author: "Cyborg Garden"
+hooks:
+  - pre_gateway_dispatch
+  - pre_tool_call
