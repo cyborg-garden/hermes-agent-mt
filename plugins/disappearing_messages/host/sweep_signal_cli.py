@@ -4,13 +4,17 @@
 signal-cli keeps every attachment it receives in its data folder, named by
 Signal's attachment id, and never removes them. It keeps no message history,
 so it has nothing to expire. The agents run in containers that can't see that
-folder, so the disappearing_messages plugin records each attachment id and its
-deadline in its ledger, and this script, run on the host, deletes the file when
-it is due.
+folder, so the disappearing_messages plugin lists the ids that are due in
+``<agent home>/disappearing/signal_cli_due.json``, and this script, run on the
+host, deletes the matching files and writes the ids it has dealt with to
+``signal_cli_done.json`` so the plugin can forget them.
 
-Read-only on every ledger; it only deletes files in the attachments folder.
-Attachments from ordinary chats are never in a ledger, so they are left alone.
-Prints counts only.
+Plain files, not the plugin's SQLite ledger: the ledger is in WAL mode inside
+the Docker VM, and WAL needs every reader on the same host.
+
+Only ever deletes inside the attachments folder, and only files whose name is
+a listed id. Attachments from ordinary chats are never listed. Prints a line
+when it deletes something or something is wrong, nothing otherwise.
 
     sweep_signal_cli.py --signal-data ~/.hermes-swarm/signal-data [--homes '~/.hermes*'] [--dry-run]
 """
@@ -18,57 +22,70 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
-import sqlite3
 import sys
 import time
 
-# Signal attachment ids are short base64url-ish tokens. Anything else is refused,
-# so a bad ledger row can never name a path outside the attachments folder.
+# Signal attachment ids are base64url tokens, sometimes with an extension.
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,128}(\.[A-Za-z0-9]{1,10})?$")
+DUE_FILE = "signal_cli_due.json"
+DONE_FILE = "signal_cli_done.json"
 
 
-def due_ids(ledger: str, now: float) -> set[str]:
+def _read_ids(path: str) -> list[str]:
     try:
-        conn = sqlite3.connect(f"file:{ledger}?mode=ro", uri=True, timeout=5)
-    except sqlite3.Error:
-        return set()
-    try:
-        rows = conn.execute(
-            "SELECT attachment_id FROM signal_cli_files WHERE expires_at <= ?", (now,)
-        ).fetchall()
-    except sqlite3.Error:
-        return set()  # an agent that predates this table
-    finally:
-        conn.close()
-    return {r[0] for r in rows if isinstance(r[0], str) and ID_RE.match(r[0])}
+        with open(path, encoding="utf-8") as fh:
+            ids = json.load(fh).get("ids", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [i for i in ids if isinstance(i, str) and ID_RE.match(i)]
 
 
-def sweep(signal_data: str, homes: str, now: float, dry_run: bool = False) -> tuple[int, int]:
-    folder = os.path.join(os.path.expanduser(signal_data), "attachments")
-    if not os.path.isdir(folder):
+def _write_done(folder: str, ids: list[str]) -> None:
+    path = os.path.join(folder, DONE_FILE)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"written_at": time.time(), "ids": sorted(set(ids))}, fh)
+    os.replace(tmp, path)
+
+
+def sweep(signal_data: str, homes: str, now: float | None = None, dry_run: bool = False) -> tuple[int, int]:
+    attachments = os.path.join(os.path.expanduser(signal_data), "attachments")
+    if not os.path.isdir(attachments):
+        print(f"signal-cli attachments folder not found: {attachments}", file=sys.stderr)
         return (0, 0)
-    due: set[str] = set()
-    for ledger in glob.glob(os.path.join(os.path.expanduser(homes), "disappearing", "ledger.db")):
-        due |= due_ids(ledger, now)
-    if not due:
+    by_home: dict[str, list[str]] = {}
+    for due_path in glob.glob(os.path.join(os.path.expanduser(homes), "disappearing", DUE_FILE)):
+        by_home[os.path.dirname(due_path)] = _read_ids(due_path)
+    wanted = {i for ids in by_home.values() for i in ids}
+    if not wanted:
         return (0, 0)
-    stems = {d.split(".", 1)[0] for d in due}
+    stems = {i.split(".", 1)[0] for i in wanted}
     deleted = 0
-    with os.scandir(folder) as it:
+    with os.scandir(attachments) as it:
         for entry in it:
             if not entry.is_file(follow_symlinks=False):
                 continue
-            stem = entry.name.split(".", 1)[0]
-            if entry.name in due or stem in stems:
+            if entry.name in wanted or entry.name.split(".", 1)[0] in stems:
                 if not dry_run:
                     try:
                         os.unlink(entry.path)
-                    except OSError:
+                    except OSError as e:
+                        print(f"could not delete a signal-cli attachment: {e.strerror}", file=sys.stderr)
                         continue
                 deleted += 1
-    return (len(due), deleted)
+    if not dry_run:
+        # Whatever was listed is now gone (deleted here, or already absent).
+        present = {e.name.split(".", 1)[0] for e in os.scandir(attachments)}
+        for folder, ids in by_home.items():
+            gone = [i for i in ids if i.split(".", 1)[0] not in present]
+            try:
+                _write_done(folder, gone)
+            except OSError as e:
+                print(f"could not confirm deletions to {folder}: {e.strerror}", file=sys.stderr)
+    return (len(wanted), deleted)
 
 
 def main(argv=None) -> int:
@@ -77,9 +94,10 @@ def main(argv=None) -> int:
     ap.add_argument("--homes", default="~/.hermes*")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
-    due, deleted = sweep(args.signal_data, args.homes, time.time(), args.dry_run)
+    due, deleted = sweep(args.signal_data, args.homes, dry_run=args.dry_run)
     if deleted or args.dry_run:
-        print(f"signal-cli attachments: {due} due, {deleted} {'would be ' if args.dry_run else ''}deleted")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{stamp} signal-cli attachments: {due} due, {deleted} {'would be ' if args.dry_run else ''}deleted")
     return 0
 
 

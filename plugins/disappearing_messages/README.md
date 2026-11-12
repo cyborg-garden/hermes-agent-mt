@@ -61,8 +61,13 @@ among them.
   message history, so it has nothing to expire). The agent's container can't
   see that folder, so the plugin records each attachment id and its deadline,
   and `host/sweep_signal_cli.py`, run on the host every minute, deletes the
-  file when it's due. Files the bot sends aren't copied by signal-cli. Install:
-  copy `host/ai.cyborg-garden.disappearing-signal-cli.plist` to
+  file when it's due. They talk through two plain files in the agent's
+  `disappearing/` folder (`signal_cli_due.json`, `signal_cli_done.json`), not
+  the ledger: the ledger is SQLite in WAL mode inside the Docker VM, which a
+  host process can't safely read. A row is only forgotten once the host has
+  confirmed it; if nothing confirms for a day the agent logs a warning, and
+  after 90 days it gives up. Files the bot sends aren't copied by signal-cli.
+  Install: copy `host/ai.cyborg-garden.disappearing-signal-cli.plist` to
   `~/Library/LaunchAgents/`, fill in the two paths, and `launchctl load` it.
 - Session snapshot files and request dumps for the chat.
 - The session title, which is written from the conversation.
@@ -116,6 +121,12 @@ the write is refused.
   the plugin, so signal-cli's copy stays. With `SIGNAL_OBSERVE_UNMENTIONED=true`
   (the default) every message in an approved group reaches the plugin; with it
   off, unmentioned messages are dropped before the plugin sees them.
+- signal-cli also saves quote thumbnails and link-preview images in its
+  attachments folder; those ids aren't recorded, so those copies stay.
+- It doesn't clean up attachments signal-cli saved before the plugin was on.
+- If a Signal client forwards a file by reusing the same attachment into an
+  ordinary chat, that chat's copy goes on the disappearing chat's timer too
+  (they are one file in signal-cli's folder). Not confirmed to happen.
 - One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
 - If the host clock jumps backwards, deadlines for rows stored after the jump
   are late by the size of the jump. A warning is logged.

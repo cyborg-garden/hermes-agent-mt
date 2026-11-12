@@ -758,30 +758,90 @@ def _host_sweeper():
     return mod
 
 
-def test_host_sweeper_deletes_only_due_copies(env, tmp_path):
-    mod = _host_sweeper()
+def _attachments(tmp_path, *names):
     data = tmp_path / "signal-data"
     (data / "attachments").mkdir(parents=True)
-    for name in ("dueVoice01.m4a", "laterPhoto1.jpg", "ordinary001.png"):
-        (data / "attachments" / name).write_bytes(b"x")
-    outside = tmp_path / "keepme.txt"
-    outside.write_text("x")
+    for n in names:
+        (data / "attachments" / n).write_bytes(b"x")
+    return data
+
+
+def test_host_sweeper_deletes_only_due_copies(env, tmp_path):
+    mod = _host_sweeper()
+    data = _attachments(tmp_path, "dueVoice01.m4a", "laterPhoto1.jpg", "ordinary001.png", "*")
     env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
-    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["laterPhoto1.jpg"])
+    env.r.observe("signal", GROUP, 86400, sender="moana", signal_attachment_ids=["laterPhoto1.jpg"])
     with sqlite3.connect(env.r.ledger_path) as c:
-        c.execute("UPDATE signal_cli_files SET expires_at=? WHERE attachment_id='laterPhoto1.jpg'", (T0 + 10**6,))
-        c.execute("INSERT INTO signal_cli_files VALUES ('../../keepme', 0)")
-    due, deleted = mod.sweep(str(data), str(env.home), T0 + 1000)
+        c.execute("INSERT INTO signal_cli_files VALUES ('*', ?)", (T0,))   # never a valid id
+    _at(env, T0 + 1000)                      # the plugin publishes what's due
+    due, deleted = mod.sweep(str(data), str(env.home))
     left = sorted(p.name for p in (data / "attachments").iterdir())
-    assert left == ["laterPhoto1.jpg", "ordinary001.png"] and deleted == 1
-    assert outside.exists()
+    assert left == ["*", "laterPhoto1.jpg", "ordinary001.png"] and deleted == 1
+
+
+def test_host_confirms_and_the_plugin_forgets(env, tmp_path):
+    mod = _host_sweeper()
+    data = _attachments(tmp_path, "dueVoice01.m4a")
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
+    _at(env, T0 + 1000)
+    mod.sweep(str(data), str(env.home))
+    _at(env, T0 + 1030)                      # plugin reads the confirmation
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT COUNT(*) FROM signal_cli_files").fetchone()[0] == 0
+
+
+def test_unconfirmed_copies_are_not_forgotten_after_a_week(env, tmp_path):
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
+    _at(env, T0 + 30 * 86400)                 # host sweeper never ran
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT COUNT(*) FROM signal_cli_files").fetchone()[0] == 1
+    import json as _json
+    due = _json.loads((env.r.ledger_path.parent / "signal_cli_due.json").read_text())["ids"]
+    assert due == ["dueVoice01"]
+
+
+def test_a_missing_host_sweeper_is_warned_about(env, caplog):
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
+    with caplog.at_level(logging.WARNING):
+        _at(env, T0 + 2 * 86400)
+    assert "sweep_signal_cli" in caplog.text
+
+
+def test_host_matches_ids_with_or_without_an_extension(env, tmp_path):
+    mod = _host_sweeper()
+    data = _attachments(tmp_path, "plainId0001", "withExt0001.m4a")
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["plainId0001.jpg", "withExt0001"])
+    _at(env, T0 + 1000)
+    assert mod.sweep(str(data), str(env.home))[1] == 2
+
+
+def test_host_reads_every_agent_home(tmp_path):
+    mod = _host_sweeper()
+    import json as _json
+    data = _attachments(tmp_path, "fromAgentA1.m4a", "fromAgentB1.jpg", "keepThis001.png")
+    for name, aid in (("agent-a", "fromAgentA1"), ("agent-b", "fromAgentB1")):
+        d = tmp_path / "homes" / f".hermes-{name}" / "disappearing"
+        d.mkdir(parents=True)
+        (d / "signal_cli_due.json").write_text(_json.dumps({"ids": [aid]}))
+    mod.sweep(str(data), str(tmp_path / "homes" / ".hermes*"))
+    assert sorted(p.name for p in (data / "attachments").iterdir()) == ["keepThis001.png"]
 
 
 def test_host_sweeper_dry_run_deletes_nothing(env, tmp_path):
     mod = _host_sweeper()
-    data = tmp_path / "signal-data"
-    (data / "attachments").mkdir(parents=True)
-    (data / "attachments" / "dueVoice01.m4a").write_bytes(b"x")
+    data = _attachments(tmp_path, "dueVoice01.m4a")
     env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
-    assert mod.sweep(str(data), str(env.home), T0 + 1000, dry_run=True) == (1, 1)
+    _at(env, T0 + 1000)
+    assert mod.sweep(str(data), str(env.home), dry_run=True) == (1, 1)
     assert (data / "attachments" / "dueVoice01.m4a").exists()
+
+
+def test_attachment_only_messages_are_recorded_without_a_turn(plugin, env, monkeypatch):
+    import gateway.platforms.signal as sig
+    monkeypatch.setattr(sig, "RETENTION_LISTENERS", [])
+    plugin._listen_to_signal()
+    plugin._listen_to_signal()                # a reload adds no second listener
+    assert len(sig.RETENTION_LISTENERS) == 1
+    sig._notify_retention(GROUP, "moana", {"expires_in_seconds": 60, "attachment_ids": ["bigVideo001"]})
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT attachment_id FROM signal_cli_files").fetchall() == [("bigVideo001",)]

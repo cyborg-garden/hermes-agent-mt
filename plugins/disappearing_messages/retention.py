@@ -37,6 +37,7 @@ What a sweep deletes, for every chat that has had a timer on:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -572,12 +573,49 @@ class Retention:
             return INF_ID
         return watermarks[j + 1][1]
 
+    # Files shared with host/sweep_signal_cli.py. The host can't safely read this
+    # WAL ledger across the Docker VM boundary, so we hand it a plain list of due
+    # ids and it hands back the ones it has deleted.
+    DUE_FILE = "signal_cli_due.json"
+    DONE_FILE = "signal_cli_done.json"
+    UNCONFIRMED_WARN_S = 24 * 60 * 60.0
+    FORGET_UNCONFIRMED_S = 90 * 24 * 60 * 60.0
+
+    def _exchange_signal_cli(self, conn: sqlite3.Connection, now: float) -> None:
+        folder = self.ledger_path.parent
+        done_path = folder / self.DONE_FILE
+        try:
+            done = json.loads(done_path.read_text()).get("ids", []) if done_path.exists() else []
+        except (OSError, ValueError, AttributeError):
+            done = []
+        for aid in done:
+            if isinstance(aid, str):
+                conn.execute("DELETE FROM signal_cli_files WHERE attachment_id=?", (aid,))
+        # Bound the table if the host sweeper is never installed.
+        conn.execute("DELETE FROM signal_cli_files WHERE expires_at < ?", (now - self.FORGET_UNCONFIRMED_S,))
+        rows = conn.execute(
+            "SELECT attachment_id, expires_at FROM signal_cli_files WHERE expires_at <= ? ORDER BY expires_at",
+            (now,),
+        ).fetchall()
+        due = [r[0] for r in rows]
+        tmp = folder / (self.DUE_FILE + ".tmp")
+        try:
+            tmp.write_text(json.dumps({"written_at": now, "ids": due}))
+            os.replace(tmp, folder / self.DUE_FILE)
+        except OSError:
+            logger.debug("disappearing: could not write the signal-cli due list", exc_info=True)
+        if rows and now - float(rows[0][1]) > self.UNCONFIRMED_WARN_S:
+            if now - getattr(self, "_warned_unconfirmed", 0.0) > 3600:
+                self._warned_unconfirmed = now
+                logger.warning(
+                    "disappearing: %d signal-cli attachment copies are overdue and unconfirmed; "
+                    "is host/sweep_signal_cli.py installed on the host?", len(rows),
+                )
+
     def _sweep_files(self, now: float, result: SweepResult) -> None:
         conn = self._ledger()
         try:
-            # The host-side sweeper deletes signal-cli's copies; give it a week
-            # to have seen a due row before forgetting it.
-            conn.execute("DELETE FROM signal_cli_files WHERE expires_at < ?", (now - 7 * 86400,))
+            self._exchange_signal_cli(conn, now)
             due = conn.execute(
                 "SELECT id, path FROM files WHERE expires_at <= ?", (now,)
             ).fetchall()

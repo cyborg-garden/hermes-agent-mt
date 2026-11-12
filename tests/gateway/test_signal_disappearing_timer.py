@@ -96,3 +96,17 @@ async def test_attachment_ids_reach_the_event_even_when_not_fetched(monkeypatch)
     env["envelope"]["dataMessage"]["attachments"] = [{"id": "Cu4DRu8FuI5cwprZyEeP", "contentType": "audio/aac", "size": 10}]
     ev = await _dispatch(a, env)
     assert ev is not None and ev.metadata["signal"]["attachment_ids"] == ["Cu4DRu8FuI5cwprZyEeP"]
+
+
+@pytest.mark.asyncio
+async def test_uncaptioned_attachment_it_could_not_fetch_is_still_reported(monkeypatch):
+    import gateway.platforms.signal as sig
+    heard = []
+    monkeypatch.setattr(sig, "RETENTION_LISTENERS", [lambda c, s, m: heard.append((c, m))])
+    a = _adapter(monkeypatch)
+    a.ignore_attachments = True
+    env = _envelope(expires=300, text="")
+    env["envelope"]["dataMessage"]["attachments"] = [{"id": "bigVideo001", "contentType": "video/mp4", "size": 10}]
+    assert await _dispatch(a, env) is None              # no turn
+    assert heard and heard[0][1]["attachment_ids"] == ["bigVideo001"]
+    assert heard[0][1]["expires_in_seconds"] == 300
