@@ -1,22 +1,26 @@
 """disappearing_messages: deletes what we keep from a chat on Signal's timer.
 
 Uses a real state.db (SessionDB creates the schema, FTS and triggers) and a
-fake clock, so deadlines are exact and no test sleeps.
+fake clock, so deadlines are exact and no test sleeps. Rows are timed by when
+we stored them (row id plus sweep watermarks), never by their own timestamp,
+so several tests store rows with forged timestamps on purpose.
 """
 
 import logging
 import sqlite3
-from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from hermes_state import SessionDB
-from plugins.disappearing_messages.retention import Retention, early_margin, sent_at
+from plugins.disappearing_messages.retention import INF_ID, Retention, early_margin
 
 GROUP = "group:testgroupid"
 OTHER = "group:othergroup"
+KEY = "agent:main:signal:group:testgroupid"
 T0 = 1_800_000_000.0
+YEAR_2100 = 4_102_444_800.0
 
 
 class Clock:
@@ -45,17 +49,17 @@ def _session(env, sid, chat_id=GROUP, parent=None):
             c.execute("UPDATE sessions SET parent_session_id=? WHERE id=?", (parent, sid))
 
 
-def _msg(env, sid, text, at, role="user"):
+def _msg(env, sid, text, role="user", stamp=None):
+    """Store a row. ``stamp`` overrides its timestamp (a sender can forge it)."""
     env.db.append_message(sid, role, content=text)
-    with sqlite3.connect(env.home / "state.db") as c:
-        c.execute(
-            "UPDATE messages SET timestamp=? WHERE id=(SELECT MAX(id) FROM messages)", (at,)
-        )
+    if stamp is not None:
+        with sqlite3.connect(env.home / "state.db") as c:
+            c.execute("UPDATE messages SET timestamp=? WHERE id=(SELECT MAX(id) FROM messages)", (stamp,))
 
 
 def _texts(env, sid=None):
     with sqlite3.connect(env.home / "state.db") as c:
-        q = "SELECT content FROM messages" + (" WHERE session_id=?" if sid else "")
+        q = "SELECT content FROM messages" + (" WHERE session_id=?" if sid else "") + " ORDER BY id"
         return [r[0] for r in c.execute(q, (sid,) if sid else ())]
 
 
@@ -66,36 +70,40 @@ def _fts_hits(env, word):
         ).fetchone()[0]
 
 
+def _at(env, t, sweep=True):
+    env.clock.t = t
+    return env.r.sweep() if sweep else None
+
+
 # ---------------------------------------------------------------- timing rules
-
-def test_sent_at_uses_signal_time_but_never_the_future():
-    assert sent_at(int((T0 - 5) * 1000), T0) == T0 - 5
-    assert sent_at(int((T0 + 5) * 1000), T0) == T0
-    assert sent_at(None, T0) == T0
-    assert sent_at(int((T0 - 3 * 86400) * 1000), T0) == T0 - 3 * 86400  # backlog counts
-    assert sent_at(int((T0 - 60 * 86400) * 1000), T0) == T0  # implausible, ignored
-
 
 def test_early_margin_is_small_and_never_eats_a_short_timer():
     assert early_margin(30) == 3
     assert early_margin(7 * 86400) == 30
 
 
+def test_deletable_upto_counts_rows_from_the_earlier_watermark():
+    wm = [(100.0, 10), (200.0, 20), (300.0, 30)]
+    assert Retention.deletable_upto(wm, 99.0) == 0
+    assert Retention.deletable_upto(wm, 100.0) == 20   # rows 11-20 stored after 100
+    assert Retention.deletable_upto(wm, 250.0) == 30
+    assert Retention.deletable_upto(wm, 300.0) == INF_ID
+
+
 # ---------------------------------------------------------------- ledger
 
 def test_never_disappearing_chat_is_not_recorded(env):
-    assert env.r.observe("signal", GROUP, 0, None) == 0
+    assert env.r.observe("signal", GROUP, 0) == 0
     assert env.r.chats() == []
 
 
 def test_unreadable_timer_keeps_the_previous_one(env):
-    env.r.observe("signal", GROUP, 3600, None)
-    assert env.r.observe("signal", GROUP, None, None) == 3600
-    assert env.r.current_ttl("signal", GROUP) == 3600
+    env.r.observe("signal", GROUP, 3600)
+    assert env.r.observe("signal", GROUP, None) == 3600
 
 
 def test_unreadable_timer_on_unknown_chat_is_not_guessed(env):
-    assert env.r.observe("signal", GROUP, None, None) is None
+    assert env.r.observe("signal", GROUP, None) is None
     assert env.r.chats() == []
 
 
@@ -103,177 +111,166 @@ def test_unreadable_timer_on_unknown_chat_is_not_guessed(env):
 
 def test_messages_and_replies_go_when_the_timer_runs_out(env):
     _session(env, "s1")
-    env.r.observe("signal", GROUP, 3600, int(T0 * 1000))
-    _msg(env, "s1", "kiwiwordone", T0 + 1)
-    _msg(env, "s1", "replywordone", T0 + 2, role="assistant")
-
-    env.clock.t = T0 + 3600 - 60
-    assert env.r.sweep().messages_deleted == 0
+    env.r.observe("signal", GROUP, 3600)
+    _msg(env, "s1", "kiwiwordone")
+    _msg(env, "s1", "replywordone", role="assistant")
+    _at(env, T0 + 30)                        # a sweep sees the rows
+    assert _at(env, T0 + 3600 - 60).messages_deleted == 0
     assert len(_texts(env, "s1")) == 2
-
-    env.clock.t = T0 + 3600
-    res = env.r.sweep()
-    assert res.messages_deleted == 2
+    assert _at(env, T0 + 3600).messages_deleted == 2
     assert _texts(env, "s1") == []
-    assert _fts_hits(env, "kiwiwordone") == 0  # search index follows
+    assert _fts_hits(env, "kiwiwordone") == 0
+
+
+def test_never_deleted_late_even_between_sweeps(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 600)
+    _at(env, T0 + 30)
+    _at(env, T0 + 60, sweep=False)
+    _msg(env, "s1", "storedat60")           # stored after the T0+30 watermark
+    # Due at most 600s after T0+30, the last time we know it wasn't there.
+    _at(env, T0 + 30 + 600 - early_margin(600))
+    assert _texts(env, "s1") == []
+
+
+@pytest.mark.parametrize("stamp", [YEAR_2100, T0 + 7 * 86400, 0.0, T0 - 90 * 86400])
+def test_forged_timestamps_do_not_change_the_deadline(env, stamp):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "forged", stamp=stamp)
+    _at(env, T0 + 30)
+    _at(env, T0 + 1000)
+    assert _texts(env, "s1") == []
 
 
 def test_messages_before_the_timer_was_turned_on_are_kept(env):
     _session(env, "s1")
-    _msg(env, "s1", "before", T0 - 100)
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "after", T0 + 1)
-    env.clock.t = T0 + 600
-    env.r.sweep()
+    _msg(env, "s1", "before")
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "after")
+    _at(env, T0 + 30)
+    _at(env, T0 + 1000)
     assert _texts(env, "s1") == ["before"]
 
 
-def test_turning_the_timer_off_keeps_new_messages_but_old_ones_still_go(env):
+def test_one_stray_zero_does_not_stop_deletion(env):
     _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "during", T0 + 1)
-    env.clock.t = T0 + 10
-    env.r.observe("signal", GROUP, 0, int((T0 + 10) * 1000))
-    env.clock.t = T0 + 11
-    env.r.observe("signal", GROUP, 0, int((T0 + 11) * 1000))
-    _msg(env, "s1", "afteroff", T0 + 12)
-    env.clock.t = T0 + 10_000
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 60)
+    assert env.r.observe("signal", GROUP, 0) == 60   # stale client
+    _msg(env, "s1", "fromstale")
+    env.r.observe("signal", GROUP, 60)
+    _at(env, T0 + 30)
+    _at(env, T0 + 1000)
+    assert _texts(env, "s1") == []
+
+
+def test_two_zeros_turn_it_off_only_from_the_second(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60)
+    _at(env, T0 + 5, sweep=False)
+    env.r.observe("signal", GROUP, 0)
+    _msg(env, "s1", "betweenzeros")          # still under the timer
+    _at(env, T0 + 8, sweep=False)
+    assert env.r.observe("signal", GROUP, 0) == 0
+    _msg(env, "s1", "afteroff")
+    _at(env, T0 + 30)
+    _at(env, T0 + 10_000)
     assert _texts(env, "s1") == ["afteroff"]
 
 
 def test_timer_change_applies_to_new_messages_only(env):
     _session(env, "s1")
-    env.r.observe("signal", GROUP, 86400, int(T0 * 1000))
-    _msg(env, "s1", "longtimer", T0 + 1)
-    env.clock.t = T0 + 100
-    env.r.observe("signal", GROUP, 60, int((T0 + 100) * 1000))
-    _msg(env, "s1", "shorttimer", T0 + 101)
-    env.clock.t = T0 + 1000
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 86400)
+    _msg(env, "s1", "longtimer")
+    _at(env, T0 + 100)
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "shorttimer")
+    _at(env, T0 + 130)
+    _at(env, T0 + 1000)
     assert _texts(env, "s1") == ["longtimer"]
-    env.clock.t = T0 + 86400
-    env.r.sweep()
+    _at(env, T0 + 86400)
     assert _texts(env, "s1") == []
 
 
-def test_two_changes_at_the_same_instant_both_count(env):
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    env.r.observe("signal", GROUP, 120, int(T0 * 1000))
-    assert [sp.ttl_s for sp in env.r.spans("signal", GROUP)] == [60, 120]
-
-
-def test_one_stray_zero_does_not_stop_deletion(env):
+def test_turning_it_on_again_does_not_touch_the_off_period(env):
     _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    env.clock.t = T0 + 5
-    assert env.r.observe("signal", GROUP, 0, int((T0 + 5) * 1000)) == 60  # stale client
-    _msg(env, "s1", "fromstale", T0 + 6)
-    env.clock.t = T0 + 7
-    env.r.observe("signal", GROUP, 60, int((T0 + 7) * 1000))
-    env.clock.t = T0 + 1000
-    env.r.sweep()
-    assert _texts(env, "s1") == []
-
-
-def test_two_zeros_turn_it_off_from_the_first_one(env):
-    _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    env.clock.t = T0 + 5
-    env.r.observe("signal", GROUP, 0, int((T0 + 5) * 1000))
-    _msg(env, "s1", "betweenzeros", T0 + 6)
-    env.clock.t = T0 + 8
-    assert env.r.observe("signal", GROUP, 0, int((T0 + 8) * 1000)) == 0
-    env.clock.t = T0 + 1000
-    env.r.sweep()
-    assert _texts(env, "s1") == ["betweenzeros"]
-
-
-def test_message_sent_earlier_but_delivered_late_is_still_deleted(env):
-    _session(env, "s1")
-    env.clock.t = T0 + 10
-    env.r.observe("signal", GROUP, 60, int((T0 + 10) * 1000))  # first seen
-    env.r.observe("signal", GROUP, 60, int((T0 + 2) * 1000))   # sent earlier, arrived later
-    _msg(env, "s1", "lateone", T0 + 2)
-    _msg(env, "s1", "firstseen", T0 + 10)
-    env.clock.t = T0 + 1000
-    env.r.sweep()
-    assert _texts(env, "s1") == []
-
-
-def test_backlog_after_downtime_counts_from_send_time(env):
-    _session(env, "s1")
-    old = T0 - 2 * 86400
-    env.r.observe("signal", GROUP, 3600, int(old * 1000))
-    _msg(env, "s1", "backlog", old)
-    env.r.sweep()
-    assert _texts(env, "s1") == []
-
-
-def test_summary_goes_when_what_it_summarises_goes(env):
-    _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "originalwords", T0 + 1)
-    _msg(env, "s1", "[CONTEXT COMPACTION — REFERENCE ONLY] they said originalwords", T0 + 50)
-    env.clock.t = T0 + 70  # original due, summary's own timestamp not yet
-    env.r.sweep()
-    assert _texts(env, "s1") == []
-    assert _fts_hits(env, "originalwords") == 0
-
-
-def test_delegation_records_are_swept(env):
-    _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "x", T0 + 1)
-    with sqlite3.connect(env.home / "state.db") as c:
-        cols = [r[1] for r in c.execute("PRAGMA table_info(async_delegations)")]
-        if not cols:
-            pytest.skip("no async_delegations table")
-        row = {"delegation_id": "d1", "origin_session": "s1", "state": "done",
-               "dispatched_at": T0 + 2, "updated_at": T0 + 2}
-        c.execute(f"INSERT INTO async_delegations ({','.join(row)}) VALUES ({','.join('?' * len(row))})",
-                  tuple(row.values()))
-    env.clock.t = T0 + 1000
-    assert env.r.sweep().delegations_deleted == 1
-
-
-def test_sweep_reports_sessions_to_drop_from_memory(env):
-    _session(env, "s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "x", T0 + 1)
-    env.clock.t = T0 + 1000
-    keys = env.r.sweep().touched_session_keys
-    assert keys == {"agent:main:signal:group:testgroupid"}
-
-
-def test_observe_never_waits_on_a_running_sweep(env):
-    env.r._sweep_lock.acquire()
-    try:
-        assert env.r.observe("signal", GROUP, 60, int(T0 * 1000)) == 60
-        assert env.r.sweep().messages_deleted == 0  # a second sweep just skips
-    finally:
-        env.r._sweep_lock.release()
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "on1")
+    env.r.observe("signal", GROUP, 0)
+    env.r.observe("signal", GROUP, 0)
+    _msg(env, "s1", "offperiod")
+    _at(env, T0 + 30)
+    _at(env, T0 + 100, sweep=False)
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "on2")
+    _at(env, T0 + 130)
+    _at(env, T0 + 10_000)
+    assert _texts(env, "s1") == ["offperiod"]
 
 
 def test_other_chats_are_untouched(env):
     _session(env, "s1")
     _session(env, "s2", chat_id=OTHER)
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "mine", T0 + 1)
-    _msg(env, "s2", "theirs", T0 + 1)
-    env.clock.t = T0 + 1000
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "mine")
+    _msg(env, "s2", "theirs")
+    _at(env, T0 + 30)
+    _at(env, T0 + 1000)
     assert _texts(env, "s2") == ["theirs"]
     assert _texts(env, "s1") == []
 
 
-def test_compression_and_branch_children_are_covered(env):
+def test_compaction_copies_go_with_the_content_they_copy(env):
     _session(env, "s1")
+    env.r.observe("signal", GROUP, 3600)
+    _msg(env, "s1", "originalwords")
+    _at(env, T0 + 30)
+    # Activity elsewhere moves the watermark on, so the copies below are
+    # clearly newer rows that the ordinary rule would keep for another hour.
+    _session(env, "s2", chat_id=OTHER)
+    _msg(env, "s2", "elsewhere")
+    _at(env, T0 + 3000)
+    # Compaction: archive the originals, write a summary and a copy.
+    with sqlite3.connect(env.home / "state.db") as c:
+        c.execute("UPDATE messages SET active=0, compacted=1 WHERE session_id='s1'")
+    _msg(env, "s1", "[PRIOR CONTEXT — for reference only] they said originalwords")
+    _msg(env, "s1", "kept tail copy of originalwords")
+    _at(env, T0 + 3030)
+    _at(env, T0 + 3600)                      # originals due; copies are newer rows
+    assert _texts(env, "s1") == []
+    assert _fts_hits(env, "originalwords") == 0
+
+
+def test_compaction_cleanup_keeps_the_off_period(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 3600)
+    _msg(env, "s1", "secret")
+    env.r.observe("signal", GROUP, 0)
+    env.r.observe("signal", GROUP, 0)
+    _msg(env, "s1", "keptforever")
+    with sqlite3.connect(env.home / "state.db") as c:
+        c.execute("UPDATE messages SET active=0, compacted=1 WHERE content='secret'")
+    _at(env, T0 + 30)
+    _at(env, T0 + 10_000)
+    assert _texts(env, "s1") == ["keptforever"]
+
+
+def test_branched_sessions_are_reset_with_their_parent(env):
+    _session(env, "s1")
+    _session(env, "s2", chat_id=OTHER)
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "parentwords")
+    _msg(env, "s2", "elsewhere1")
+    _at(env, T0 + 5)                         # watermark after the parent row
+    # Rotation-mode compaction: archive the parent, start a child holding a copy.
+    with sqlite3.connect(env.home / "state.db") as c:
+        c.execute("UPDATE messages SET active=0, compacted=1 WHERE session_id='s1'")
+    _msg(env, "s2", "elsewhere2")
+    _at(env, T0 + 40)                        # watermark before the child row
     _session(env, "s1c", chat_id="", parent="s1")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1c", "summarywords", T0 + 5)
-    env.clock.t = T0 + 1000
-    env.r.sweep()
+    _msg(env, "s1c", "copy of parentwords in a rotated child")
+    _at(env, T0 + 60)                        # parent due; the child row alone is not
+    assert _texts(env, "s1") == []
     assert _texts(env, "s1c") == []
 
 
@@ -287,10 +284,10 @@ def test_title_is_cleared_and_session_copies_removed(env):
     dump = env.home / "logs" / "request_dump_s1_20260101.json"
     snap.write_text("x")
     dump.write_text("x")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000))
-    _msg(env, "s1", "hello", T0 + 1)
-    env.clock.t = T0 + 1000
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "hello")
+    _at(env, T0 + 30)
+    _at(env, T0 + 1000)
     assert not snap.exists() and not dump.exists()
     with sqlite3.connect(env.home / "state.db") as c:
         assert c.execute("SELECT title FROM sessions WHERE id='s1'").fetchone()[0] is None
@@ -299,21 +296,18 @@ def test_title_is_cleared_and_session_copies_removed(env):
 def test_attachments_are_deleted_on_their_deadline(env, tmp_path):
     f = tmp_path / "voice.m4a"
     f.write_bytes(b"audio")
-    env.r.observe("signal", GROUP, 120, int(T0 * 1000), [str(f)])
-    env.clock.t = T0 + 120 - early_margin(120) - 1
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 120, [str(f)])
+    _at(env, T0 + 120 - early_margin(120) - 1)
     assert f.exists()
-    env.clock.t = T0 + 120
-    assert env.r.sweep().files_deleted == 1
+    assert _at(env, T0 + 120).files_deleted == 1
     assert not f.exists()
 
 
 def test_attachments_in_ordinary_chats_are_left_alone(env, tmp_path):
     f = tmp_path / "photo.jpg"
     f.write_bytes(b"img")
-    env.r.observe("signal", GROUP, 0, int(T0 * 1000), [str(f)])
-    env.clock.t = T0 + 10 ** 6
-    env.r.sweep()
+    env.r.observe("signal", GROUP, 0, [str(f)])
+    _at(env, T0 + 10 ** 6)
     assert f.exists()
 
 
@@ -321,12 +315,61 @@ def test_deletions_survive_a_restart(env, tmp_path):
     _session(env, "s1")
     f = tmp_path / "doc.pdf"
     f.write_bytes(b"pdf")
-    env.r.observe("signal", GROUP, 60, int(T0 * 1000), [str(f)])
-    _msg(env, "s1", "hi", T0 + 1)
+    env.r.observe("signal", GROUP, 60, [str(f)])
+    _msg(env, "s1", "hi")
+    _at(env, T0 + 30)
     env.clock.t = T0 + 1000
     fresh = Retention(home=env.home, state_db=env.home / "state.db", clock=env.clock)
     fresh.sweep()
     assert _texts(env, "s1") == [] and not f.exists()
+
+
+def test_delegation_records_are_swept(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "x")
+    with sqlite3.connect(env.home / "state.db") as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(async_delegations)")]
+        if not cols:
+            pytest.skip("no async_delegations table")
+        row = {"delegation_id": "d1", "origin_session": "s1", "state": "done",
+               "dispatched_at": T0 + 2, "updated_at": T0 + 2}
+        c.execute(f"INSERT INTO async_delegations ({','.join(row)}) VALUES ({','.join('?' * len(row))})",
+                  tuple(row.values()))
+    _at(env, T0 + 30)
+    assert _at(env, T0 + 1000).delegations_deleted == 1
+
+
+def test_sweep_reports_sessions_to_drop_from_memory(env):
+    _session(env, "s1")
+    env.r.observe("signal", GROUP, 60)
+    _msg(env, "s1", "x")
+    _at(env, T0 + 30)
+    assert _at(env, T0 + 1000).touched_session_keys == {KEY}
+    assert env.r.session_owner == {"s1": ("signal", GROUP)}
+
+
+def test_observe_never_waits_on_a_running_sweep(env):
+    env.r._sweep_lock.acquire()
+    try:
+        assert env.r.observe("signal", GROUP, 60) == 60
+        assert env.r.sweep().messages_deleted == 0  # a second sweep just skips
+    finally:
+        env.r._sweep_lock.release()
+
+
+def test_observe_returns_quickly_while_state_db_is_locked(env):
+    import time as _t
+    _session(env, "s1")
+    blocker = sqlite3.connect(env.home / "state.db", isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        start = _t.monotonic()
+        assert env.r.observe("signal", GROUP, 60) == 60
+        assert _t.monotonic() - start < 2
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
 
 
 # ---------------------------------------------------------------- plugin hooks
@@ -342,7 +385,7 @@ def plugin(env, monkeypatch):
 def _event(chat_id=GROUP, ttl=3600, media=()):
     return SimpleNamespace(
         source=SimpleNamespace(platform=SimpleNamespace(value="signal"), chat_id=chat_id),
-        metadata={"signal": {"expires_in_seconds": ttl, "timestamp_ms": int(T0 * 1000)}},
+        metadata={"signal": {"expires_in_seconds": ttl, "timestamp_ms": int(YEAR_2100 * 1000)}},
         media_urls=list(media),
     )
 
@@ -376,6 +419,7 @@ def test_memory_writes_allowed_in_ordinary_chats(plugin, env):
 def test_log_previews_are_blanked_for_disappearing_chats_only(plugin, env):
     _session(env, "s1")
     plugin._on_pre_gateway_dispatch(event=_event())
+    env.r.sweep()                                  # fills the session map
     f = plugin._filter
 
     def fmt(msg, *args):
@@ -388,14 +432,25 @@ def test_log_previews_are_blanked_for_disappearing_chats_only(plugin, env):
     assert "secret" not in line and f"chat={GROUP}" in line
     turn = fmt("conversation turn: session=%s model=%s msg=%r", "s1", "kimi", "secret words")
     assert "secret" not in turn
-    other = fmt("inbound message: platform=%s chat=%s msg=%r", "signal", OTHER, "fine to keep")
-    assert "fine to keep" in other
     paren = fmt("delivery (chat=%s) msg=%r", GROUP, "secret words")
     assert "secret" not in paren
+    other = fmt("inbound message: platform=%s chat=%s msg=%r", "signal", OTHER, "fine to keep")
+    assert "fine to keep" in other
+
+
+def test_log_filter_never_opens_state_db(plugin, env, monkeypatch):
+    plugin._on_pre_gateway_dispatch(event=_event())
+
+    def boom():
+        raise AssertionError("log filter opened state.db")
+
+    monkeypatch.setattr(env.r, "_state", boom)
+    rec = logging.LogRecord("x", logging.INFO, __file__, 1,
+                            "conversation turn: session=%s msg=%r", ("unknown-sid", "hi"), None)
+    assert plugin._filter.filter(rec) is True
 
 
 def test_only_one_sweeper_thread(plugin, monkeypatch):
-    import threading
     started = []
     monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self.name))
     real = threading.enumerate

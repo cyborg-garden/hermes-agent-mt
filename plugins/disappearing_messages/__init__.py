@@ -10,6 +10,7 @@ Opt-in per agent: add ``disappearing_messages`` to ``plugins.enabled``.
 Hooks:
   * ``pre_gateway_dispatch`` — read the timer the Signal adapter put in
     ``event.metadata["signal"]`` and record the chat and its attachments.
+    Sender timestamps are never used; everything runs on this host's clock.
   * ``pre_tool_call`` — refuse long-term ``memory`` writes in a disappearing
     chat; memory is shared across chats and cannot expire with one of them.
 A background thread sweeps every ``DISAPPEARING_SWEEP_SECONDS`` (default 30).
@@ -75,21 +76,12 @@ class RedactFilter(logging.Filter):
     def __init__(self) -> None:
         super().__init__("disappearing_messages")
         self.chats: Set[str] = set()
-        self._session_cache: Dict[str, bool] = {}
 
     def _session_is_disappearing(self, sid: str) -> bool:
-        if sid in self._session_cache:
-            return self._session_cache[sid]
-        hit = False
-        try:
-            owner = _get().session_chat(sid)
-            hit = bool(owner and owner[1] in self.chats)
-        except Exception:
-            hit = False
-        if len(self._session_cache) > 2048:
-            self._session_cache.clear()
-        self._session_cache[sid] = hit
-        return hit
+        # Never touch state.db from inside logging: use the map sweeps keep.
+        r = _retention
+        owner = r.session_owner.get(sid) if r is not None else None
+        return bool(owner and owner[1] in self.chats)
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not self.chats:
@@ -133,7 +125,6 @@ def _refresh_filter_chats() -> None:
         return
     r = _get()
     _filter.chats = {cid for plat, cid in r.chats() if r.is_disappearing(plat, cid)}
-    _filter._session_cache.clear()
 
 
 # --------------------------------------------------------------------- hooks
@@ -166,11 +157,11 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
             d = Path(session_store.sessions_dir)
             if d not in r.dump_dirs:
                 r.dump_dirs.append(d)
+        # Sender timestamps are deliberately not used: they can be wrong or forged.
         ttl = _get().observe(
             platform,
             chat_id,
             meta.get("expires_in_seconds"),
-            meta.get("timestamp_ms"),
             list(getattr(event, "media_urls", None) or []),
         )
         if _filter is not None:
@@ -178,7 +169,6 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
                 _filter.chats.add(chat_id)
             else:
                 _filter.chats.discard(chat_id)
-            _filter._session_cache.clear()
         _install_filter()
     except Exception:
         # Never block a message; the sweep is the safety net.
