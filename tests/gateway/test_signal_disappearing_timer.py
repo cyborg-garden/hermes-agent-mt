@@ -86,3 +86,13 @@ async def test_timer_change_alone_does_not_start_a_turn(monkeypatch):
 async def test_metadata_holds_no_message_content(monkeypatch):
     ev = await _dispatch(_adapter(monkeypatch), _envelope(expires=60, text="a private sentence"))
     assert "private" not in repr(ev.metadata)
+
+
+@pytest.mark.asyncio
+async def test_attachment_ids_reach_the_event_even_when_not_fetched(monkeypatch):
+    a = _adapter(monkeypatch)
+    a.ignore_attachments = True
+    env = _envelope(expires=300, text="see attached")
+    env["envelope"]["dataMessage"]["attachments"] = [{"id": "Cu4DRu8FuI5cwprZyEeP", "contentType": "audio/aac", "size": 10}]
+    ev = await _dispatch(a, env)
+    assert ev is not None and ev.metadata["signal"]["attachment_ids"] == ["Cu4DRu8FuI5cwprZyEeP"]

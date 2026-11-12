@@ -56,6 +56,14 @@ among them.
   context for the chat early, which is allowed; it never keeps a copy late.
 - Delegated-task records for the chat's sessions.
 - Attachments the bot downloaded: voice notes, photos, documents.
+- signal-cli's own copy of each received attachment. signal-cli keeps every
+  attachment it receives in its data folder and never removes it (it keeps no
+  message history, so it has nothing to expire). The agent's container can't
+  see that folder, so the plugin records each attachment id and its deadline,
+  and `host/sweep_signal_cli.py`, run on the host every minute, deletes the
+  file when it's due. Files the bot sends aren't copied by signal-cli. Install:
+  copy `host/ai.cyborg-garden.disappearing-signal-cli.plist` to
+  `~/Library/LaunchAgents/`, fill in the two paths, and `launchctl load` it.
 - Session snapshot files and request dumps for the chat.
 - The session title, which is written from the conversation.
 
@@ -104,6 +112,10 @@ the write is refused.
   up to one sweep of earlier rows can be counted under the new timer.
 - The person_memory plugin still records who someone is (display name, ids,
   first and last seen) on its person card. That is metadata, not what they said.
+- Attachments in a group message the bot ignores entirely are never seen by
+  the plugin, so signal-cli's copy stays. With `SIGNAL_OBSERVE_UNMENTIONED=true`
+  (the default) every message in an approved group reaches the plugin; with it
+  off, unmentioned messages are dropped before the plugin sees them.
 - One profile per gateway process: it sweeps the `HERMES_HOME` it starts in.
 - If the host clock jumps backwards, deadlines for rows stored after the jump
   are late by the size of the jump. A warning is logged.

@@ -710,3 +710,78 @@ def test_person_notes_are_refused_in_a_disappearing_chat(plugin, env):
     plugin._on_pre_gateway_dispatch(event=_event())
     res = plugin._on_pre_tool_call(tool_name="remember_person", args={"note": "likes x"}, session_id="s1")
     assert res and res["action"] == "block"
+
+
+# ---------------------------------------------------------------- signal-cli's own copies
+
+def test_signal_cli_attachment_ids_are_recorded_with_a_deadline(env):
+    env.r.observe("signal", GROUP, 120, sender="moana", signal_attachment_ids=["Cu4DRu8FuI5cwprZyEeP"])
+    with sqlite3.connect(env.r.ledger_path) as c:
+        rows = c.execute("SELECT attachment_id, expires_at FROM signal_cli_files").fetchall()
+    assert rows == [("Cu4DRu8FuI5cwprZyEeP", T0 + 120 - early_margin(120))]
+
+
+def test_signal_cli_ids_from_ordinary_chats_are_not_recorded(env):
+    env.r.observe("signal", GROUP, 0, sender="moana", signal_attachment_ids=["abcdefgh"])
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT COUNT(*) FROM signal_cli_files").fetchone()[0] == 0
+
+
+def test_the_same_attachment_keeps_its_earliest_deadline(env):
+    env.r.observe("signal", GROUP, 3600, sender="moana", signal_attachment_ids=["sharedfile1"])
+    env.r.observe("signal", OTHER, 60, sender="moana", signal_attachment_ids=["sharedfile1"])
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT expires_at FROM signal_cli_files").fetchone()[0] == T0 + 60 - early_margin(60)
+
+
+def test_dispatch_passes_attachment_ids_through(plugin, env):
+    ev = _event(ttl=300)
+    ev.metadata["signal"]["attachment_ids"] = ["voicenote123"]
+    plugin._on_pre_gateway_dispatch(event=ev)
+    with sqlite3.connect(env.r.ledger_path) as c:
+        assert c.execute("SELECT attachment_id FROM signal_cli_files").fetchall() == [("voicenote123",)]
+
+
+def test_merged_events_keep_every_attachment_id():
+    from gateway.platforms.base import _merge_retention_metadata
+    a = SimpleNamespace(metadata={"signal": {"expires_in_seconds": 60, "attachment_ids": ["one"]}})
+    _merge_retention_metadata(a, SimpleNamespace(metadata={"signal": {"expires_in_seconds": 60, "attachment_ids": ["two"]}}))
+    assert a.metadata["signal"]["attachment_ids"] == ["one", "two"]
+
+
+def _host_sweeper():
+    import importlib.util, pathlib
+    path = pathlib.Path(__file__).resolve().parents[2] / "plugins/disappearing_messages/host/sweep_signal_cli.py"
+    spec = importlib.util.spec_from_file_location("sweep_signal_cli", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_host_sweeper_deletes_only_due_copies(env, tmp_path):
+    mod = _host_sweeper()
+    data = tmp_path / "signal-data"
+    (data / "attachments").mkdir(parents=True)
+    for name in ("dueVoice01.m4a", "laterPhoto1.jpg", "ordinary001.png"):
+        (data / "attachments" / name).write_bytes(b"x")
+    outside = tmp_path / "keepme.txt"
+    outside.write_text("x")
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["laterPhoto1.jpg"])
+    with sqlite3.connect(env.r.ledger_path) as c:
+        c.execute("UPDATE signal_cli_files SET expires_at=? WHERE attachment_id='laterPhoto1.jpg'", (T0 + 10**6,))
+        c.execute("INSERT INTO signal_cli_files VALUES ('../../keepme', 0)")
+    due, deleted = mod.sweep(str(data), str(env.home), T0 + 1000)
+    left = sorted(p.name for p in (data / "attachments").iterdir())
+    assert left == ["laterPhoto1.jpg", "ordinary001.png"] and deleted == 1
+    assert outside.exists()
+
+
+def test_host_sweeper_dry_run_deletes_nothing(env, tmp_path):
+    mod = _host_sweeper()
+    data = tmp_path / "signal-data"
+    (data / "attachments").mkdir(parents=True)
+    (data / "attachments" / "dueVoice01.m4a").write_bytes(b"x")
+    env.r.observe("signal", GROUP, 60, sender="moana", signal_attachment_ids=["dueVoice01"])
+    assert mod.sweep(str(data), str(env.home), T0 + 1000, dry_run=True) == (1, 1)
+    assert (data / "attachments" / "dueVoice01.m4a").exists()

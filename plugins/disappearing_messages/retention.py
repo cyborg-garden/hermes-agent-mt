@@ -115,6 +115,10 @@ CREATE TABLE IF NOT EXISTS files (
     expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS files_expiry ON files (expires_at);
+CREATE TABLE IF NOT EXISTS signal_cli_files (
+    attachment_id TEXT PRIMARY KEY,  -- signal-cli's own copy, outside this container
+    expires_at    REAL NOT NULL
+);
 """
 
 
@@ -273,6 +277,7 @@ class Retention:
         expires_in_s: Optional[int],
         media_paths: Iterable[str] = (),
         sender: Optional[str] = None,
+        signal_attachment_ids: Iterable[str] = (),
     ) -> Optional[int]:
         """Record one inbound message. Returns the timer now in force.
 
@@ -347,6 +352,15 @@ class Retention:
                 )
 
             if ttl > 0:
+                deadline = now + ttl - early_margin(ttl)
+                for aid in signal_attachment_ids:
+                    if aid:
+                        # The same file can arrive in several chats; keep the earliest deadline.
+                        conn.execute(
+                            "INSERT INTO signal_cli_files (attachment_id, expires_at) VALUES (?, ?) "
+                            "ON CONFLICT(attachment_id) DO UPDATE SET expires_at=MIN(expires_at, excluded.expires_at)",
+                            (str(aid), deadline),
+                        )
                 for p in media_paths:
                     if p:
                         conn.execute(
@@ -561,6 +575,9 @@ class Retention:
     def _sweep_files(self, now: float, result: SweepResult) -> None:
         conn = self._ledger()
         try:
+            # The host-side sweeper deletes signal-cli's copies; give it a week
+            # to have seen a due row before forgetting it.
+            conn.execute("DELETE FROM signal_cli_files WHERE expires_at < ?", (now - 7 * 86400,))
             due = conn.execute(
                 "SELECT id, path FROM files WHERE expires_at <= ?", (now,)
             ).fetchall()

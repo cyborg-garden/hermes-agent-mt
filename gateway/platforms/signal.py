@@ -1392,6 +1392,12 @@ class SignalAdapter(BasePlatformAdapter):
                         data_message.get("expiresInSeconds")
                     ),
                     "timestamp_ms": ts_ms,
+                    # signal-cli keeps its own copy of every received attachment,
+                    # named by this id, whether or not we fetched it.
+                    "attachment_ids": [
+                        str(a.get("id")) for a in (data_message.get("attachments") or [])
+                        if isinstance(a, dict) and a.get("id")
+                    ],
                 },
             },
             reply_to_message_id=reply_to_id,

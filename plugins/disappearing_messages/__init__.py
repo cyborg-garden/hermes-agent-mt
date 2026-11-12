@@ -165,6 +165,7 @@ def _on_pre_gateway_dispatch(event: Any = None, gateway: Any = None, session_sto
             meta.get("expires_in_seconds"),
             list(getattr(event, "media_urls", None) or []),
             sender=getattr(source, "user_id", None),
+            signal_attachment_ids=list(meta.get("attachment_ids") or []),
         )
         if _filter is not None:
             if ttl and ttl > 0:

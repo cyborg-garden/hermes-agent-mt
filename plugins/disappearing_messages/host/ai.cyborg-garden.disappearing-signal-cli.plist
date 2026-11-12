@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs sweep_signal_cli.py every minute on a macOS host.
+     Replace __SCRIPT__ with the script's absolute path and __HOME__ with the
+     host user's home, then: launchctl load ~/Library/LaunchAgents/<this file> -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.cyborg-garden.disappearing-signal-cli</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__SCRIPT__</string>
+    <string>--signal-data</string>
+    <string>__HOME__/.hermes-swarm/signal-data</string>
+    <string>--homes</string>
+    <string>__HOME__/.hermes*</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/disappearing-signal-cli.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/disappearing-signal-cli.log</string>
+</dict>
+</plist>
