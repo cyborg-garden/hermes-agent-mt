@@ -89,6 +89,10 @@ def _simplex(monkeypatch):
 def _signal(monkeypatch):
     from plugins.platforms.signal import standalone as sig
 
+    # Fork: a connection error is retried for SIGNAL_CONNECT_RETRY_WINDOW seconds (a signal-cli
+    # restart), longer than this send's 60 s budget. The retry is covered by
+    # tests/tools/test_signal_send_resilience.py; here the first failure is the result, as upstream.
+    monkeypatch.setattr(sig.rl, "SIGNAL_CONNECT_RETRY_WINDOW", 0)
     return sig.standalone_send(SimpleNamespace(extra={"http_url": "http://127.0.0.1:9", "account": "+15550000000"}),
                                "+15550000001", "hi")
 

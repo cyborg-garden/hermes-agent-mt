@@ -56,11 +56,13 @@ async def _signal_send_batch(post, scheduler, rl, idx, n_batches, att_batch, bat
                     conn_retry_count += 1
                     logger.warning("Signal: connection error on batch %d/%d (conn_retry=%d, backoff=%.1fs, "
                                    "elapsed=%.1f/%.0fs): %s; retrying", idx + 1, n_batches, conn_retry_count,
-                                   backoff, elapsed, rl.SIGNAL_CONNECT_RETRY_WINDOW, str(e))
+                                   backoff, elapsed, rl.SIGNAL_CONNECT_RETRY_WINDOW,
+                                   describe_proxy_error(e, env_proxy_for_redaction(target)) or str(e))
                     await asyncio.sleep(backoff)
                     continue
                 logger.error("Signal: send error on batch %d/%d after %.0fs of connection retries "
-                             "(%d retries): %s", idx + 1, n_batches, elapsed, conn_retry_count, str(e))
+                             "(%d retries): %s", idx + 1, n_batches, elapsed, conn_retry_count,
+                             describe_proxy_error(e, env_proxy_for_redaction(target)) or str(e))
                 return False
             attempt += 1
             if attempt >= max_attempts:
