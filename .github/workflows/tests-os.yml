@@ -95,7 +95,7 @@ jobs:
           - name: Windows-only tests
             runner: windows-2025
             marker: windows
-            timeout: 60  # fork: 4 workers on a 4-core runner, not upstream's 16
+            timeout: 60  # fork: 2 workers on a 4-core runner, not upstream's 16 on 32
           - name: Windows-only tests (arm64, 1/2)
             runner: windows-11-arm
             marker: windows
@@ -212,7 +212,10 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '4' || '' }}  # fork: 4-core GitHub-hosted runners
+          # Fork: 2 workers on the 4-core GitHub-hosted Windows runners, the workers-per-core
+          # ratio upstream runs (16 on 32 cores). At 4 the live process tests lost races they
+          # win upstream: a suspended child not yet reported stopped, a closed holder still exiting.
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '2' || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.
