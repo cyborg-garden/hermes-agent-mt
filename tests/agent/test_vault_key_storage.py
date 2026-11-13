@@ -16,10 +16,9 @@ import stat
 import sys
 from pathlib import Path
 
-import pytest
-
-keyring = pytest.importorskip("keyring")
+import keyring
 from cryptography.fernet import Fernet
+import pytest
 from keyring.backend import KeyringBackend
 from keyring.backends import fail
 from keyring.errors import PasswordDeleteError

@@ -83,6 +83,10 @@ def _gateway(root, url, **overrides):
         'terminal': {'backend': 'local'},
         **overrides,
     }
+    # Fork: per-chat memory scoping is on by default here, and a scoped chat may not edit global
+    # memory. These tests remove entries from the global MEMORY.md, so they run unscoped, as upstream
+    # does; scoped behaviour is covered by tests/tools/test_memory_scoping*.py.
+    config['memory'] = {**config['memory'], 'context_scoping_enabled': False}
     (gw.hermes_home / 'config.yaml').write_text(json.dumps(config))
     (gw.hermes_home / 'prefill.json').write_text(json.dumps([
         {'role': 'user', 'content': 'PREFILL_EXAMPLE'}, {'role': 'assistant', 'content': 'Noted.'}]))

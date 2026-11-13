@@ -22,6 +22,10 @@ from tools.environments.base import BaseEnvironment
 from tools.environments.base_output import _pipe_stdin
 from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_cli.process_identity import own_process_groups, release_process_groups
+# Fork #106: loaded with this module, not inside _inject_github_app_gh_token. Every spawn surface
+# calls the injector, including `hermes update` after the checkout has moved; a first import there
+# would load the replacement tree's module into the old process.
+from hermes_cli import git_credentials_boot as _git_credentials_boot, github_app_token as _github_app_token
 from tools.environments.local_env_policy import (
     _ALWAYS_STRIP_FOLDED, _ALWAYS_STRIP_KEYS, _HERMES_PROVIDER_ENV_BLOCKLIST, _HERMES_PROVIDER_ENV_FORCE_PREFIX,
     _is_hermes_internal_secret, _is_provider_env_blocklisted, _is_terminal_first_party_env,
@@ -367,9 +371,7 @@ def _inject_github_app_gh_token(env: dict) -> None:
     if not home:
         return
     try:
-        from hermes_cli.github_app_token import get_installation_token_detail
-
-        detail = get_installation_token_detail(Path(home).parent)
+        detail = _github_app_token.get_installation_token_detail(Path(home).parent)
     except Exception:
         _GH_TOKEN_MINT_FAILURE_TS = time.time()
         return
@@ -377,9 +379,7 @@ def _inject_github_app_gh_token(env: dict) -> None:
         return
     env["GH_TOKEN"] = detail.token
     try:
-        from hermes_cli.git_credentials_boot import refresh_gh_hosts
-
-        refresh_gh_hosts(Path(home), detail.token, detail.expires_at)
+        _git_credentials_boot.refresh_gh_hosts(Path(home), detail.token, detail.expires_at)
     except Exception:
         pass  # the env var is the load-bearing path; the file is belt-and-braces
 
