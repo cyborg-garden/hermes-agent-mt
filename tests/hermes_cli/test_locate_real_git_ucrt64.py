@@ -16,7 +16,7 @@ from hermes_cli import update_cmd_git
 @pytest.mark.parametrize("arch", ["ucrt64", "mingw64", "clangarm64"])
 def test_locator_finds_git_core_under_each_git_for_windows_layout(monkeypatch, arch):
     real = PureWindowsPath(rf"C:\Program Files\Git\{arch}\libexec\git-core\git.exe")
-    monkeypatch.setattr(update_cmd_git, "_portable_git_candidates", lambda: [])
+    monkeypatch.setattr(update_cmd_git, "_portable_git_candidates", list)
     monkeypatch.setattr(Path, "exists", lambda self: PureWindowsPath(str(self)) == real)
     monkeypatch.setattr(update_cmd_git, "_probe_fork_bomb", lambda cmd: False)
 
