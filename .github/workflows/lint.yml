@@ -201,7 +201,20 @@ jobs:
       # parent (current main), so an improvement that lands on main is locked in at once.
       - name: Ratchet the PR against the base branch tip
         if: ${{ !cancelled() && steps.tools.outcome == 'success' && inputs.event_name == 'pull_request' }}
-        run: just check --only health --base HEAD^1
+        env:
+          # Fork: an upstream-sync PR (labeled upstream-sync-auto) merges an upstream release, so
+          # code upstream already carries over its own caps would all count as new against this
+          # repository's main. The release is fetched from the upstream repository itself and the
+          # ratchet leaves out what the PR merges unchanged from it (scripts/code_health/inherited.py).
+          # The fork's own changes are still judged.
+          SYNC_TITLE: ${{ contains(github.event.pull_request.labels.*.name, 'upstream-sync-auto') && github.event.pull_request.title || '' }}
+        run: |
+          if [[ "$SYNC_TITLE" =~ upstream\ (v[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            git fetch --no-tags --depth 1 https://github.com/NousResearch/hermes-agent "refs/tags/${BASH_REMATCH[1]}"
+            HERMES_HEALTH_INHERITED_FROM="$(git rev-parse 'FETCH_HEAD^{commit}')"
+            export HERMES_HEALTH_INHERITED_FROM
+          fi
+          just check --only health --base HEAD^1
 
       # ── Advisory ruff + ty diff (pull requests, python lane) ──────────────────────────────
 
