@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import subprocess
 import sys
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 from scripts.code_health import gitio
 from scripts.code_health.compare import compare
 from scripts.code_health.config import in_scope
+from scripts.code_health import inherited
 from scripts.code_health.measure import Measurer
 from scripts.code_health.report import (
     apply_allows,
@@ -110,6 +112,11 @@ def run(repo: Path, base: str, head: str | None, as_json: bool = False,
     head_m = measurer.measure(head, head_paths)
     findings = compare(base_m, head_m, changes)
     apply_allows(findings, head_m)
+    inherited_note = ""
+    if upstream := os.environ.get(inherited.ENV, "").strip():  # fork: an upstream-sync PR
+        upstream = gitio.resolve_rev(repo, upstream)
+        findings, dropped = inherited.drop_inherited(repo, measurer, upstream, head, head_m, findings)
+        inherited_note = f"; {dropped} inherited from upstream {upstream[:12]} not counted"
     blocking, advisory = verdict(findings)
     failed = bool(blocking) and mode == "blocking"
     if as_json:
@@ -120,7 +127,7 @@ def run(repo: Path, base: str, head: str | None, as_json: bool = False,
         print(body)
     elapsed = time.monotonic() - started
     print(f"\ncode health: {len(head_paths)} files vs {base[:12]}: {blocking} blocking, "
-          f"{advisory} advisory ({elapsed:.1f}s)")
+          f"{advisory} advisory{inherited_note} ({elapsed:.1f}s)")
     if blocking:
         print(_FOOTER)
     if blocking and not failed:

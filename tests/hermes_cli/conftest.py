@@ -103,6 +103,15 @@ def _source_channels_resolve_locally(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_detached_commit_graph_writer(monkeypatch):
+    """The update's maintenance starts a detached ``git commit-graph write`` on the checkout it ran
+    from: in a test, this repository or a tmp copy deleted under it. In-process runs never spawn it."""
+    from hermes_cli import git_commit_graph
+
+    monkeypatch.setattr(git_commit_graph, "spawn_commit_graph_refresh", lambda root: False)
+
+
+@pytest.fixture(autouse=True)
 def _discharge_host_update_obligation():
     """Start and end every ``hermes_cli`` test with NO host update-restart obligation.
 
@@ -178,3 +187,19 @@ def probe_root(tmp_path):
     """
     (tmp_path / "hermes_bootstrap.py").write_text("", encoding="utf-8")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _forget_sqlite3_cli_refusal():
+    """``find_sqlite3_cli`` records why it refused in a module global, which
+    ``find_sqlite3_cli_refusal`` reads back. A test that replaces the finder would read the
+    refusal an earlier real call left behind: on a host whose own sqlite3 CLI is refused
+    (GitHub's ubuntu-latest ships a WAL-reset-vulnerable 3.45), "no CLI at all" was reported
+    as "the CLI on PATH is unsafe". Each test starts with no recorded refusal.
+    """
+    import sys
+
+    module = sys.modules.get("hermes_cli.session_lost_and_found")
+    if module is not None:
+        module._last_cli_refusal = {}
+    yield

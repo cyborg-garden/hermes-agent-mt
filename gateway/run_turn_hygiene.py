@@ -318,8 +318,9 @@ class GatewayTurnHygieneMixin:
 
     async def _hmwa_hygiene_notify(self, source, meta, message, what):
         """Best-effort user notice on the hygiene thread; failure is logged, never raised."""
+        from gateway.bot_peer_notices import automatic_notices_allowed
         try:
-            _adapter = self._delivery_adapter_for(source)
+            _adapter = self._delivery_adapter_for(source) if automatic_notices_allowed(source) else None
             if _adapter and source.chat_id:
                 await _adapter.emit_warning(source.chat_id, message, metadata=meta,
                                             logical_platform=source.platform)
@@ -661,7 +662,7 @@ class GatewayTurnHygieneMixin:
             _hyg_codex_outcome, session_entry.session_id, _hyg_codex_auto, f"{plan.approx_tokens:,}",
         )
 
-    async def _hmwa_hygiene_build_agent(self, _hyg_model, _hyg_runtime, session_entry):
+    async def _hmwa_hygiene_build_agent(self, _hyg_model, _hyg_runtime, session_entry, source=None):
         """Build the detached hygiene ``AIAgent`` with the live session's system prompt. Returns
         ``(agent, sync_session_db)``."""
         from gateway.run import _GATEWAY_HYGIENE_PLATFORM, _seed_hygiene_system_prompt
@@ -688,6 +689,9 @@ class GatewayTurnHygieneMixin:
             **_hyg_runtime, model=_hyg_model, max_iterations=4, quiet_mode=True,
             skip_memory=not _hyg_checkpoint_required, enabled_toolsets=["memory"],
             session_id=session_entry.session_id, session_db=_hyg_session_db,
+            # Fork: the chat's memory scope; the memory toolset above builds a store, and an
+            # unscoped one is the global MEMORY.md.
+            context_id=self._context_id_for_source(source) if source is not None else None,
         )
         _seed_hygiene_system_prompt(_hyg_agent, _hyg_session_row)
         # The stamp only marks this agent as no real surface. Since #104414 Platform is not a
@@ -704,7 +708,7 @@ class GatewayTurnHygieneMixin:
         continue with (compressed or original) on ``attempt.history``."""
         from gateway.run import HygieneTurnHoldExceeded
         from agent.conversation_compression import CompressionCommitFence
-        _hyg_agent, _hyg_session_db = await self._hmwa_hygiene_build_agent(_hyg_model, _hyg_runtime, session_entry)
+        _hyg_agent, _hyg_session_db = await self._hmwa_hygiene_build_agent(_hyg_model, _hyg_runtime, session_entry, source)
         attempt.agent = _hyg_agent
         try:
             # Hygiene owns the session binding, so prefer in-place compaction over minting a

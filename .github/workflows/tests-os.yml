@@ -95,7 +95,7 @@ jobs:
           - name: Windows-only tests
             runner: windows-2025
             marker: windows
-            timeout: 60  # fork: 4 workers on a 4-core runner, not upstream's 16
+            timeout: 60  # fork: 2 workers on a 4-core runner, not upstream's 16 on 32
           - name: Windows-only tests (arm64, 1/2)
             runner: windows-11-arm
             marker: windows
@@ -123,10 +123,22 @@ jobs:
           # Installer stage tests inherit setup-pm's HERMES_RUNTIME_DIR. Prepare
           # the verified Git pin once, before per-file parallelism; otherwise
           # each isolated PowerShell stage races to download/extract the archive.
-          packages: ${{ matrix.marker == 'windows' && 'git,ripgrep' || 'ripgrep' }}
-          extras: '["all", "telegram", "anthropic", "mistral", "fal", "modal", "daytona", "parallel-web"]'
+          # pnpm (and with it PM's Node): tests that drive the real
+          # scripts/build/node-deps.mjs and source builds need it on PATH.
+          packages: ${{ matrix.marker == 'windows' && 'git,ripgrep,pnpm' || 'ripgrep,pnpm' }}
+          # keychain: the vault-key tests run against the host's real Keychain / Credential Manager.
+          extras: '["all", "telegram", "anthropic", "mistral", "fal", "modal", "daytona", "parallel-web", "keychain"]'
           test-environment: 'true'
           prune-python-cache: true
+
+      - name: Warm PowerShell's module analysis cache
+        # Every PowerShell child a test spawns reads this cache (run_tests.sh forwards
+        # PSModuleAnalysisCachePath); cold, each launch costs ~22s on arm64. Started
+        # from cmd: a PowerShell step's own shell would pay the cold analysis too.
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\ci\warm_powershell_module_cache.ps1
 
       - name: Run ${{ matrix.marker }} tests
         # scripts/run_tests.sh — the canonical runner, same as every other
@@ -200,7 +212,10 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '4' || '' }}  # fork: 4-core GitHub-hosted runners
+          # Fork: 2 workers on the 4-core GitHub-hosted Windows runners, the workers-per-core
+          # ratio upstream runs (16 on 32 cores). At 4 the live process tests lost races they
+          # win upstream: a suspended child not yet reported stopped, a closed holder still exiting.
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '2' || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

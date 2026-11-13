@@ -17,6 +17,7 @@ find .github -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | xargs -0 pe
   s/blacksmith-\d+vcpu-ubuntu-2404/ubuntu-latest/g;
   s/blacksmith-\d+vcpu-windows-2025/windows-2025/g;
   s/blacksmith-\d+vcpu-macos-latest/macos-latest/g;
+  s/blacksmith-\d+vcpu-macos-15/macos-15/g;
   s/windows-latest-32-arm-core/windows-11-arm/g;
   s/windows-latest-32-core/windows-latest/g;
   s{useblacksmith/checkout\@[0-9a-f]+\s*# v1}{actions/checkout\@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1}g;
