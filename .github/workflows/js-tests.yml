@@ -20,7 +20,7 @@ jobs:
     # One larger runner installs one time. vitest, tsc and eslint each size
     # their own worker pool from the core count.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60  # fork: 4-core GitHub-hosted runner, two checks at a time
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
@@ -94,7 +94,10 @@ jobs:
       # not an empty run, because an empty run reports green after it checks
       # nothing.
       - name: Run all workspace checks
-        run: node .github/scripts/run-workspace-checks.mjs
+        # Fork: two checks at a time. The default is one per core, and each check runs its own
+        # worker pool, so a 4-core GitHub-hosted runner was oversubscribed several times over and
+        # tests that spawn processes ran past their own timeouts.
+        run: node .github/scripts/run-workspace-checks.mjs --concurrency 2
       - name: Check the checkout is clean
         # Last step of every job (tests/ci/test_clean_worktree_check.py): a test or CI step that
         # leaves an untracked or modified file in the checkout is reported here. Runs only when
