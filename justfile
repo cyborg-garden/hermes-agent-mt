@@ -52,8 +52,8 @@ check-js:
 
 # Run every JS workspace check in parallel, as CI does (.github/scripts/run-workspace-checks.mjs)
 [group('check')]
-check-js-ci:
-    node .github/scripts/run-workspace-checks.mjs
+check-js-ci *args:
+    node .github/scripts/run-workspace-checks.mjs {{ args }}
 
 # Fail when the committed icons differ from the generator's output (scripts/ci/check_icons.sh)
 [group('check')]
