@@ -48,7 +48,7 @@ def cold_review_parent(runner, source, session_key, session_id):
     builds one, minus the turn-only prompt pieces), inside the session's policy scope. On exit only its
     own LLM clients are released: ``close()`` would tear down the session's terminal and browser, and the
     reviewer it dispatched is detached and builds its own clients."""
-    from gateway.run import _load_gateway_config, _platform_config_key
+    from gateway.run import _context_id_for_source, _load_gateway_config, _platform_config_key
     from gateway.session_api_turn import api_runtime_locked
     from gateway.session_authorities import active_authority
     from gateway.session_policy import policy_for_source, policy_scope, policy_turn_toolsets
@@ -83,6 +83,9 @@ def cold_review_parent(runner, source, session_key, session_id):
             provider_sort=pr.get("sort"), provider_require_parameters=pr.get("require_parameters", False),
             provider_data_collection=pr.get("data_collection"),
             session_id=session_id, platform=platform_key, gateway_session_key=session_key,
+            # Fork: the chat's own memory scope, as its turns carry it. Without it this agent, and
+            # the reviewer that inherits its store, reads and writes the global MEMORY.md.
+            context_id=_context_id_for_source(source),
             session_db=getattr(runner._session_db, "_db", runner._session_db),
             # The session's backup providers, as its next turn would carry them: the reviewer inherits the chain.
             fallback_model=None if api_runtime_locked() else runner._refresh_fallback_model(),

@@ -83,19 +83,21 @@ def _gateway(root, url, **overrides):
         'terminal': {'backend': 'local'},
         **overrides,
     }
-    # Fork: per-chat memory scoping is on by default here, and a scoped chat may not edit global
-    # memory. These tests remove entries from the global MEMORY.md, so they run unscoped, as upstream
-    # does; scoped behaviour is covered by tests/tools/test_memory_scoping*.py.
-    config['memory'] = {**config['memory'], 'context_scoping_enabled': False}
     (gw.hermes_home / 'config.yaml').write_text(json.dumps(config))
     (gw.hermes_home / 'prefill.json').write_text(json.dumps([
         {'role': 'user', 'content': 'PREFILL_EXAMPLE'}, {'role': 'assistant', 'content': 'Noted.'}]))
     (gw.hermes_home / '.env').write_text('OPENROUTER_API_KEY=loopback-only\n')
-    memories = gw.hermes_home / 'memories'
-    if not memories.exists():
-        memories.mkdir()
-        (memories / 'MEMORY.md').write_text('WARM_FACT\n§\nCOLD_FACT\n§\nKEEP_FACT')
+    memory = _chat_memory(gw.hermes_home)
+    if not memory.exists():
+        memory.parent.mkdir(parents=True)
+        memory.write_text('WARM_FACT\n§\nCOLD_FACT\n§\nKEEP_FACT')
     return gw
+
+
+def _chat_memory(hermes_home):
+    """Fork: memory is scoped per chat by default and a chat may not edit the global MEMORY.md, so
+    the facts /refine removes live in this chat's own file (the fake platform's DM ``chaos-chat``)."""
+    return hermes_home / 'memories' / 'contexts' / 'chaosfake:dm:chaos-chat' / 'MEMORY.md'
 
 
 @pytest.mark.platforms("linux")  # the chaos harness reaps by POSIX signals
@@ -123,7 +125,7 @@ def test_messaging_refine_reviews_the_stored_conversation_once_the_cached_agent_
     out = {}
     try:
         warm = _gateway(root, url)
-        out['memory_file'] = warm.hermes_home / 'memories' / 'MEMORY.md'
+        out['memory_file'] = _chat_memory(warm.hermes_home)
         try:
             warm.start()
             mark = warm.mark()
@@ -191,7 +193,7 @@ def test_bare_refine_runs_while_automatic_reviews_are_disabled(tmp_path):
         finally:
             warm.stop()
         # The loopback review removes WARM_FACT again; put it back so the cold removal has a target.
-        (warm.hermes_home / 'memories' / 'MEMORY.md').write_text('WARM_FACT\n§\nKEEP_FACT')
+        _chat_memory(warm.hermes_home).write_text('WARM_FACT\n§\nKEEP_FACT')
         cold = _gateway(root, url, **overrides)  # restarted: no cached agent, the stored conversation
         try:
             cold.start()
