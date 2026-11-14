@@ -308,10 +308,27 @@ def test_minted_ids_stay_inside_the_provider_length_limit():
 # --- The loud guard ------------------------------------------------------
 
 
-def test_repair_logs_an_error_naming_the_real_numbers(caplog):
+def test_repair_warns_once_per_provider_model_then_logs_info(caplog):
+    logger = logging.getLogger("test.tool_call_ids.once")
+    with caplog.at_level(logging.DEBUG, logger="test.tool_call_ids.once"):
+        for sid in ("cron-1", "cron-1", "cron-2"):
+            repair_conversation_tool_call_ids(
+                build_incident_transcript(), logger=logger, model="once-m",
+                provider="once-p", session_id=sid,
+            )
+        repair_conversation_tool_call_ids(
+            build_incident_transcript(), logger=logger, model="other-m",
+            provider="once-p", session_id="cron-3",
+        )
+    levels = [r.levelno for r in caplog.records]
+    assert levels == [logging.WARNING, logging.INFO, logging.INFO, logging.WARNING]
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+def test_repair_logs_a_warning_naming_the_real_numbers(caplog):
     messages = build_incident_transcript()
     logger = logging.getLogger("test.tool_call_ids")
-    with caplog.at_level(logging.ERROR, logger="test.tool_call_ids"):
+    with caplog.at_level(logging.WARNING, logger="test.tool_call_ids"):
         repair_conversation_tool_call_ids(
             messages,
             logger=logger,
@@ -361,3 +378,32 @@ def test_dropped_tool_results_are_reported_loudly():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_partial_repair_still_logs_an_error(caplog):
+    """A within-round duplicate isn't repaired, so the loss must stay loud."""
+    def call(cid):
+        return {"id": cid, "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"}}
+
+    def result(cid):
+        return {"role": "tool", "tool_call_id": cid, "content": "x" * 50}
+
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [call("a")]},
+        result("a"),
+        # Reuses "a" across rounds (repairable) and duplicates "b" inside
+        # the round (not repairable).
+        {"role": "assistant", "content": "", "tool_calls": [call("a"), call("b"), call("b")]},
+        result("a"), result("b"), result("b"),
+    ]
+    logger = logging.getLogger("test.tool_call_ids.partial")
+    with caplog.at_level(logging.DEBUG, logger="test.tool_call_ids.partial"):
+        renamed = repair_conversation_tool_call_ids(
+            messages, logger=logger, model="partial-m", provider="partial-p",
+            session_id="s",
+        )
+    assert renamed == 1
+    assert [r.levelno for r in caplog.records] == [logging.ERROR]
+    assert "nothing was lost" not in caplog.records[0].getMessage()
