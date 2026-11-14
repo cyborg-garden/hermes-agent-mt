@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gateway.session_store_home import store_home
 from hermes_constants import get_hermes_home, get_hermes_home_override, hermes_home_key
 from hermes_state_runtime import RuntimeStoreError
 
@@ -194,10 +195,7 @@ def authority_for_home(runner, home):
     registry = getattr(runner, 'session_authorities', None)
     if registry is None:
         authority = getattr(runner, 'session_authority', None)
-        if authority is not None and (
-            Path(authority.db.db_path).parent == Path(home).resolve()
-            or Path(authority.db.db_path).resolve().parent == Path(home).resolve()
-        ):
+        if authority is not None and store_home(authority.db.db_path) == Path(home).resolve():
             return authority
         return None
     return registry.for_home(home)

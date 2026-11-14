@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 from hermes_state_runtime import RuntimeStoreError
+from gateway.session_store_home import store_home
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def pin_reasoning_effort(config, effort, *, session=False):
 def profile_config(authority):
     """The owning profile's current ``config.yaml`` (its present sections), read fresh."""
     from gateway.run import _load_gateway_config
-    return present_sections(_load_gateway_config(Path(authority.db.db_path).parent / 'config.yaml'))
+    return present_sections(_load_gateway_config(store_home(authority.db.db_path) / 'config.yaml'))
 
 
 def unpin_reasoning(config, profile):

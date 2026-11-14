@@ -18,6 +18,8 @@ from pathlib import Path
 import threading
 import uuid
 
+from gateway.session_store_home import store_belongs_to_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,22 +37,6 @@ def reserved_profile_homes(runner):
     return homes
 
 
-def store_belongs_to_profile(db_path, home) -> bool:
-    """True when the store's directory is the reserved profile.
-
-    ``db.db_path`` is built from the UNRESOLVED home (``hermes_state._default_db_path``
-    → ``get_hermes_home() / 'state.db'``) while ``home`` here is canonical
-    (``get_hermes_home().resolve()``). Legitimate layouts symlink the db FILE onto a
-    named volume while the profile itself stays put (hermes-swarm-map's state-init
-    service), so the file's resolved target lives outside the profile even though the
-    store is inside it. Accept an exact match on the unresolved parent OR a canonical
-    match — the plain comparison alone would also reject a symlinked profile dir
-    (e.g. HERMES_HOME=/tmp → /private/tmp on macOS).
-    """
-    parent = Path(db_path).parent
-    return parent == home or parent.resolve() == home
-
-
 async def _build_profile_authority(runner, name, home, *, register):
     """One profile's authority against its own ``state.db``; raises when that store is unusable."""
     from gateway.run import _profile_runtime_scope
@@ -63,8 +49,9 @@ async def _build_profile_authority(runner, name, home, *, register):
     with _profile_runtime_scope(home, hydrate_secrets=False):
         if db is None:
             raise RuntimeError(_store_open_failure(runner, home))
-        # Symlinked-db aware ownership gate — see store_belongs_to_profile.
-        if not await asyncio.to_thread(store_belongs_to_profile, db.db_path, home):
+        # The store's entry must sit in this profile and must not link into another one.
+        others = [other for _, other in reserved_profile_homes(runner)]
+        if not await asyncio.to_thread(store_belongs_to_profile, db.db_path, home, others):
             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
         registry.add(home, None, name=name)
         try:

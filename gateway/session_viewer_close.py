@@ -26,6 +26,7 @@ from gateway.session_history_mount import is_history_mount
 from hermes_state_local import local_receipt
 from hermes_state_mutation_retirement import VIEWER_CLOSE_PREFIX
 from hermes_state_runtime import RuntimeStoreError
+from gateway.session_store_home import store_home
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def orphan_close_grace(authority, *, startup=False):
     from gateway.session_local import profile_env_scope
     from utils import is_truthy_value
     default = DEFAULT_CONFIG['sessions']['orphan_end_grace_s']
-    home = Path(authority.db.db_path).resolve().parent
+    home = store_home(authority.db.db_path)
     # A dropped socket detaches outside the RPC's owner scope: expand ``${VAR}`` against this profile.
     with profile_env_scope(home):
         config = load_user_config_effective(home / 'config.yaml')

@@ -18,11 +18,11 @@ match; a store that genuinely lives elsewhere is still refused.
 """
 from pathlib import Path
 
-from gateway import run_runtime
+from gateway.session_store_home import store_belongs_to_profile, store_home
 
 
-def _belongs(db_path: Path, home: Path) -> bool:
-    return run_runtime.store_belongs_to_profile(db_path, home)
+def _belongs(db_path: Path, home: Path, others=()) -> bool:
+    return store_belongs_to_profile(db_path, home, others)
 
 
 def test_regular_store_in_profile(tmp_path):
@@ -76,3 +76,73 @@ def test_store_in_a_subdirectory_is_refused(tmp_path):
     home = (tmp_path / 'profiles' / 'worker').resolve()
     (home / 'nested').mkdir(parents=True)
     assert not _belongs(home / 'nested' / 'state.db', home)
+
+
+def test_link_into_another_profile_is_refused(tmp_path):
+    """A profile whose state.db links onto another reserved profile's store would run
+    that store under the wrong authority. A link onto a neutral volume stays allowed."""
+    mine = (tmp_path / 'profiles' / 'mine').resolve()
+    theirs = (tmp_path / 'profiles' / 'theirs').resolve()
+    mine.mkdir(parents=True)
+    theirs.mkdir(parents=True)
+    (theirs / 'state.db').write_bytes(b'')
+    (mine / 'state.db').symlink_to(theirs / 'state.db')
+    assert not _belongs(mine / 'state.db', mine, [mine, theirs])
+    # nested inside the other profile is refused too
+    (theirs / 'deep').mkdir()
+    (mine / 'state.db').unlink()
+    (mine / 'state.db').symlink_to(theirs / 'deep' / 'state.db')
+    assert not _belongs(mine / 'state.db', mine, [mine, theirs])
+    # sentinel: the same link onto a volume outside every profile is accepted
+    volume = tmp_path / 'volume'
+    volume.mkdir()
+    (mine / 'state.db').unlink()
+    (mine / 'state.db').symlink_to(volume / 'state.db')
+    assert _belongs(mine / 'state.db', mine, [mine, theirs])
+
+
+def test_own_home_in_the_reserved_list_does_not_refuse(tmp_path):
+    home = (tmp_path / 'profiles' / 'worker').resolve()
+    home.mkdir(parents=True)
+    assert _belongs(home / 'state.db', home, [home])
+
+
+def test_store_home_is_the_canonical_profile_in_every_layout(tmp_path):
+    home = (tmp_path / 'profile-real').resolve()
+    home.mkdir()
+    volume = tmp_path / 'volume'
+    volume.mkdir()
+    assert store_home(home / 'state.db') == home                 # plain file
+    (home / 'state.db').symlink_to(volume / 'state.db')          # dangling link onto a volume
+    assert store_home(home / 'state.db') == home
+    link = tmp_path / 'profile-link'
+    link.symlink_to(home, target_is_directory=True)              # symlinked home directory
+    assert store_home(link / 'state.db') == home
+
+
+def test_cron_owner_is_found_through_a_symlinked_store(tmp_path):
+    """The owner table is looked up by canonical home; binding must use the same key
+    whether the store is a plain file, a link onto a volume, or under a linked home."""
+    import asyncio
+    from types import SimpleNamespace
+    from gateway import session_cron
+
+    home = (tmp_path / 'profile-real').resolve()
+    home.mkdir()
+    volume = tmp_path / 'volume'
+    volume.mkdir()
+    (home / 'state.db').symlink_to(volume / 'state.db')
+    link = tmp_path / 'profile-link'
+    link.symlink_to(home, target_is_directory=True)
+
+    async def run(db_path):
+        authority = SimpleNamespace(db=SimpleNamespace(db_path=str(db_path)))
+        session_cron.bind_owner(authority)
+        try:
+            return session_cron._owners.get(home) is not None
+        finally:
+            session_cron.unbind_owner(authority)
+
+    assert asyncio.run(run(home / 'state.db'))
+    assert asyncio.run(run(link / 'state.db'))
+    assert home not in session_cron._owners
