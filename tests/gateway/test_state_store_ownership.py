@@ -146,3 +146,29 @@ def test_cron_owner_is_found_through_a_symlinked_store(tmp_path):
     assert asyncio.run(run(home / 'state.db'))
     assert asyncio.run(run(link / 'state.db'))
     assert home not in session_cron._owners
+
+
+def test_session_rows_keep_their_profile_through_a_linked_store(tmp_path, monkeypatch):
+    """Session rows name their owning profile from the store path. A store linked onto a
+    volume must still name its profile, not fall back to no owner."""
+    from types import SimpleNamespace
+    import hermes_constants
+    from hermes_state_sessions import SessionSessionsMixin
+
+    root = (tmp_path / 'hermes').resolve()
+    worker = root / 'profiles' / 'worker'
+    worker.mkdir(parents=True)
+    volume = tmp_path / 'volume'
+    volume.mkdir()
+    monkeypatch.setattr(hermes_constants, 'get_default_hermes_root', lambda: root)
+
+    def owner(db_path):
+        return SessionSessionsMixin._own_profile_name(SimpleNamespace(db_path=str(db_path)))
+
+    assert owner(root / 'state.db') == 'default'
+    assert owner(worker / 'state.db') == 'worker'
+    (worker / 'state.db').symlink_to(volume / 'state.db')
+    assert owner(worker / 'state.db') == 'worker'
+    (root / 'state.db').symlink_to(volume / 'root.db')
+    assert owner(root / 'state.db') == 'default'
+    assert owner(volume / 'state.db') is None      # sentinel: outside the tree has no owner
