@@ -378,3 +378,32 @@ def test_dropped_tool_results_are_reported_loudly():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_partial_repair_still_logs_an_error(caplog):
+    """A within-round duplicate isn't repaired, so the loss must stay loud."""
+    def call(cid):
+        return {"id": cid, "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"}}
+
+    def result(cid):
+        return {"role": "tool", "tool_call_id": cid, "content": "x" * 50}
+
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [call("a")]},
+        result("a"),
+        # Reuses "a" across rounds (repairable) and duplicates "b" inside
+        # the round (not repairable).
+        {"role": "assistant", "content": "", "tool_calls": [call("a"), call("b"), call("b")]},
+        result("a"), result("b"), result("b"),
+    ]
+    logger = logging.getLogger("test.tool_call_ids.partial")
+    with caplog.at_level(logging.DEBUG, logger="test.tool_call_ids.partial"):
+        renamed = repair_conversation_tool_call_ids(
+            messages, logger=logger, model="partial-m", provider="partial-p",
+            session_id="s",
+        )
+    assert renamed == 1
+    assert [r.levelno for r in caplog.records] == [logging.ERROR]
+    assert "nothing was lost" not in caplog.records[0].getMessage()
