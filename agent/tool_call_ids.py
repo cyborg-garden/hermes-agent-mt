@@ -49,6 +49,10 @@ MAX_TOOL_CALL_ID_LEN = 64
 # accepted the original id accepts the rewrite.
 _SUFFIX_MARKER = "_r"
 
+# (provider, model) keys whose id repair has already been reported at WARNING.
+_REPORTED: set = set()
+_REPORTED_MAX = 10_000
+
 
 def _tool_call_id(tc: Any) -> str:
     """Read the id off a tool_call in dict or SDK-object form."""
@@ -214,12 +218,23 @@ def repair_conversation_tool_call_ids(
             msg["tool_calls"] = new_tcs
 
     if renamed and logger is not None:
-        logger.error(
+        # The repair is complete, so this is a provider quirk, not a failure.
+        # WARNING (which the home-channel log router forwards) only the first
+        # time this process sees it for a provider/model; every later repair,
+        # in any session, is INFO so it stays in the logs without paging.
+        key = (provider or "?", model or "?")
+        first = key not in _REPORTED
+        if first:
+            if len(_REPORTED) >= _REPORTED_MAX:
+                _REPORTED.clear()
+            _REPORTED.add(key)
+        (logger.warning if first else logger.info)(
             "Provider reuses tool_call ids across rounds (model=%s provider=%s "
             "session=%s): renamed %d tool_call id(s). Before the repair this "
             "conversation held %d tool result(s) on only %d distinct id(s), and "
             "%d result(s) would have been deleted before the request — the model "
-            "would have re-requested output it could not see.",
+            "would have re-requested output it could not see. Repaired; nothing "
+            "was lost.",
             model or "?",
             provider or "?",
             session_id or "-",

@@ -308,10 +308,27 @@ def test_minted_ids_stay_inside_the_provider_length_limit():
 # --- The loud guard ------------------------------------------------------
 
 
-def test_repair_logs_an_error_naming_the_real_numbers(caplog):
+def test_repair_warns_once_per_provider_model_then_logs_info(caplog):
+    logger = logging.getLogger("test.tool_call_ids.once")
+    with caplog.at_level(logging.DEBUG, logger="test.tool_call_ids.once"):
+        for sid in ("cron-1", "cron-1", "cron-2"):
+            repair_conversation_tool_call_ids(
+                build_incident_transcript(), logger=logger, model="once-m",
+                provider="once-p", session_id=sid,
+            )
+        repair_conversation_tool_call_ids(
+            build_incident_transcript(), logger=logger, model="other-m",
+            provider="once-p", session_id="cron-3",
+        )
+    levels = [r.levelno for r in caplog.records]
+    assert levels == [logging.WARNING, logging.INFO, logging.INFO, logging.WARNING]
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+def test_repair_logs_a_warning_naming_the_real_numbers(caplog):
     messages = build_incident_transcript()
     logger = logging.getLogger("test.tool_call_ids")
-    with caplog.at_level(logging.ERROR, logger="test.tool_call_ids"):
+    with caplog.at_level(logging.WARNING, logger="test.tool_call_ids"):
         repair_conversation_tool_call_ids(
             messages,
             logger=logger,
