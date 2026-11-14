@@ -67,8 +67,15 @@ among them.
   host process can't safely read. A row is only forgotten once the host has
   confirmed it; if nothing confirms for a day the agent logs a warning, and
   after 90 days it gives up. Files the bot sends aren't copied by signal-cli.
-  Install: copy `host/ai.cyborg-garden.disappearing-signal-cli.plist` to
-  `~/Library/LaunchAgents/`, fill in the two paths, and `launchctl load` it.
+  Install: copy `host/sweep_signal_cli.py` to
+  `~/.local/share/disappearing-messages/`, copy
+  `host/ai.cyborg-garden.disappearing-signal-cli.plist` to
+  `~/Library/LaunchAgents/`, set `__SCRIPT__` to the copied script and
+  `__HOME__` to your home folder, and `launchctl load` it. Don't point
+  `__SCRIPT__` at the repo checkout: macOS blocks launchd jobs from reading
+  `~/Documents`, `~/Desktop` and `~/Downloads`, so the sweeper fails every
+  minute ("Operation not permitted" in the log) and nothing is deleted.
+  Copy the script again after you update it.
 - Session snapshot files and request dumps for the chat.
 - The session title, which is written from the conversation.
 
