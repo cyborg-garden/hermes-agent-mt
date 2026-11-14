@@ -22,6 +22,7 @@ of the message string.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sys
@@ -135,10 +136,18 @@ def agent_env():
     os.environ["HERMES_HOME"] = os.path.join(test_home, ".hermes")
 
     # Import fresh so the patched conversation_loop is exercised even when the
-    # module was imported earlier in the same worker.
-    for mod in list(sys.modules):
-        if mod == "run_agent" or mod.startswith("agent.") or mod.startswith("tools.") or mod.startswith("hermes_"):
-            del sys.modules[mod]
+    # module was imported earlier in the same worker.  Snapshot first and put
+    # the originals back afterwards: later tests hold references to the old
+    # modules (e.g. agent.transports.get_transport), and leaving the fresh
+    # copies in sys.modules splits registries such as the transport registry
+    # between the two, so get_transport() returns None.
+    def _fresh(mod: str) -> bool:
+        return mod == "run_agent" or mod.startswith(("agent.", "tools.", "hermes_"))
+
+    saved_modules = {m: sys.modules[m] for m in list(sys.modules) if _fresh(m)}
+    saved_handlers = list(logging.getLogger().handlers)
+    for mod in saved_modules:
+        del sys.modules[mod]
     from run_agent import AIAgent
 
     agent = AIAgent(
@@ -154,6 +163,16 @@ def agent_env():
         yield agent, _MockHandler
     finally:
         srv.shutdown()
+        for mod in [m for m in sys.modules if _fresh(m)]:
+            del sys.modules[mod]
+        sys.modules.update(saved_modules)
+        # The fresh hermes_logging attached file handlers under test_home,
+        # which is about to be deleted.
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if h not in saved_handlers:
+                root.removeHandler(h)
+                h.close()
         shutil.rmtree(test_home, ignore_errors=True)
         if prev_home is None:
             os.environ.pop("HERMES_HOME", None)
