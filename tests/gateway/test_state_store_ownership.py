@@ -88,17 +88,22 @@ def test_link_into_another_profile_is_refused(tmp_path):
     (theirs / 'state.db').write_bytes(b'')
     (mine / 'state.db').symlink_to(theirs / 'state.db')
     assert not _belongs(mine / 'state.db', mine, [mine, theirs])
-    # nested inside the other profile is refused too
-    (theirs / 'deep').mkdir()
-    (mine / 'state.db').unlink()
-    (mine / 'state.db').symlink_to(theirs / 'deep' / 'state.db')
-    assert not _belongs(mine / 'state.db', mine, [mine, theirs])
     # sentinel: the same link onto a volume outside every profile is accepted
     volume = tmp_path / 'volume'
     volume.mkdir()
     (mine / 'state.db').unlink()
     (mine / 'state.db').symlink_to(volume / 'state.db')
     assert _belongs(mine / 'state.db', mine, [mine, theirs])
+
+
+def test_profile_nested_under_the_default_home_is_not_refused(tmp_path):
+    """The default profile's home is the root that holds profiles/<name>; a secondary's
+    plain store sits inside it and is still its own."""
+    root = (tmp_path / 'hermes').resolve()
+    alpha = root / 'profiles' / 'alpha'
+    alpha.mkdir(parents=True)
+    assert _belongs(alpha / 'state.db', alpha, [root, alpha])
+    assert _belongs(root / 'state.db', root, [root, alpha])
 
 
 def test_own_home_in_the_reserved_list_does_not_refuse(tmp_path):

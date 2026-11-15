@@ -29,6 +29,7 @@ def store_belongs_to_profile(db_path, home, other_homes=()) -> bool:
     target = Path(db_path).resolve()
     for other in other_homes:
         other = Path(other).resolve()
-        if other != home and (target.parent == other or other in target.parents):
+        # Exact directory only: the default profile's home contains the others.
+        if other != home and target.parent == other:
             return False
     return True
