@@ -187,7 +187,7 @@ def orphan_close_grace(authority, *, startup=False):
     from gateway.session_local import profile_env_scope
     from utils import is_truthy_value
     default = DEFAULT_CONFIG['sessions']['orphan_end_grace_s']
-    home = store_home(authority.db.db_path)
+    home = store_home(authority.db)
     # A dropped socket detaches outside the RPC's owner scope: expand ``${VAR}`` against this profile.
     with profile_env_scope(home):
         config = load_user_config_effective(home / 'config.yaml')

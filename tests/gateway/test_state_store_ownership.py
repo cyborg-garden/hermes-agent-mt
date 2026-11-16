@@ -1,22 +1,14 @@
-"""The reserved-profile store ownership check tolerates symlinked state stores.
+"""A store belongs to the profile whose home holds its ``state.db`` entry.
 
-A store belongs to a profile when its directory is that profile's home.
-``db.db_path`` is built from the *unresolved* home (hermes_state._default_db_path
-→ get_hermes_home() / 'state.db') while the gate's ``home`` is canonical, and
-two legitimate layouts make a resolve()-only comparison lie:
-
-- the db FILE is a symlink onto a named volume (hermes-swarm-map's state-init
-  service symlinks /opt/data/state.db → /state/state.db so SQLite O_CREAT
-  follows it): resolving the file points at the volume, outside the profile,
-  even though the store lives inside it;
-- the HOME DIRECTORY itself is a symlink (e.g. HERMES_HOME=/tmp/x on macOS,
-  where /tmp → /private/tmp): the unresolved parent differs from the canonical
-  home even though everything is inside the profile.
-
-The gate accepts either an exact match on the unresolved parent or a canonical
-match; a store that genuinely lives elsewhere is still refused.
+Swarm Map's state-init links ``/opt/data/state.db`` onto a named volume, so the
+file lives outside the profile, and the shared registry opens handles by their
+resolved path. Ownership is therefore read from the path the store was opened
+by (``entry_path``), never from the resolved file. These tests cover the pure
+helper, the real registry handle, and the gateway boot path.
 """
 from pathlib import Path
+
+import pytest
 
 from gateway.session_store_home import store_belongs_to_profile, store_home
 
@@ -177,3 +169,78 @@ def test_session_rows_keep_their_profile_through_a_linked_store(tmp_path, monkey
     (root / 'state.db').symlink_to(volume / 'root.db')
     assert owner(root / 'state.db') == 'default'
     assert owner(volume / 'state.db') is None      # sentinel: outside the tree has no owner
+
+
+def _linked_home(tmp_path, monkeypatch):
+    """A profile home whose state.db is a dangling link onto a volume, as state-init leaves it."""
+    import hermes_state
+    home = tmp_path / '.hermes'
+    home.mkdir(mode=0o700)
+    volume = tmp_path / 'state-volume'
+    volume.mkdir()
+    (home / 'state.db').symlink_to(volume / 'state.db')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    return home, volume
+
+
+def test_registry_handle_through_a_link_still_names_its_profile(tmp_path, monkeypatch):
+    """The real open path: the registry resolves the link, so db_path names the volume.
+    Ownership must come from the path the store was asked for."""
+    from hermes_state_registry import acquire, release
+    home, volume = _linked_home(tmp_path, monkeypatch)
+    db = acquire(home / 'state.db')
+    try:
+        assert Path(db.db_path).parent == volume.resolve()       # sentinel: the handle is on the volume
+        assert store_home(db) == home.resolve()
+        assert _belongs(db, home.resolve())
+        assert not _belongs(db, volume.resolve())
+        assert (volume / 'state.db').exists()                    # SQLite created it through the link
+    finally:
+        release(db)
+
+
+def test_registry_handle_for_a_plain_store_is_unchanged(tmp_path, monkeypatch):
+    from hermes_state_registry import acquire, release
+    home = (tmp_path / 'plain').resolve()
+    home.mkdir()
+    db = acquire(home / 'state.db')
+    try:
+        assert store_home(db) == home == Path(db.db_path).parent
+    finally:
+        release(db)
+
+
+@pytest.mark.asyncio
+async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypatch):
+    """swarm-map#273 / #187: the gateway must serve a profile whose state.db is a link."""
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner
+    from gateway.run_runtime import initialize_gateway_runtime
+    from gateway.runtime_ownership import process_ownership
+    home, volume = _linked_home(tmp_path, monkeypatch)
+    (home / 'config.yaml').write_text('{}')
+    process_ownership.reserve([home])
+    runner = None
+    try:
+        runner = GatewayRunner(GatewayConfig())
+        await initialize_gateway_runtime(runner)
+        authority = runner.session_authority
+        assert authority is not None
+        assert Path(authority.db.db_path).parent == volume.resolve()
+        assert store_home(authority.db) == home.resolve()
+        from gateway.session_authorities import authority_for_home
+        assert authority_for_home(runner, home) is authority
+    finally:
+        for held in list(getattr(runner, 'session_authorities', []) or []):
+            held.db.close()
+        process_ownership.release(home)
+
+
+def test_a_mock_handle_falls_back_to_its_db_path(tmp_path):
+    """Test doubles answer any attribute and are path-like; only a real entry_path counts."""
+    from unittest.mock import MagicMock
+    db = MagicMock()
+    db.db_path = str(tmp_path / 'state.db')
+    assert store_home(db) == tmp_path.resolve()

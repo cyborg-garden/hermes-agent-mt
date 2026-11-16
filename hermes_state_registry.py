@@ -244,6 +244,9 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
             with lifecycle_lock:
                 db = _open_session_db(path)
                 db._shared_registry_owned = True
+                # The handle is keyed and opened by its resolved path; keep the path it was
+                # asked for, whose directory names the owning profile when state.db is a link.
+                db.entry_path = Path(os.path.abspath(raw_path))
                 identity = _stat_db_file_identity(path)
         except BaseException:
             with _lock:

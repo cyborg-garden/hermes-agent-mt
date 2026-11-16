@@ -51,7 +51,7 @@ async def _build_profile_authority(runner, name, home, *, register):
             raise RuntimeError(_store_open_failure(runner, home))
         # The store's entry must sit in this profile and must not link into another one.
         others = [other for _, other in reserved_profile_homes(runner)]
-        if not await asyncio.to_thread(store_belongs_to_profile, db.db_path, home, others):
+        if not await asyncio.to_thread(store_belongs_to_profile, db, home, others):
             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
         registry.add(home, None, name=name)
         try:

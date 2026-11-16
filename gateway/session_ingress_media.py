@@ -499,7 +499,7 @@ def collect_unheld_api_images(db):
     unowned, so it collects nothing."""
     from hermes_constants import get_hermes_home
     # The db entry may be a symlink onto a state volume; its directory decides the profile.
-    if store_home(db.db_path) != get_hermes_home().resolve():
+    if store_home(db) != get_hermes_home().resolve():
         logger.warning(
             'Skipped retained API image collection: %s is not the active profile store', db.db_path)
         return 0
