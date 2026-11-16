@@ -347,8 +347,10 @@ class SessionSessionsMixin:
         try:
             from hermes_constants import get_default_hermes_root
             root = get_default_hermes_root().resolve()
-            # Resolve the directory, never the file: state.db may be a link onto a state volume.
-            parent = Path(self.db_path).parent.resolve()
+            # The directory of the path this store was opened by, not the file's target:
+            # state.db may link onto a state volume.
+            entry = getattr(self, 'entry_path', None)
+            parent = Path(entry if isinstance(entry, (str, Path)) else self.db_path).parent.resolve()
             if parent == root:
                 return "default"
             is_profile_dir = parent.parent == root / "profiles"
