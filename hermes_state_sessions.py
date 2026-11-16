@@ -5,6 +5,7 @@ counting, delete cascades, and the auto-archive sweep."""
 import glob
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -346,7 +347,10 @@ class SessionSessionsMixin:
         try:
             from hermes_constants import get_default_hermes_root
             root = get_default_hermes_root().resolve()
-            parent = Path(self.db_path).resolve().parent
+            # The directory of the path this store was opened by, not the file's target:
+            # state.db may link onto a state volume.
+            entry = getattr(self, 'entry_path', None)
+            parent = Path(entry if isinstance(entry, (str, Path)) else self.db_path).parent.resolve()
             if parent == root:
                 return "default"
             is_profile_dir = parent.parent == root / "profiles"

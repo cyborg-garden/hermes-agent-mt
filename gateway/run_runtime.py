@@ -18,6 +18,8 @@ from pathlib import Path
 import threading
 import uuid
 
+from gateway.session_store_home import store_belongs_to_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +49,9 @@ async def _build_profile_authority(runner, name, home, *, register):
     with _profile_runtime_scope(home, hydrate_secrets=False):
         if db is None:
             raise RuntimeError(_store_open_failure(runner, home))
-        if (await asyncio.to_thread(Path(db.db_path).resolve)).parent != home:
+        # The store's entry must sit in this profile and must not link into another one.
+        others = [other for _, other in reserved_profile_homes(runner)]
+        if not await asyncio.to_thread(store_belongs_to_profile, db, home, others):
             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
         registry.add(home, None, name=name)
         try:

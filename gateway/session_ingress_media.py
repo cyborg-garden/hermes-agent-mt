@@ -20,6 +20,7 @@ import tempfile
 import threading
 from hermes_dir_acl import make_user_dir
 
+from gateway.session_store_home import store_home
 from hermes_state_runtime import ADMITTED_REQUEST_CONFLICT, RuntimeStoreError
 from utils import fsync_directory
 
@@ -497,7 +498,8 @@ def collect_unheld_api_images(db):
     ``db``: a sweep whose database belongs to another profile would see every image here as
     unowned, so it collects nothing."""
     from hermes_constants import get_hermes_home
-    if Path(db.db_path).resolve().parent != get_hermes_home().resolve():
+    # The db entry may be a symlink onto a state volume; its directory decides the profile.
+    if store_home(db) != get_hermes_home().resolve():
         logger.warning(
             'Skipped retained API image collection: %s is not the active profile store', db.db_path)
         return 0
