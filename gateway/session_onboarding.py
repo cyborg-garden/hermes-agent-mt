@@ -225,9 +225,9 @@ def _discard_unfinished_runs(db, stored_ids, discards):
     (``deleted``) and tells every window; the caller retires the deleted ids from the authority. A chat a
     window reopened, or one a turn still writes (the delete refuses it), is kept, and its run ends as
     ``replaced`` so it is never resumed."""
-    from pathlib import Path
     from agent.onboarding_record import delete_chat
-    sessions_dir = Path(db.db_path).parent / 'sessions'
+    from gateway.session_store_home import store_dir
+    sessions_dir = store_dir(db) / 'sessions'
     deleted = []
     for old in stored_ids:
         with discards.lock:

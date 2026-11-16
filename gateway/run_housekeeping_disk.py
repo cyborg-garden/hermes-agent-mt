@@ -92,7 +92,8 @@ async def publish_local_auto_prune_notice(authority, ref) -> None:
         return
     if policy is None or policy.source not in {"tui", "gui"}:
         return
-    home = Path(authority.db.db_path).parent
+    from gateway.session_store_home import store_dir
+    home = store_dir(authority.db)
     if not prune_advisor.notice_due(home, _LOCAL_NOTIFIED):
         return
     _LOCAL_NOTIFIED[str(home)] = time.time()  # in-flight claim: one estimate per home at a time

@@ -2,6 +2,7 @@
 import hashlib
 import json
 
+from hermes_state_home import store_dir
 from hermes_state_keys import prefix_range
 
 PREFIX = 'gateway.media.retired.v1.'
@@ -38,7 +39,7 @@ def collect_retired_spillover(db):
     with db._read_ctx() as conn:
         rows = conn.execute('SELECT key,value FROM state_meta WHERE key>=? AND key<?',
                             prefix_range(SPILLOVER_PREFIX)).fetchall()
-    spill_dir = db.db_path.parent / 'cache' / 'spillover'
+    spill_dir = store_dir(db) / 'cache' / 'spillover'  # the profile's, not a linked file's volume
     if not rows or (referenced := referenced_spillover_names(spill_dir)) is None:
         return
     done = []

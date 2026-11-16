@@ -10,11 +10,11 @@ session as an API conversation (``run_api_turn``) would be a second writer and i
 """
 import asyncio
 import logging
-from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
 from gateway.session_contract import SessionActor
+from gateway.session_store_home import store_home
 from hermes_state_runtime import RuntimeStoreError
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ async def admit_peer_turn(runner, session_id, message, author):
     tip = bot_chat_tip(authority, session_id)
     if tip is None:
         return None
-    home = Path(authority.db.db_path).parent.resolve()
+    home = store_home(authority.db)
     from gateway.session_bot import displaceable_bot_chat
     if displaceable_bot_chat(authority, authority.db.get_session_by_title('Bot Chat') or tip) is not None:
         # The title is held by an API conversation no FIFO can own (#140769, MSG-21): the owner

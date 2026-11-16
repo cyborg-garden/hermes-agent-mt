@@ -433,7 +433,9 @@ def emit_session_deleted(db, deleted_ids, *, reason, primary=None, sessions_dir=
             get_hermes_home, profile_name_for_home, reset_hermes_home_override, set_hermes_home_override,
         )
 
-        home = os.path.dirname(os.path.abspath(os.fspath(db.db_path)))
+        from hermes_state_home import store_dir
+        # The entry's directory: state.db may link onto a state volume.
+        home = os.path.abspath(os.fspath(store_dir(db)))
         profile = profile_name_for_home(home)
         payload: dict = {"session_id": primary if primary in ids else ids[0], "reason": reason, "profile": profile}
         if len(ids) > 1:

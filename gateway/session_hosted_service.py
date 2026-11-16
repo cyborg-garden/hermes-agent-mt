@@ -7,6 +7,7 @@ from pathlib import Path
 from gateway.session_contract import SessionActor
 from gateway.session_authorities import active_authority, all_authorities, owner_scope, serving_authorities
 from gateway.session_hosted_controls import HostedControls
+from gateway.session_store_home import store_dir
 from gateway.owner_identity import same_owner
 from hermes_state_runtime import RuntimeStoreError, _epoch
 from tui_gateway.hosted_room_service import HostedRoomService
@@ -47,6 +48,11 @@ class CanonicalHostedRoomService(HostedControls, HostedRoomService):
         self.authority, self.loop = authority, loop
         self.member_rpcs = {}
         super().__init__(None, db_path=authority.db.db_path)
+
+    @property
+    def root(self):
+        # The owning profile's home: the store's entry may link onto a state volume.
+        return store_dir(self.authority.db)
 
     def _make_rpc(self, server):
         # Member-specific canonical transports retain exact durable history. They

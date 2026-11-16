@@ -2934,7 +2934,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         db = await self._ensure_session_db_async()
         if db is None:
             return None
-        home = Path(db.db_path).parent
+        from gateway.session_store_home import store_dir
+        home = store_dir(db)
         from tools.bot_live_delivery import deliver_to_live_owner, find_canonical_live_owner
 
         def _admit() -> Optional[dict[str, Any]]:

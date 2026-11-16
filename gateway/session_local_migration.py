@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from gateway.config import Platform
 from gateway.session import SessionEntry, SessionSource
 from gateway.session_contract import SessionRef
+from gateway.session_store_home import store_dir
 from hermes_state_runtime import RuntimeStoreError
 
 
@@ -352,7 +353,7 @@ def adopt_legacy_session(authority, actor, row):
                'legacy_session_id': row['id'], 'lineage': [row['id']]}
     try:
         # Same lock order as old Bot Chat: mailbox (if any), liveness, SQLite.
-        with active_session_liveness_guard(row['id'], registry_home=Path(authority.db.db_path).parent) as active:
+        with active_session_liveness_guard(row['id'], registry_home=store_dir(authority.db)) as active:
             if active:
                 raise RuntimeStoreError('runtime_coordination_required')
             commit_local_session(authority.db, epoch=authority.epoch, receipt=receipt)
