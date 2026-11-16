@@ -206,7 +206,7 @@ RUN touch ./README.md
 RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra firecrawl --extra ddgs
 # Pre-install voice transcription (faster-whisper) so voice memos Just Work
 # in production gateway deployments without lazy-install latency.
-RUN uv pip install --no-cache-dir faster-whisper==1.2.1
+RUN uv pip install --no-cache-dir faster-whisper==1.2.1 "av==18.1.0"
 # Pre-install document reading (pymupdf) so PDFs Just Work in production
 # without lazy-install latency (read_document tool).
 RUN uv pip install --no-cache-dir pymupdf==1.27.2.3
