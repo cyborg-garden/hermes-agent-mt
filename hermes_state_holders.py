@@ -236,6 +236,30 @@ def _argv_home_selection(
     return None
 
 
+def _links_to_store(candidate: str, db_path_str: str) -> bool:
+    """True when *candidate* is a symlink whose target is our store's file.
+
+    A store linked onto a volume is opened by its resolved path, so its directory is the
+    volume while processes name the home that holds the link. Links only: a plain store is
+    matched by its paths exactly as before.
+    """
+    try:
+        return (os.path.isabs(candidate) and os.path.islink(candidate)
+                and os.path.realpath(candidate) == os.path.realpath(db_path_str))
+    except (OSError, ValueError):
+        return False
+
+
+def _argv_names_store_by_link(argv: Sequence[str], path_tokens, db_path_str: str) -> bool:
+    """Whether the process selects a home, or names a database, that links onto our store."""
+    name = os.path.basename(db_path_str)
+    home_value = _argv_flag_value(argv, _HOME_FLAGS) or _argv_env_home(argv)
+    if home_value and _links_to_store(os.path.join(home_value, name), db_path_str):
+        return True
+    return any(os.path.basename(token) == os.path.normcase(name) and _links_to_store(token, db_path_str)
+               for _, token in path_tokens)
+
+
 def _argv_path_tokens(argv: Sequence[str]) -> list[tuple[int, str]]:
     """``(argv index, normalized absolute path)`` for every path-bearing token."""
     tokens: list[tuple[int, str]] = []
@@ -292,6 +316,8 @@ def _argv_scoped_to_other_home(argv: Sequence[str], db_path: Path) -> bool:
     path_tokens = _argv_path_tokens(argv)
 
     if any(normalized in sidecars for _, normalized in path_tokens):
+        return False
+    if _argv_names_store_by_link(argv, path_tokens, db_path_str):
         return False
     selection = _argv_home_selection(argv, this_home, install_root, our_profile)
     if selection == "ours":
