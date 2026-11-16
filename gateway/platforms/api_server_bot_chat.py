@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import uuid
 
 from gateway.session_contract import SessionActor
-from gateway.session_store_home import store_home
+from gateway.session_store_home import store_dir, store_home  # store_dir: for api_server
 from hermes_state_runtime import RuntimeStoreError
 
 logger = logging.getLogger(__name__)
