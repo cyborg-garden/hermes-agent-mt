@@ -172,3 +172,92 @@ def test_a_linked_store_under_an_aliased_home_names_the_canonical_home(layout, t
         assert store_dir(db) == home == store_home(db)
     finally:
         registry.release(db)
+
+
+# --- the link lives exactly as long as something holds or is opening the file ------------
+
+
+@pytest.mark.platforms("posix")
+def test_the_link_survives_the_retired_generations_release(layout):
+    home, volume = layout
+    old = registry.acquire(home / 'state.db')
+    _replace(volume / 'state.db')
+    new = registry.acquire(old.db_path)
+    registry.release(old)                            # the live generation still holds the file
+    again = registry.acquire(new.db_path)
+    try:
+        assert again is new and store_home(again) == home
+    finally:
+        registry.release(again)
+        registry.release(new)
+
+
+@pytest.mark.platforms("posix")
+def test_the_link_survives_the_live_generations_release(layout):
+    home, volume = layout
+    old = registry.acquire(home / 'state.db')
+    _replace(volume / 'state.db')
+    registry.release(registry.acquire(old.db_path))  # the retired generation still holds the file
+    again = registry.acquire(old.db_path)
+    try:
+        assert again is not old and store_home(again) == home
+    finally:
+        registry.release(again)
+        registry.release(old)
+
+
+def _release_during_a_replacement_open(layout, monkeypatch, opened):
+    """Final-release the retired handle while the replacement open is in flight; *opened*
+    is what that open does once the release is admitted. Returns the acquire's outcome."""
+    import threading
+    home, volume = layout
+    old = registry.acquire(home / 'state.db')
+    resolved = old.db_path
+    _replace(volume / 'state.db')
+    real_open, started, gate, outcome = registry._open_session_db, threading.Event(), threading.Event(), []
+
+    def slow_open(path):
+        if not started.is_set():
+            started.set()
+            assert gate.wait(30)
+            return opened(real_open, path)
+        return real_open(path)
+
+    def acquire():
+        try:
+            outcome.append(registry.acquire(resolved))
+        except OSError as exc:
+            outcome.append(exc)
+
+    monkeypatch.setattr(registry, '_open_session_db', slow_open)
+    opener = threading.Thread(target=acquire)
+    opener.start()
+    assert started.wait(30)
+    releaser = threading.Thread(target=registry.release, args=(old,))
+    releaser.start()
+    while registry._retired:                         # the release is admitted; its close waits on the open
+        releaser.join(0.01)
+    gate.set()
+    opener.join(30)
+    releaser.join(30)
+    return home, outcome[0]
+
+
+@pytest.mark.platforms("posix")
+def test_the_link_survives_a_release_during_the_replacement_open(layout, monkeypatch):
+    home, new = _release_during_a_replacement_open(layout, monkeypatch, lambda real_open, path: real_open(path))
+    try:
+        assert store_home(new) == home
+    finally:
+        registry.release(new)
+
+
+@pytest.mark.platforms("posix")
+def test_a_failed_replacement_open_leaves_no_link_behind(layout, monkeypatch):
+    def fail(real_open, path):
+        raise OSError('open failed')
+
+    _home, outcome = _release_during_a_replacement_open(layout, monkeypatch, fail)
+    assert isinstance(outcome, OSError)
+    assert registry.stats() == {'live_generations': 0, 'retired_generations': 0, 'total_refcounts': 0}
+    assert not registry._opening and not registry._entry_paths

@@ -252,11 +252,11 @@ def _links_to_store(candidate: str, db_path_str: str) -> bool:
 
 def _argv_names_store_by_link(argv: Sequence[str], path_tokens, db_path_str: str) -> bool:
     """Whether the process selects a home, or names a database, that links onto our store."""
-    name = os.path.basename(db_path_str)
+    # A home holds its store as ``state.db`` whatever the link's target is called.
     home_value = _argv_flag_value(argv, _HOME_FLAGS) or _argv_env_home(argv)
-    if home_value and _links_to_store(os.path.join(home_value, name), db_path_str):
+    if home_value and _links_to_store(os.path.join(home_value, "state.db"), db_path_str):
         return True
-    return any(os.path.basename(token) == os.path.normcase(name) and _links_to_store(token, db_path_str)
+    return any(os.path.basename(token) == "state.db" and _links_to_store(token, db_path_str)
                for _, token in path_tokens)
 
 

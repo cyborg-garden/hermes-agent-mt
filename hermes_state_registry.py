@@ -301,6 +301,7 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
         except BaseException:
             with _lock:
                 _finish_opening(path, opening)
+                _forget_entry_locked(path)  # a last release during this open left the drop to us
             raise
 
         with _lock:
