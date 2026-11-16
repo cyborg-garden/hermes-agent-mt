@@ -2,9 +2,10 @@
 
 Swarm Map's state-init links ``/opt/data/state.db`` onto a named volume, so the
 file lives outside the profile, and the shared registry opens handles by their
-resolved path. Ownership is therefore read from the path the store was opened
-by (``entry_path``), never from the resolved file. These tests cover the pure
-helper, the real registry handle, and the gateway boot path.
+resolved path. A handle opened through such a link therefore carries the link's
+path, and ownership is read from that path's directory, never from the resolved
+file. These tests cover the pure helper, the real registry handle, and the
+gateway boot path.
 """
 from pathlib import Path
 
@@ -186,19 +187,27 @@ def _linked_home(tmp_path, monkeypatch):
 
 
 def test_registry_handle_through_a_link_still_names_its_profile(tmp_path, monkeypatch):
-    """The real open path: the registry resolves the link, so db_path names the volume.
-    Ownership must come from the path the store was asked for."""
+    """The real open path: the registry keys the store by its resolved file, but the handle
+    keeps the link's path, so everything that reads the profile from db_path sees the profile."""
     from hermes_state_registry import acquire, release
     home, volume = _linked_home(tmp_path, monkeypatch)
     db = acquire(home / 'state.db')
+    released = False
     try:
-        assert Path(db.db_path).parent == volume.resolve()       # sentinel: the handle is on the volume
+        assert Path(db.db_path) == home.resolve() / 'state.db'
+        assert Path(db.db_path).parent == home.resolve()         # what unconverted callers read
         assert store_home(db) == home.resolve()
         assert _belongs(db, home.resolve())
         assert not _belongs(db, volume.resolve())
         assert (volume / 'state.db').exists()                    # SQLite created it through the link
+        assert not (home / 'state.db-wal').exists()              # no state file leaks into the home
+        # One writer per file: the resolved path and the default path reach the same handle.
+        again = acquire(volume / 'state.db')
+        assert again is db
+        assert release(again) is True
     finally:
-        release(db)
+        released = release(db)
+    assert released is True                                      # the registry still finds it to close
 
 
 def test_registry_handle_for_a_plain_store_is_unchanged(tmp_path, monkeypatch):
@@ -228,7 +237,8 @@ async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypat
         await initialize_gateway_runtime(runner)
         authority = runner.session_authority
         assert authority is not None
-        assert Path(authority.db.db_path).parent == volume.resolve()
+        assert Path(authority.db.db_path).parent == home.resolve()
+        assert (volume / 'state.db').exists()
         assert store_home(authority.db) == home.resolve()
         from gateway.session_authorities import authority_for_home
         assert authority_for_home(runner, home) is authority
@@ -244,3 +254,18 @@ def test_a_mock_handle_falls_back_to_its_db_path(tmp_path):
     db = MagicMock()
     db.db_path = str(tmp_path / 'state.db')
     assert store_home(db) == tmp_path.resolve()
+
+
+def test_agent_home_follows_a_linked_store(tmp_path, monkeypatch):
+    """Skills and SOUL are read from the directory of the store path; through a link that
+    must be the profile, not the volume."""
+    from types import SimpleNamespace
+    from agent.system_prompt import _agent_home
+    from hermes_state_registry import acquire, release
+    home, _volume = _linked_home(tmp_path, monkeypatch)
+    db = acquire(home / 'state.db')
+    try:
+        found = _agent_home(SimpleNamespace(_session_db=db))
+        assert found is not None and found.resolve() == home.resolve()
+    finally:
+        release(db)

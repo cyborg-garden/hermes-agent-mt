@@ -176,6 +176,33 @@ def _teardown_generation(
             _finish_teardown(path, barrier)
 
 
+def _handle_path(raw_path: Path, resolved: Path) -> Path:
+    """The path a new handle carries as ``db_path``. Normally the resolved path, which is
+    also the registry key. When the entry itself is a symlink (a store moved onto a state
+    volume, with a link left in the profile) the handle keeps the link's path: everything
+    that derives the owning profile from ``db_path`` must see the profile, not the volume.
+    SQLite follows the link, so the file and its WAL still live at the target."""
+    try:
+        entry = Path(os.path.abspath(raw_path))
+        if entry.is_symlink():
+            # Canonical directory, link name kept: the same value a plain store would carry.
+            return entry.parent.resolve() / entry.name
+    except OSError:
+        pass
+    return resolved
+
+
+def _generation_key(db: SessionDB) -> Optional[Path]:
+    """The registry key of *db*: its resolved path (a handle may carry a link's path)."""
+    path = _db_path_of(db)
+    if path is None:
+        return None
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
 def _db_path_of(db: SessionDB) -> Optional[Path]:
     """``Path(db.db_path)`` or None when absent/unconvertible."""
     path = getattr(db, "db_path", None)
@@ -242,11 +269,8 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
         # serialising other files, the lifecycle mutex keeps the open off a same-path close.
         try:
             with lifecycle_lock:
-                db = _open_session_db(path)
+                db = _open_session_db(_handle_path(raw_path, path))
                 db._shared_registry_owned = True
-                # The handle is keyed and opened by its resolved path; keep the path it was
-                # asked for, whose directory names the owning profile when state.db is a link.
-                db.entry_path = Path(os.path.abspath(raw_path))
                 identity = _stat_db_file_identity(path)
         except BaseException:
             with _lock:
@@ -288,7 +312,7 @@ def release(db: SessionDB) -> bool:
     with _lock:
         generation = _retired.get(key)
         if generation is None:
-            path = _db_path_of(db)
+            path = _generation_key(db)
             if path is None:
                 return False
             generation = _generations.get(path)
