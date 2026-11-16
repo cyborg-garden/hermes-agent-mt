@@ -55,6 +55,8 @@ def test_store_dir_keeps_a_plain_path_as_given_and_resolves_a_registry_handle(li
     assert store_dir(NS(db_path=str(tmp_path / 'alias' / 'state.db'))) == tmp_path / 'alias'
     assert store_dir(tmp_path / 'alias' / 'state.db') == tmp_path / 'alias'
     assert store_dir(linked.db) == linked.home
+    # A recorded entry reached through a directory alias still names the canonical home.
+    assert store_dir(NS(entry_path=tmp_path / 'alias' / 'state.db', db_path=str(real / 'state.db'))) == real.resolve()
 
 
 def test_the_gateway_helper_is_the_shared_one():

@@ -96,10 +96,10 @@ _tearing_down: dict[Path, _TeardownBarrier] = {}
 # the race between checking _tearing_down and entering sqlite3.connect(),
 # including retired-generation drains after an inode replacement.
 _path_lifecycle_locks: dict[Path, threading.Lock] = {}
-# resolved path → the link it is reached by. A handle is shared by every caller of one
-# resolved file, so the path one caller asked for is not enough: a caller holding only the
-# handle's own (resolved) ``db_path`` reopens by it, and a replacement generation opened that
-# way would forget the link whose directory names the owning profile.
+# resolved path → the link it is reached by, while the file has a handle. A handle is shared
+# by every caller of one resolved file, so the path one caller asked for is not enough: a
+# caller holding only the handle's own (resolved) ``db_path`` reopens by it, and a replacement
+# generation opened that way would forget the link whose directory names the owning profile.
 _entry_paths: dict[Path, Path] = {}
 
 
@@ -190,26 +190,49 @@ def _db_path_of(db: SessionDB) -> Optional[Path]:
         return None
 
 
-def _entry_path_locked(raw_path: Path, path: Path) -> Path:
-    """The entry a handle for *path* is known by (caller holds ``_lock``).
+def _asked_entry(raw_path: Path) -> Path:
+    """*raw_path* with its directory resolved and its last component kept as asked.
 
-    The first link seen for a file is kept while it still leads there, so the answer does
-    not depend on which caller opened the current generation; a path that names the file
-    itself carries no link and never replaces one.
+    Differs from the resolved path only when the file itself is a link, so a directory
+    alias of a plain store (a linked home, ``..`` through a link) is never taken for one.
     """
-    asked = Path(os.path.abspath(raw_path))
+    try:
+        return raw_path.parent.resolve() / raw_path.name
+    except (OSError, RuntimeError):  # RuntimeError: a symlink loop before Python 3.13
+        return Path(os.path.abspath(raw_path))
+
+
+def _stale_entry(path: Path) -> Optional[Path]:
+    """The link remembered for *path* when it no longer leads there, else None."""
+    with _lock:
+        known = _entry_paths.get(path)
+    if known is None:
+        return None
+    try:
+        return None if known.resolve() == path else known
+    except (OSError, RuntimeError):
+        return known
+
+
+def _name_entry_locked(db: SessionDB, path: Path, asked: Path) -> None:
+    """Give *db* the entry its file is reached by (caller holds ``_lock``).
+
+    The first link seen while the file has a handle is kept, so the answer does not depend
+    on which caller opened the current generation; a path that names the file itself
+    carries no link and never replaces one.
+    """
     known = _entry_paths.get(path)
-    if known is not None and known != asked:
-        try:
-            stale = known.resolve() != path
-        except OSError:
-            stale = True
-        if stale:
-            del _entry_paths[path]
-            known = None
     if known is None and asked != path:
         known = _entry_paths[path] = asked
-    return known or asked
+    with contextlib.suppress(AttributeError, TypeError):
+        db.entry_path = known or asked
+
+
+def _forget_entry_locked(path: Path) -> None:
+    """Drop the link for *path* once nothing holds or is opening it (caller holds ``_lock``)."""
+    if path in _generations or path in _opening or any(g.path == path for g in _retired.values()):
+        return
+    _entry_paths.pop(path, None)
 
 
 def _finish_opening(path: Path, opening: threading.Event) -> None:
@@ -230,8 +253,9 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
     raw_path = Path(db_path) if db_path is not None else Path(_default_db_path())
     try:
         path = raw_path.resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         path = raw_path
+    asked = _asked_entry(raw_path)
 
     while True:
         wait_for: Optional[threading.Event] = None
@@ -248,8 +272,7 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
                     _retired[id(generation.db)] = generation
                 else:
                     generation.refcount += 1
-                    with contextlib.suppress(AttributeError, TypeError):
-                        generation.db.entry_path = _entry_path_locked(raw_path, path)
+                    _name_entry_locked(generation.db, path, asked)
                     return generation.db
             teardown = _tearing_down.get(path)
             if teardown is not None:
@@ -274,6 +297,7 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
                 db = _open_session_db(path)
                 db._shared_registry_owned = True
                 identity = _stat_db_file_identity(path)
+                stale = _stale_entry(path)
         except BaseException:
             with _lock:
                 _finish_opening(path, opening)
@@ -291,8 +315,9 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
                     winner = db
                 # The handle is keyed and opened by its resolved path; keep the entry it is
                 # reached by, whose directory names the owning profile when state.db is a link.
-                with contextlib.suppress(AttributeError, TypeError):
-                    winner.entry_path = _entry_path_locked(raw_path, path)
+                if stale is not None and _entry_paths.get(path) == stale:
+                    del _entry_paths[path]
+                _name_entry_locked(winner, path, asked)
             _finish_opening(path, opening)
         if teardown is not None:
             # A shutdown or retired-generation final release was admitted while this opener was
@@ -332,6 +357,7 @@ def release(db: SessionDB) -> bool:
                 _retired.pop(key, None)
             elif _generations.get(generation.path) is generation:
                 _generations.pop(generation.path, None)
+            _forget_entry_locked(generation.path)
             # A retired generation's drain is admitted too: it checkpoints and unlinks the same
             # sidecars as the current one, so a replacement writer must not open on top of it.
             teardown_barrier = _admit_teardown_locked(generation.path)
@@ -387,6 +413,7 @@ def close_all() -> int:
             teardown_barriers[path] = _admit_teardown_locked(path)
         _generations.clear()
         _retired.clear()
+        _entry_paths.clear()
         for generation in generations:
             generation.retired = True
     return _teardown_swept_generations(generations, teardown_barriers, active_teardowns)
@@ -428,6 +455,8 @@ def close_all_under(directory: str | Path) -> int:
             if _generations.get(generation.path) is generation:
                 _generations.pop(generation.path, None)
             _retired.pop(id(generation.db), None)
+        for path in selected_paths:
+            _forget_entry_locked(path)
     return _teardown_swept_generations(generations, teardown_barriers, active_teardowns)
 
 

@@ -61,15 +61,19 @@ def test_a_reopen_by_the_handles_own_path_keeps_the_link(layout):
         registry.release(first)
 
 
+def _replace(target):
+    """Snapshot restore: a new inode holding the same store."""
+    copy = target.with_suffix('.replacement.tmp')
+    shutil.copy2(target, copy)
+    os.unlink(target)
+    os.rename(copy, target)
+
+
 @pytest.mark.platforms("posix")
 def test_a_replacement_generation_opened_by_the_resolved_path_keeps_the_link(layout):
     home, volume = layout
     old = registry.acquire(home / 'state.db')
-    target = volume / 'state.db'
-    copy = target.with_suffix('.replacement.tmp')
-    shutil.copy2(target, copy)                       # snapshot restore: new inode, same store
-    os.unlink(target)
-    os.rename(copy, target)
+    _replace(volume / 'state.db')
     new = registry.acquire(old.db_path)
     try:
         assert new is not old                        # sentinel: a new generation was opened
@@ -79,12 +83,92 @@ def test_a_replacement_generation_opened_by_the_resolved_path_keeps_the_link(lay
         registry.release(old)
 
 
+@pytest.mark.platforms("posix")
 def test_a_link_that_no_longer_leads_to_the_file_is_forgotten(layout):
+    """The link is kept across a replacement only while it still leads to the file."""
     home, volume = layout
-    registry.release(registry.acquire(home / 'state.db'))
+    old = registry.acquire(home / 'state.db')
     (home / 'state.db').unlink()
-    direct = registry.acquire(volume / 'state.db')
+    _replace(volume / 'state.db')
+    new = registry.acquire(old.db_path)
     try:
-        assert store_home(direct) == volume
+        assert new is not old                        # sentinel: a new generation was opened
+        assert store_home(new) == volume
     finally:
-        registry.release(direct)
+        registry.release(new)
+        registry.release(old)
+
+
+def _two_homes(tmp_path):
+    a, b, volume = ((tmp_path / name).resolve() for name in ('a', 'b', 'volume'))
+    for directory in (a, b, volume):
+        directory.mkdir()
+    (a / 'state.db').symlink_to(volume / 'state.db')
+    (b / 'state.db').symlink_to(volume / 'state.db')
+    return a, b
+
+
+def test_a_link_is_not_remembered_after_its_last_handle_closes(tmp_path):
+    """Two homes linked onto one file: once the first is released, the second names itself."""
+    a, b = _two_homes(tmp_path)
+    registry.release(registry.acquire(a / 'state.db'))
+    assert not registry._entry_paths                 # nothing outlives the last handle
+    second = registry.acquire(b / 'state.db')
+    try:
+        assert store_home(second) == b
+    finally:
+        registry.release(second)
+
+
+@pytest.mark.parametrize('sweep', [lambda root: registry.close_all(), registry.close_all_under],
+                         ids=['close_all', 'close_all_under'])
+def test_a_forced_close_forgets_the_link(tmp_path, sweep):
+    a, b = _two_homes(tmp_path)
+    registry.acquire(a / 'state.db')
+    assert sweep(tmp_path) == 1
+    assert not registry._entry_paths
+    second = registry.acquire(b / 'state.db')
+    try:
+        assert store_home(second) == b
+    finally:
+        registry.release(second)
+
+
+def test_the_first_link_names_a_handle_while_it_is_shared(tmp_path):
+    """One handle has one entry. While both callers hold it, the first link stays."""
+    a, b = _two_homes(tmp_path)
+    first = registry.acquire(a / 'state.db')
+    second = registry.acquire(b / 'state.db')
+    try:
+        assert second is first
+        assert store_home(second) == a
+    finally:
+        registry.release(second)
+        registry.release(first)
+
+
+def test_a_directory_alias_of_a_plain_store_is_not_a_link(tmp_path):
+    """``home/lnk/../state.db`` is ``other/state.db`` to the OS: its profile is ``other``."""
+    from hermes_state_home import store_dir
+    home, other = (tmp_path / 'home').resolve(), (tmp_path / 'other').resolve()
+    home.mkdir()
+    (other / 'deep').mkdir(parents=True)
+    (home / 'lnk').symlink_to(other / 'deep', target_is_directory=True)
+    db = registry.acquire(home / 'lnk' / '..' / 'state.db')
+    try:
+        assert Path(db.db_path) == other / 'state.db'    # sentinel: where the OS opened it
+        assert store_dir(db) == other == store_home(db)
+        assert not registry._entry_paths
+    finally:
+        registry.release(db)
+
+
+def test_a_linked_store_under_an_aliased_home_names_the_canonical_home(layout, tmp_path):
+    from hermes_state_home import store_dir
+    home, _volume = layout
+    (tmp_path / 'alias').symlink_to(home, target_is_directory=True)
+    db = registry.acquire(tmp_path / 'alias' / 'state.db')
+    try:
+        assert store_dir(db) == home == store_home(db)
+    finally:
+        registry.release(db)
