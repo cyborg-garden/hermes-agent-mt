@@ -12,6 +12,7 @@ import time
 from agent.turn_author import parse_turn_author
 
 from gateway.session_contract import SessionActor, SessionRef
+from gateway.session_store_home import store_home
 from gateway.config import Platform
 from gateway.platforms.event import MessageEvent
 from hermes_state_runtime import RuntimeStoreError, get_session_admission
@@ -171,7 +172,7 @@ def _legacy_order(path, record):
 def _home(authority, actor, profile):
     from gateway.session_authorities import served_profile_name
     from tools.bot_mode_probe import _handle, _hermes_root, _roster
-    home = Path(authority.db.db_path).parent.resolve()
+    home = store_home(authority.db)
     name = served_profile_name(home)
     handle = _handle(name, [n for n, _d in _roster(_hermes_root(home))]) if name == 'default' else name
     if actor.profile_id != authority.profile_id or profile not in (name, handle):
@@ -674,7 +675,7 @@ def relay_operation(connection, operation, params):
     authority, actor = connection.authority, connection.actor
     from gateway.session_authorities import require_serving, served_profile_name
     require_serving(authority)  # the outbox/roster/replies belong to the home's next owner
-    home = Path(authority.db.db_path).parent.resolve()
+    home = store_home(authority.db)
     name = served_profile_name(home)
     _home(authority, actor, name)
     if 'session:control' not in actor.capabilities:
@@ -727,7 +728,7 @@ async def _migrate(authority, actor, home, root):
 
 async def recover_bot_deliveries(authority):
     """Rebuild derivative replies and queued legacy admissions at owner startup."""
-    home = Path(authority.db.db_path).parent.resolve()
+    home = store_home(authority.db)
     async with mailbox_lock(authority):
         root, records, _ = await _scan_owner_receipts(authority, home)
         for path, record in records:

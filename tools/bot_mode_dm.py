@@ -1008,9 +1008,10 @@ def _delivery_main(args: list[str]) -> int:
 def _agent_home(agent: Any) -> str:
     """The calling agent's OWN home (session-db derived), not ambient env."""
     with contextlib.suppress(Exception):
-        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
-        if db_path:
-            return str(Path(db_path).parent)
+        from hermes_state_home import store_dir
+        db = getattr(agent, "_session_db", None)
+        if getattr(db, "db_path", None):
+            return str(store_dir(db))  # the entry's directory: state.db may link onto a volume
     return _default_home()
 
 

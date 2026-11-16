@@ -9,23 +9,11 @@ path the store was asked for as ``entry_path``. The directory holding that
 entry is the profile home in every layout (plain file, linked file, dangling
 link on a fresh agent, linked home directory).
 """
-from pathlib import Path, PurePath
+from pathlib import Path
 
+from hermes_state_home import entry_path, store_dir, store_home
 
-def entry_path(store) -> Path:
-    """The path *store* was opened by. *store* is a SessionDB or a path."""
-    # Real paths only: a mock handle answers every attribute and is path-like too.
-    if isinstance(store, (str, PurePath)):
-        return Path(store)
-    entry = getattr(store, 'entry_path', None)
-    if isinstance(entry, (str, PurePath)):
-        return Path(entry)
-    return Path(store.db_path)
-
-
-def store_home(store) -> Path:
-    """Canonical home of the profile that holds *store*'s directory entry."""
-    return entry_path(store).parent.resolve()
+__all__ = ['entry_path', 'store_belongs_to_profile', 'store_dir', 'store_home']
 
 
 def store_belongs_to_profile(store, home, other_homes=()) -> bool:

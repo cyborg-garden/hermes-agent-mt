@@ -74,13 +74,15 @@ def _parent_live_home(parent_agent: Any) -> Optional[Path]:
     to the ambient resolve, which is exactly the #91996 failure mode, so the
     skip is logged rather than silent.
     """
-    parent_db = getattr(getattr(parent_agent, "_session_db", None), "db_path", None)
+    session_db = getattr(parent_agent, "_session_db", None)
+    parent_db = getattr(session_db, "db_path", None)
     # Concrete str/Path only — NOT the os.PathLike protocol: MagicMock (and any
     # duck-typed test double) registers __fspath__ and so IS PathLike, which is
     # how a Mock "home" slipped through and transcripts landed at
     # str(<MagicMock>) paths (PR #131931 side-effect screen).
     if isinstance(parent_db, (str, Path)):
-        return Path(parent_db).parent
+        from hermes_state_home import store_dir
+        return store_dir(session_db)  # the entry's directory: state.db may link onto a volume
     if parent_db is not None:
         logger.debug(
             "delegate_task: parent _session_db.db_path is %r (not a str/Path); "

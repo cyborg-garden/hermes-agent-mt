@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from hermes_state_common import _RESET_CHILD_SQL, _sql_json_extract
+from hermes_state_home import store_home
 
 # Same logger the code used before extraction (record parity).
 _log = logging.getLogger("hermes_cli.web_server")
@@ -117,7 +118,7 @@ def _session_mutation_context(request, profile):
     from gateway.session_authorities import authority_for_home
     runner = getattr(request.app.state, 'gateway_runner', None)
     owner = authority_for_home(runner, home) if runner is not None else None
-    if owner is None and home.resolve() == Path(authority.db.db_path).parent.resolve():
+    if owner is None and home.resolve() == store_home(authority.db):
         owner = authority
     if owner is None:
         raise HTTPException(status_code=403, detail='profile_mismatch')
