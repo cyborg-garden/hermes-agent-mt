@@ -43,6 +43,33 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def provider_routing_kwargs(agent: Any) -> Dict[str, Any]:
+    """The parent's OpenRouter provider pins, for the review fork.
+
+    ``provider_routing`` in config.yaml (only / ignore / order / sort /
+    require_parameters / data_collection) reaches the main agent through the
+    gateway, but the fork is built here and used to start with none. So a host
+    an operator had pinned out for dropping tool-call arguments still served
+    the fork, and its skill_manage calls arrived without ``old_string`` or
+    ``file_path`` (hundreds a day on one agent). The pins are about which hosts
+    may serve, not which model, so they carry over whether or not the fork is
+    routed to another model.
+    """
+    out: Dict[str, Any] = {}
+    for attr, key in (
+        ("providers_allowed", "providers_allowed"),
+        ("providers_ignored", "providers_ignored"),
+        ("providers_order", "providers_order"),
+        ("provider_sort", "provider_sort"),
+        ("provider_require_parameters", "provider_require_parameters"),
+        ("provider_data_collection", "provider_data_collection"),
+    ):
+        value = getattr(agent, attr, None)
+        if value:
+            out[key] = value
+    return out
+
+
 def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
     """Resolve provider/model/credentials for the review fork.
 
@@ -691,7 +718,7 @@ def _run_review_in_thread(
             # Match parent's toolset config so ``tools[]`` is byte-identical
             # in the request body — Anthropic's cache key includes it.
             # (The runtime whitelist below still restricts dispatch.)
-            _fork_kwargs: Dict[str, Any] = {}
+            _fork_kwargs: Dict[str, Any] = dict(provider_routing_kwargs(agent))
             if isinstance(_rt.get("max_tokens"), int):
                 _fork_kwargs["max_tokens"] = _rt["max_tokens"]
             if isinstance(_rt.get("command"), str) and _rt["command"]:
