@@ -1,24 +1,15 @@
 # intelligent_routing
 
-Opt-in **pre-turn cost routing** for the Hermes main chat turn, built as the
-clean answer to how upstream PR #43534 was closed.
+Sends simple, mechanical turns to a cheaper model before the main chat turn runs.
+Everything else stays on the agent's configured primary model.
+It is off by default, because it changes which model answers a user.
 
-teknium1 closed #43534 (model-task-router) with a steer, not a merits rejection:
-> *"If you do want it, please create a plugin. Happy to support adding to the
-> plugin interface to make this work as one."*
+It has two parts:
 
-This directory is both halves of that answer:
+1. **The plugin.** It classifies each turn. If the turn is clearly mechanical, such as a cron job or a short single-action request, it routes the turn to a cheap model. Anything uncertain stays on the primary.
+2. **A small change to the plugin interface** in `agent/routing_override.py`, with one call site in `agent/turn_context.py`. A `pre_llm_call` hook can now return a `route` that switches the model for that turn. Before this, `pre_llm_call` could add context but not change the model.
 
-1. **The plugin** — classifies each turn and, when it's mechanical/orchestration
-   work, routes it to a cheap-metered tier; premium/uncertain/public-facing stay
-   on the configured primary (fail-open).
-2. **The interface extension he offered** — `agent/routing_override.py` (+ one
-   call site in `agent/turn_context.py`): a `pre_llm_call` hook result may now
-   carry a `route` override that the runtime **actuates** for the turn. Without
-   it, `pre_llm_call` could only inject context, never change which model runs.
-
-The classifier is deliberately simple — it is **not** the contribution. The
-plugin form + the interface extension are.
+Background: upstream PR #43534 proposed task-based model routing as a skill. The maintainer closed it and asked for a plugin instead, offering to extend the plugin interface. This directory is that plugin and that extension. See [references/prior-art.md](references/prior-art.md).
 
 ## Enable
 
@@ -26,27 +17,24 @@ plugin form + the interface extension are.
 hermes plugins enable intelligent_routing
 ```
 
-Per agent, in `config.yaml` (default **OFF** — opt-in; it changes which model
-answers a user's message):
+Then turn it on per agent in `config.yaml`:
 
 ```yaml
 routing:
   intelligent: true                       # default false
-  mode: heuristic                         # Option A (default); "llm-router" (Option B) = Phase 2, not built
-  cheap_model: deepseek/deepseek-v3.2     # cheap-tier target (default)
-  cheap_provider: openrouter              # cheap-tier provider (default)
+  mode: heuristic                         # default; "llm-router" is reserved and not built
+  cheap_model: deepseek/deepseek-v3.2     # default
+  cheap_provider: openrouter              # default
 ```
 
-Enabled but `routing.intelligent` OFF ⇒ the hook is inert (`None`, zero change).
+With the plugin enabled but `routing.intelligent` off, the hook returns nothing and changes nothing.
 
-### Pointing the cheap tier at a LOCAL model
+### Using a local model as the cheap tier
 
-A local cheap tier needs one extra thing: thinking OFF. A thinking-capable
-model on a modest `max_tokens` spends the whole budget reasoning and returns an
-**empty string** (measured, qwen3.5:9b at `max_tokens: 200` → 200 completion
-tokens, empty content, `finish_reason: length`).
+Turn thinking off for that model.
+A thinking model with a small `max_tokens` can spend the whole budget reasoning and return an empty reply. Measured: `qwen3.5:9b` at `max_tokens: 200` used all 200 tokens and returned nothing, with `finish_reason: length`.
 
-Do it with the per-model reasoning config, **not** with `cheap_extra_body`:
+Use the per-model reasoning setting:
 
 ```yaml
 routing:
@@ -56,44 +44,36 @@ routing:
 
 agent:
   reasoning_overrides:
-    "qwen3.5:9b": none              # → reasoning_effort: "none" on the wire
+    "qwen3.5:9b": none              # sends reasoning_effort: "none"
 ```
 
-`switch_model` re-resolves `reasoning_config` against the **routed** model, so
-the override applies to the cheap turn even though the primary is a different
-model. With it: 2 completion tokens and the right answer.
+`switch_model` reads the reasoning setting for the routed model, so this applies to cheap turns even though the primary is a different model.
+With it, the same test used 2 tokens and answered correctly.
 
-⚠️ On ollama's OpenAI-compatible `/v1/chat/completions`, `think: false`,
-`chat_template_kwargs` and an in-prompt `/no_think` all do **nothing**
-(ollama#14820). `reasoning_effort: "none"` is the only switch that works.
+On ollama's OpenAI-compatible `/v1/chat/completions`, `think: false`, `chat_template_kwargs` and an in-prompt `/no_think` have no effect (ollama#14820). `reasoning_effort: "none"` is the only one that works.
 
-`routing.cheap_extra_body` is for genuinely provider-specific **body** params
-on a routed turn — ollama `{"options": {"num_ctx": 8192}}`, an aggregator's
-`provider` preferences. It is empty by default. Note the OpenAI SDK merges
-`extra_body` into the request body *last*, so anything set there **overrides** a
-same-named typed parameter the transport already emitted.
+### `routing.cheap_extra_body`
 
-The transport merges your keys into the `extra_body` it assembled, but the
-merge is **shallow** (one level): a nested dict you set replaces the assembled
-one wholesale rather than merging into it. `{"reasoning": {"effort": "none"}}`
-therefore drops the assembled `enabled` key — write nested values out in full.
+Use this only for provider-specific request body fields on a routed turn, such as ollama's `{"options": {"num_ctx": 8192}}` or an aggregator's `provider` preferences. It is empty by default.
+
+- The OpenAI SDK merges `extra_body` into the request last, so a key here overrides a typed parameter of the same name.
+- The merge is one level deep. A nested object you set replaces the assembled one. `{"reasoning": {"effort": "none"}}` drops the assembled `enabled` key, so write nested values out in full.
 
 ## How a turn flows
 
 ```
 turn arrives
-  └─ pre_llm_call hook (plugins/intelligent_routing/registration.py)
-       ├─ decide_tier(sig) (classifier.py) ── gate cheap on the CONSERVATIVE
-       │     binary classifier: cheap ONLY if classify_turn == MECHANICAL,
-       │     else PREMIUM (fail open). NO catch-all-to-cheap.
-       ├─ inject model-awareness reason line:
-       │     [Current model: … — routed: mechanical → cheap]   (or "judgment → premium")
+  └─ pre_llm_call hook (registration.py)
+       ├─ user directive such as "use kimi"? → route to that model
+       ├─ decide_tier(sig) (classifier.py): cheap only if classify_turn == MECHANICAL,
+       │     otherwise premium
+       ├─ add a note to the context: [Current model: … routed: mechanical → cheap]
        └─ if cheap: return {"route": {"model": …, "provider": …}}
-             └─ turn_context extracts + applies it (agent/routing_override.py)
-                  └─ agent.switch_model(...)  ── turn-scoped: reverted next turn
+             └─ turn_context applies it (agent/routing_override.py)
+                  └─ agent.switch_model(...), reverted at the start of the next turn
 ```
 
-**Probe the decision in isolation** (for re-audit / live-probe, no config/plumbing):
+To test the decision on its own:
 
 ```python
 from plugins.intelligent_routing.registration import probe_route
@@ -105,89 +85,25 @@ probe_route("run the nightly digest", platform="cron")
 #   -> {"tier": "cheap", "classification": "mechanical"}
 ```
 
-## The interface extension (the centerpiece)
+## The routing decision
 
-`agent/routing_override.py` — a minimal, additive, reference implementation:
+`decide_tier` sends a turn to the cheap model only when `classify_turn` returns `MECHANICAL`.
+That means a cron or background job, a kanban triage, or a short direct request for one action.
+Architecture questions, code generation, open-ended reasoning, hedged requests, long messages and public-facing replies stay on the primary.
 
-- `extract_routing_override(results)` — pull the first `{"route": {...}}` from the
-  list of `pre_llm_call` results (first well-formed, `model` required).
-- `apply_routing_override(agent, override)` — actuate the swap by delegating to
-  the agent's existing, tested `switch_model` (full atomic client rebuild +
-  rollback), then **scope it to this turn with a DEDICATED flag**
-  (`_routing_override_active`), stashing the premium `_primary_runtime` snapshot
-  in `_routing_override_saved_primary`. It deliberately leaves `_primary_runtime`
-  pointing at the **cheap** runtime for the turn and does **not** touch
-  `_fallback_activated`. `restore_primary_runtime` reverts the swap at the top of
-  the next turn via a dedicated block that runs **before** both the
-  `_fallback_activated` gate and the rate-limit cooldown gate. Fail-safe: any
-  error leaves the agent on its configured primary and never raises into the turn
-  loop.
+An earlier version routed on the five-way `classify_task_type`, whose default was `orchestration → cheap`.
+In real use, hard architecture questions, code generation and hedged requests all fell through to that default and went to the cheap model.
+The default is now premium.
+`tests/plugins/intelligent_routing/test_realistic_distribution.py` runs a representative batch through the full hook to catch this.
+`classify_task_type` still exists and is tested, but routing does not use it.
 
-  > **Why the dedicated flag (three audit-confirmed bugs the earlier design had).**
-  > An earlier version scoped the override by restoring the premium snapshot into
-  > `_primary_runtime` and arming `_fallback_activated`. That overloaded reactive-
-  > fallback state and broke three error-adjacent paths: (1) the cheap model
-  > **leaked past its turn** when `restore_primary_runtime`'s rate-limit cooldown
-  > gate skipped restoration (Blocker 1); (2) in-turn transient-transport recovery
-  > (which rebuilds from `_primary_runtime`) **jumped the routed turn onto premium**
-  > (Major 2); (3) pre-arming `_fallback_activated` made a cheap-model 429 **skip
-  > arming its cooldown** (Major 3). Keeping `_primary_runtime == cheap` + a
-  > dedicated flag fixes all three, and lets reactive fallback run correctly
-  > UNDERNEATH a routed turn with the cheap runtime as its "primary".
+The cheap default is `deepseek/deepseek-v3.2`. The reasons are in [references/prior-art.md](references/prior-art.md).
 
-Call site: `agent/turn_context.py`, immediately after the `pre_llm_call` results
-are collected (before the turn's first API call assembles). That is the whole
-core change — one module + one call site.
+## Tiers and model directives
 
-**Why this is the right shape for upstream.** It generalizes: any `pre_llm_call`
-plugin can now return a per-turn model/provider override, not just this one. It
-reuses `switch_model` rather than duplicating the swap logic. It's turn-scoped and
-fail-safe by construction. This is what teknium1 offered to add to the interface.
+Turns the classifier keeps on premium carry no override, so they use whatever the agent's primary model is.
 
-## The routing decision (simplified after a live-deploy bug)
-
-**The decider is the conservative binary classifier, not the task-type table.**
-`decide_tier(sig)` routes to cheap **only** when `classify_turn(sig) == MECHANICAL`
-(a confident positive: cron/background, kanban-triage, or a short direct
-single-action ask). Everything else — architecture, code-gen, open-ended
-reasoning, hedged/ambiguous asks, long messages, public-facing — **fails open to
-premium**.
-
-> **Why (the live-deploy bug this fixes).** An earlier version routed on the
-> 5-way `classify_task_type`, whose catch-all default was `orchestration → cheap`.
-> A live deploy on the cyborg agent proved that hard architecture questions,
-> multi-file code-gen ("Write a Python function that merges two sorted linked
-> lists"), and hedged/uncertain asks ALL fell through the catch-all onto cheap —
-> the "fail open to premium" guarantee was false in practice. The fix: gate cheap
-> on the conservative binary classifier and make the default premium. There is no
-> catch-all-to-cheap. `tests/plugins/intelligent_routing/test_realistic_distribution.py`
-> feeds a representative batch through the FULL hook and asserts what actually
-> routes — the regression that would have caught this.
-
-`classify_task_type` (the 5-way path) still exists as a descriptive utility and
-is unit-tested, but it is **NOT consulted in the routing path**.
-
-Cheap tier defaults to `deepseek/deepseek-v3.2` — v3.2, **not** v4-Pro; grounded
-in #43534's data (DeepSeek coding throughput directionally lower → keep code-gen
-on Claude; DeepSeek only competitive AND cheap at CLI/tool orchestration). See
-`references/prior-art.md`.
-
-## Fleet tiers & user model directives
-
-The fleet runs a three-tier hierarchy. PRIMARY is whatever the agent's
-configured primary model is — premium/fail-open turns emit **no** route
-override, so they land on the primary automatically (no plugin change needed
-when the fleet primary flips).
-
-| Tier | Model | How a turn gets there |
-|---|---|---|
-| PRIMARY (chat default) | `z-ai/glm-5.2` / openrouter (configured primary) | classifier: judgment / uncertain / public-facing (fail-open — no override emitted) |
-| CHEAP (mechanical) | `deepseek/deepseek-v3.2` / openrouter | classifier: confident MECHANICAL (`routing.cheap_model` / `cheap_provider`) |
-| ON-DEMAND PREMIUM | `moonshotai/kimi-k3` / openrouter | user says `use kimi` (or `kimi3` / `k3`) in the message |
-
-A user can request a specific model mid-message — the directive short-circuits
-the classifier entirely (fires BEFORE the mechanical/judgment split, so a bare
-`use kimi` isn't misread as an imperative → mechanical → deepseek):
+A user can name a model in their message. The directive is checked before the classifier, so a bare `use kimi` is not mistaken for a mechanical request.
 
 | Directive | Routes to |
 |---|---|
@@ -198,48 +114,55 @@ the classifier entirely (fires BEFORE the mechanical/judgment split, so a bare
 | `use opus` | `claude-opus-4-8` / anthropic |
 | `use sonnet` | `claude-sonnet-4-6` / anthropic |
 | `use haiku` | `claude-haiku-4-5-20251001` / anthropic |
-| `use claude` | no override — stay on configured primary |
+| `use claude` | no override; stays on the primary |
 
-Directives are turn-scoped (same `routing_override` path — reverted next turn).
+Directives last for one turn, like any other route override.
 
-## Scope — DONE vs DEFERRED
+## The interface change
 
-**Done (Stage 1, our fork):**
-- Per-agent `routing.intelligent` toggle (default OFF), `routing.mode`,
-  `routing.cheap_model` / `cheap_provider`.
-- Task-type heuristic classifier (pure, deterministic, fail-open to premium).
-- `pre_llm_call` wiring: injects the routing-reason line AND emits the `route`
-  override for cheap turns; inert when disabled; never raises.
-- **Interface extension** (`routing_override.py` + `turn_context.py` call site)
-  that actuates the swap, turn-scoped and fail-safe.
-- Full RGTDD, incl. an end-to-end actuation test (decision → real swap).
+`agent/routing_override.py`:
 
-**Deferred:**
-- **Phase 3 measurement** — before/after per-agent token spend on a pilot agent
-  (the interface extension unlocks this; not yet run).
-- **Option B (`mode: llm-router`)** — cheap-LLM-as-router. Config key read, not built.
-- **HSM UI toggle** (Phase 2) — the Switch beside the cascade editor.
-- Richer signals (tool-call history, real kanban/public-facing detection).
-- **Live-agent E2E** — the swap is proven against a faithful fake agent in tests,
-  NOT yet against a real running agent hitting OpenRouter.
+- `extract_routing_override(results)` takes the first well-formed `{"route": {...}}` from the `pre_llm_call` results. `model` is required.
+- `apply_routing_override(agent, override)` calls the agent's existing `switch_model`, which rebuilds the client and rolls back on failure. It then sets a dedicated flag, `_routing_override_active`, and saves the primary runtime in `_routing_override_saved_primary`.
+- During the routed turn, `_primary_runtime` points at the cheap runtime, and `_fallback_activated` is left alone.
+- `restore_primary_runtime` undoes the switch at the start of the next turn. It does this before the fallback and rate-limit cooldown checks, so the cheap model never carries into the next turn.
+- Any error leaves the agent on its primary and is never raised into the turn loop.
 
-## ⚠️ For the independent audit
+An earlier design reused the fallback state (`_primary_runtime` and `_fallback_activated`) instead of a dedicated flag. Review found three bugs in it:
 
-The **only** core-runtime changes are `agent/routing_override.py` and the single
-call site in `agent/turn_context.py`. They touch the model-selection path and are
-**user-visible** (they change which model answers a turn). Everything else is
-plugin-local. Audit focus points:
-- Turn-scoping correctness: proven against the REAL `restore_primary_runtime` in
-  `tests/agent/test_routing_override_revert.py` — the revert runs before both the
-  `_fallback_activated` and rate-limit cooldown gates, so it happens regardless of
-  cooldown state (the first-round audit's leak repro is now a passing regression
-  test there).
-- Interaction with reactive fallback within the same turn: `_primary_runtime`
-  stays == cheap during the routed turn, so reactive fallback engages with the
-  cheap runtime as its "primary" and cooldown accounting is intact (covered by
-  `test_reactive_fallback_engages_under_a_routed_turn`).
-- Fail-safe coverage: a bad/unreachable cheap provider must degrade to the
-  primary, not break the turn.
-- **The swap is verified against faithful fake agents + the real
-  `restore_primary_runtime`, but NOT yet against a live agent hitting OpenRouter —
-  a live-agent run is required before fleet rollout.**
+1. The cheap model could stay on past its turn when the rate-limit cooldown skipped the restore.
+2. Recovery from a transport error rebuilt the routed turn on the premium model.
+3. A 429 from the cheap model did not start its cooldown.
+
+The dedicated flag fixes all three. Reactive fallback still works inside a routed turn, with the cheap runtime acting as its primary.
+
+The call site is in `agent/turn_context.py`, right after the `pre_llm_call` results are collected and before the first API call. Those are the only core changes; the rest is inside the plugin.
+
+Any `pre_llm_call` plugin can use the override, not only this one.
+
+## Status
+
+Done:
+
+- Per-agent settings: `routing.intelligent` (default off), `routing.mode`, `routing.cheap_model`, `routing.cheap_provider`.
+- The classifier: deterministic, and premium whenever it is unsure.
+- The `pre_llm_call` hook: adds the routing note and returns the override for cheap turns. Inert when disabled. Never raises.
+- The interface change, scoped to one turn.
+- Tests, including one that goes from decision to actual model switch.
+
+Not done:
+
+- Measuring token spend before and after on a real agent.
+- `mode: llm-router`, using a cheap model as the router. The setting is read but does nothing.
+- A toggle in the Swarm Map UI.
+- Richer signals, such as tool-call history or real public-facing detection.
+- An end-to-end test against a live agent calling OpenRouter. The switch is tested against fake agents and the real `restore_primary_runtime`.
+
+## Notes for reviewers
+
+The only core changes are `agent/routing_override.py` and the call site in `agent/turn_context.py`. They change which model answers a turn, so users can see the effect.
+
+- Turn scoping: `tests/agent/test_routing_override_revert.py` tests against the real `restore_primary_runtime`, including the earlier leak.
+- Fallback inside a routed turn: covered by `test_reactive_fallback_engages_under_a_routed_turn`.
+- Failure handling: a bad or unreachable cheap provider should fall back to the primary without breaking the turn.
+- Run it against a live agent before turning it on widely.

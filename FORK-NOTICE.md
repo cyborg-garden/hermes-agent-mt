@@ -1,52 +1,74 @@
 # Multi-Tenant Fork Notice
 
-> **⚠️ The owning org was renamed: `NimbleCoOrg` → `cyborg-garden`.**
-> (Earlier history: this repo moved from `NimbleCoAI/hermes-agent-mt` to `NimbleCoOrg/hermes-agent-mt`, and before that was renamed from `hermes-agent` to `hermes-agent-mt`.)
-> - **Git URLs:** clone/remote URLs **auto-redirect** — existing checkouts keep working, no action needed.
-> - **Container image — action required.** CI now publishes to **`ghcr.io/cyborg-garden/hermes-agent-mt`** (the workflow derives the namespace from the repo owner, so it repointed itself on the rename). **GHCR does not redirect the way Git does.** The org rename carried the package namespace with it, so **`ghcr.io/nimblecoorg/hermes-agent-mt` no longer resolves at all** — a pull against it now fails outright. Repoint any compose file, deploy script, or pinned digest to the `cyborg-garden` path.
-> - **The older `NimbleCoAI` packages still pull — and that is the dangerous case.** `NimbleCoAI` is a separate user account and was *not* renamed. **`ghcr.io/nimblecoai/hermes-agent-mt`** remains public and is **frozen at its last build, 2026-08-06**; `docker pull` against it still **succeeds** and simply returns pre-move code, with no error. The pre-rename **`ghcr.io/nimblecoai/hermes-agent`** package is likewise public and frozen (last build 2026-07-21), and it too still returns a *successful* pull. Neither is being deleted; both are the intended read-only grace window. If anything is pinned to either, repoint it.
+This is **hermes-agent-mt**, a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
+It is for running one Hermes agent across many groups and people, usually managed by [Swarm Map](https://github.com/cyborg-garden/swarm-map).
+Each group or DM keeps its own memory, and group access is checked against a policy service.
 
-This is **hermes-agent-mt** — a thin fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) patched for multi-tenant deployments managed by [Swarm Map](https://github.com/cyborg-garden/swarm-map).
-
-## What's Different
-
-This fork adds **2 core patches** and **~8 adapter improvements** on top of upstream:
-
-### Core Patches
-1. **Memory context scoping** — Memory writes are scoped per-context (group/DM), not global. Each conversation thread maintains isolated memory.
-2. **Context ID sanitization** — Platform-specific context IDs are normalized for safe filesystem paths.
-
-### Adapter Improvements
-- Signal: UUID-based allowlisting, group invite policy, voice memo detection, profile name setting
-- Mattermost: Channel join/leave gating, per-channel allowlist, mention gating
-- Telegram: Group session isolation, admin resolution
-
-### Plugins (installed by HSM)
-- `swarm_map_policy` — Group access control via HSM policy endpoint
-- `boot_md` — Startup checklist execution
-- `lifecycle-notify` — Startup notification hook
-
-## Upstream Relationship
-
-- **Upstream:** [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
-- **Sync:** Weekly automated rebase via CI workflow
-- **Goal:** Minimize diff. Patches that benefit upstream are submitted as PRs.
-- **Rebase journal:** See `docs/rebase-journal.md`
-
-## Using This Fork
+## Use it
 
 ```bash
-# Docker (recommended)
+# Docker
 docker pull ghcr.io/cyborg-garden/hermes-agent-mt:latest
 
-# Or build from source
+# From source
 git clone https://github.com/cyborg-garden/hermes-agent-mt.git
 cd hermes-agent-mt
 pip install -e ".[all]"
 ```
 
-For multi-tenant management, use [Swarm Map](https://github.com/cyborg-garden/swarm-map).
+To manage several agents, use [Swarm Map](https://github.com/cyborg-garden/swarm-map).
+
+## What differs from upstream
+
+### Core changes
+
+- **Memory scoped per conversation.** Memory writes go to a separate store for each group or DM, keyed by a `context_id`. Reads merge the global entries with that conversation's entries. With no `context_id`, behaviour matches upstream.
+- **Safe context IDs.** Platform chat IDs are normalized before they become file paths.
+- **Letta-backed agent mode.** The gateway can hand each turn to a [Letta](https://github.com/letta-ai/letta) agent. See [Letta Brain Mode](website/docs/user-guide/features/letta-brain-mode.md).
+- **Per-turn model override for plugins.** A `pre_llm_call` hook can return a `route` that switches the model for one turn (`agent/routing_override.py`). The `intelligent_routing` plugin uses it.
+
+### Platform adapters
+
+- **Signal:** allowlisting by UUID, a group invite policy, voice memo detection, and setting the profile name.
+- **Mattermost:** channel join and leave gating, a per-channel allowlist, and mention gating.
+- **Telegram:** separate sessions per group, and admin lookup.
+
+### Plugins and hooks
+
+| Name | What it does | Docs |
+|------|--------------|------|
+| `swarm_map_policy` | Checks group access and admin status against Swarm Map. Can limit chosen tools to admins. | [README](plugins/swarm_map_policy/README.md) |
+| `intelligent_routing` | Sends simple, mechanical turns to a cheaper model. Off by default. | [README](plugins/intelligent_routing/README.md) |
+| `observability/home_log_router` | Forwards important warnings to the agent's home channel. | [README](plugins/observability/home_log_router/README.md) |
+| `boot_md` | Runs `~/.hermes/BOOT.md` as a prompt at the first session after startup. | `plugins/boot_md/plugin.yaml` |
+| `gardener_approvals` | Routes a Signal approval reply, with the sender's verified UUID, to an approval gate. | `plugins/gardener_approvals/plugin.yaml` |
+| `lifecycle-notify` (hook) | Posts a startup notice to the home channel. | `hooks/lifecycle-notify/HOOK.yaml` |
+
+Enable a plugin with `hermes plugins enable <name>`.
+
+The complete list of changes is the diff between this repo's `main` and the upstream release tag it last merged.
+
+## Keeping up with upstream
+
+- A [weekly workflow](.github/workflows/upstream-sync.yml) runs on Mondays at 06:00 UTC.
+- It **merges** the latest upstream release tag. It does not rebase. You can also run it by hand against any upstream ref.
+- Conflicts in fork-owned areas go to a person. A short list of paths where the fork does not diverge is resolved in upstream's favour automatically.
+- Changes that would help upstream are offered back as PRs.
+- [`docs/rebase-journal.md`](docs/rebase-journal.md) records the first rebase in 2026-05, before the switch to merging.
+- [`patches/`](patches/README.md) holds a patch series from that time. It is not kept up to date.
+
+## Container image
+
+CI publishes to **`ghcr.io/cyborg-garden/hermes-agent-mt`**.
+The repo has moved twice: from `NimbleCoAI` to `NimbleCoOrg`, then to `cyborg-garden`.
+Git URLs redirect, so existing clones keep working.
+Container images do not redirect:
+
+- `ghcr.io/nimblecoorg/hermes-agent-mt` no longer exists. Pulls fail.
+- `ghcr.io/nimblecoai/hermes-agent-mt` (last build 2026-08-06) and `ghcr.io/nimblecoai/hermes-agent` (last build 2026-07-21) still pull, with no error, but return old code.
+
+Repoint anything that uses an old path.
 
 ## License
 
-Same as upstream: MIT License.
+MIT, the same as upstream.
