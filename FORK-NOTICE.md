@@ -52,7 +52,7 @@ The complete list of changes is the diff between this repo's `main` and the upst
 
 - A [weekly workflow](.github/workflows/upstream-sync.yml) runs on Mondays at 06:00 UTC.
 - It **merges** the latest upstream release tag. It does not rebase. You can also run it by hand against any upstream ref.
-- Conflicts in fork-owned areas go to a person. A short list of paths where the fork does not diverge is resolved in upstream's favour automatically.
+- Conflicts in fork-owned areas go to a person. Conflicts under `apps/`, `website/`, `nix/` and `docs/` are resolved in upstream's favour automatically.
 - Changes that would help upstream are offered back as PRs.
 - [`docs/rebase-journal.md`](docs/rebase-journal.md) records the first rebase in 2026-05, before the switch to merging.
 - [`patches/`](patches/README.md) holds a patch series from that time. It is not kept up to date.

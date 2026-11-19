@@ -22,12 +22,12 @@ The plugin needs the `requests` package. Without it, the plugin logs a warning a
 
 ## What it checks
 
-- **Groups.** Only groups registered in Swarm Map for this agent may use it. If Swarm Map isn't configured or can't be reached, the group is denied.
+- **Groups.** When the agent is added to a Telegram group, Swarm Map must approve it. If Swarm Map isn't configured or can't be reached, the group is denied.
 - **Admins.** Each incoming message's sender is looked up in Swarm Map. If the lookup fails, the sender is treated as a non-admin.
 - **Admin-only tools.** A tool listed in `SWARM_MAP_ADMIN_GATED_TOOLS` is blocked for non-admins, and blocked when the plugin has no session context.
 
 This plugin does not gate approval of dangerous commands.
-Approval is not a tool call. It is gated by `approvals.admin_only` in `gateway/run.py`, and for Discord buttons by `platforms.discord.extra.require_admin_for_exec_approval` and `allow_admin_from`.
+Approval is not a tool call. It is gated by `approvals.admin_only`, read in `gateway/slash_commands.py`, and for Discord buttons by `platforms.discord.extra.require_admin_for_exec_approval` and `allow_admin_from`.
 
 ## Hooks used
 
@@ -35,4 +35,4 @@ Approval is not a tool call. It is gated by `approvals.admin_only` in `gateway/r
 - `pre_tool_call` blocks admin-only tools for non-admins.
 - `on_session_start` logs the session start.
 
-The group check (`is_group_allowed`) and group-add approval (`approve_group_add`) are functions in `__init__.py`. The hooks above do not call them; code that handles group membership calls them directly.
+Group-add approval (`approve_group_add`) is called by the Telegram adapter when the bot is added to a group. `is_group_allowed` is a helper for adapters to use; nothing calls it yet.

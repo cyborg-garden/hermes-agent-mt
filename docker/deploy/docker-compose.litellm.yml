@@ -5,7 +5,7 @@
 #
 # Requires env vars in ~/.hermes/.env:
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  (for Bedrock)
-#   GOOGLE_CLOUD_API_KEY                       (for Vertex AI)
+#   GOOGLE_CLOUD_API_KEY, VERTEXAI_PROJECT     (for Vertex AI)
 
 services:
   litellm:

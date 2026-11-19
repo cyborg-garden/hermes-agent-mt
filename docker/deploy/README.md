@@ -7,17 +7,16 @@ They sit beside the main compose file and change no upstream code.
 
 Sends model requests through AWS Bedrock (Claude) and Google Vertex AI (Gemini), so agents don't need provider API keys.
 
-1. Set your Google Cloud project in `litellm-config.yaml` (`vertex_project`).
-2. Put these in `~/.hermes/.env`:
+1. Put these in `~/.hermes/.env`:
    - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for Bedrock
-   - `GOOGLE_CLOUD_API_KEY` for Vertex AI
-3. Start the stack with the overlay:
+   - `GOOGLE_CLOUD_API_KEY` and `VERTEXAI_PROJECT` (your Google Cloud project ID) for Vertex AI
+2. Start the stack with the overlay:
 
    ```bash
    docker compose -f docker-compose.yml -f docker/deploy/docker-compose.litellm.yml up -d
    ```
 
-4. Point each agent's model at the proxy in `config.yaml`:
+3. Point each agent's model at the proxy in `config.yaml`:
 
    ```yaml
    model:

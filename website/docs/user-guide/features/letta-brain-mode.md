@@ -15,7 +15,7 @@ This mode is only in the `hermes-agent-mt` fork.
 This mode is new, opt-in and off by default. Its biggest gap: **token usage is reported as `0` on the default streaming path**, so per-turn usage numbers are only right with streaming turned off. Details below.
 :::
 
-**Source files:** `gateway/letta_brain.py`, `gateway/run.py` (`_get_letta_brain`, `_run_agent_via_letta`, dispatch in `_run_agent_inner`)
+**Source files:** `gateway/letta_brain.py`, `gateway/run_turn.py` (`_get_letta_brain`, `_run_agent_via_letta`, dispatch in `_run_agent_inner`)
 **Tests:** `tests/gateway/test_letta_brain.py`, `tests/gateway/test_letta_audit_parity.py`
 
 ---

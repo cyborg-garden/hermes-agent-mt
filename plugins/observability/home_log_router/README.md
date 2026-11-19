@@ -44,7 +44,7 @@ Enabling the plugin is usually enough. These optional overrides exist:
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `HERMES_HOME_LOG_ENABLED` | (on) | Kill switch. Any false value (`0`, `false`, `off`) turns forwarding off while the plugin stays enabled. |
+| `HERMES_HOME_LOG_ENABLED` | (on) | Kill switch. Any value other than `1`, `true`, `yes` or `on` turns forwarding off while the plugin stays enabled. |
 | `HERMES_HOME_LOG_PLATFORM` | `signal` | Platform whose home channel receives forwards |
 | `HERMES_HOME_LOG_LEVEL` | `WARNING` | Minimum level to forward |
 | `HERMES_HOME_LOG_LOGGERS` | (the five above) | Comma-separated logger-name prefixes |
