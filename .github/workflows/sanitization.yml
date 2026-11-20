@@ -1,0 +1,35 @@
+name: sanitization
+
+# Thin caller for the shared sanitization gate. The gate is canonical in
+# cyborg-garden/swarm-map (docs/sanitization-gate.md): one script, one reusable
+# workflow. This repo keeps only sanitize.config.json and this file. Do not
+# vendor the script here.
+#
+#   pull_request      -> scans only the PR's own diff (mode: pr)
+#   workflow_dispatch -> scans the whole tree (mode: full-tree), run by hand
+#
+# Two layers run as separate steps: secrets and PII (deterministic, always),
+# then particulars (semantic, needs OPENROUTER_API_KEY and fails closed).
+# Pinned to a release tag, never @main.
+#
+# Upstream sync PRs (branch upstream-sync-*) are skipped: they carry thousands of
+# upstream files, and the secrets and PII layer cannot be scoped by path, so it
+# would report upstream's own fixtures and contributor map on every sync. Those
+# files are upstream's published content, not ours. The semantic layer is scoped
+# to fork-only paths in sanitize.config.json.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sanitize:
+    if: ${{ !startsWith(github.head_ref, 'upstream-sync-') }}
+    uses: cyborg-garden/swarm-map/.github/workflows/sanitization-gate.yml@sanitization-gate-v1.1.0
+    with:
+      mode: ${{ github.event_name == 'pull_request' && 'pr' || 'full-tree' }}
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

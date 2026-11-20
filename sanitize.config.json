@@ -1,0 +1,37 @@
+{
+  "$comment": "Sanitization gate config for hermes-agent-mt. The gate itself lives in cyborg-garden/swarm-map (docs/sanitization-gate.md); this file only says what a particular means here.",
+  "package_name": "hermes-agent-mt",
+  "package_kind": "public multi-tenant fork of hermes-agent; the fork's own layer ships to every agent in every deployment that builds from it",
+  "sensitive_prefixes": [
+    "patches/",
+    "plugins/swarm_map_policy/",
+    "plugins/gardener_approvals/",
+    "plugins/boot_md/",
+    "docker/deploy/",
+    "hooks/lifecycle-notify/",
+    "docs/rebase-journal.md"
+  ],
+  "$comment_prefixes": "Fork-only paths. Upstream content is out of scope for the semantic layer; it is upstream's published work. Top-level *.md are always included.",
+  "semantic": {
+    "domain_noun": "downstream deployment, operator instance, customer or investigation",
+    "flag_examples": [
+      "names of real individuals tied to one deployment (operators, customers, end users, subjects)",
+      "operator- or instance-specific infrastructure: hostnames, chat or group IDs, server addresses, account numbers, phone numbers",
+      "a codename or label that identifies one deployment, customer or case",
+      "personal email addresses of contributors",
+      "credentials, tokens, internal hostnames, server addresses or chat/group IDs of a real deployment"
+    ],
+    "do_not_flag_examples": [
+      "the publishing organisation and its public projects: Cyborg Garden / cyborg-garden / cyborg.garden, the former names NimbleCo / NimbleCoAI / NimbleCoOrg / nimbleco.ai, this repo's own name and GitHub URLs",
+      "Hermes, hermes-agent, Nous Research and upstream's published contributors, docs and identifiers",
+      "Swarm Map / swarm-map, the former names Hermes Swarm Map / HSM, and the fork's own architecture and design notes",
+      "generic tool, API, library, model, provider and standard names, and public reference material",
+      "clearly fictional placeholders (Subject A, <case>, example.com, <host>)"
+    ],
+    "model": "moonshotai/kimi-k3"
+  },
+  "deterministic": {
+    "enabled": true,
+    "allow_substrings": []
+  }
+}
