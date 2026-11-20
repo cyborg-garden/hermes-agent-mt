@@ -5,8 +5,9 @@ Run by the ``Check for unmapped contributor emails`` step of
 ``.github/workflows/repo-guards.yml``. An email is mapped if it has a file in
 ``contributors/emails/`` (one file per email, conflict-free) or an entry in the frozen legacy
 AUTHOR_MAP in ``scripts/releases/authors_legacy.py``. Maintainer, bot and GitHub id+login
-noreply emails are skipped. Writes the ``contributor-check`` review status
-(scripts/ci/review_status.py).
+noreply emails are skipped. Fork-only: an author who does not want the address published is
+allowed by ``contributors/email-hashes/<sha256 of the casefolded email>`` (see its README).
+Writes the ``contributor-check`` review status (scripts/ci/review_status.py).
 
 Exit codes: 0 = every email mapped (or no new commits), 1 = at least one unmapped email.
 """
@@ -14,6 +15,7 @@ Exit codes: 0 = every email mapped (or no new commits), 1 = at least one unmappe
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 import subprocess
 import sys
@@ -29,6 +31,9 @@ GIT_TIMEOUT = 120
 LEGACY_MAP = Path("scripts/releases/authors_legacy.py")
 SKIPPED = ("*teknium*", "*noreply@github.com*", "*dependabot*", "*github-actions*",
            "*anthropic.com*", "*cursor.com*")
+# Fork-only allowance: file name = sha256 hex of the casefolded email, content = GitHub login.
+# Lets a known author pass the check without the address being written into the tree.
+HASHED_DIR = Path("contributors/email-hashes")
 # GitHub id+login noreply emails auto-resolve.
 GITHUB_NOREPLY = re.compile(r"\+.*@users\.noreply\.github\.com")
 
@@ -69,12 +74,18 @@ def new_author_emails() -> list[str] | int:
     return emails if "".join(emails) else []
 
 
+def email_hash(email: str) -> str:
+    return hashlib.sha256(email.strip().casefold().encode("utf-8")).hexdigest()
+
+
 def is_mapped(email: str, legacy_map: str) -> bool:
     if any(fnmatch.fnmatchcase(email, pattern) for pattern in SKIPPED):
         return True
     if GITHUB_NOREPLY.search(email):
         return True
     if Path("contributors/emails", email).is_file():
+        return True
+    if (HASHED_DIR / email_hash(email)).is_file():
         return True
     return f'"{email}"' in legacy_map
 
