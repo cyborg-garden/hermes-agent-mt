@@ -1,9 +1,8 @@
 # Rebase Journal
 
-This document records every rebase of the fork against upstream, including conflicts encountered and how they were resolved. It serves as:
-1. Proof the thin-fork model works (or documentation of when it doesn't)
-2. A guide for future rebase sessions
-3. Input for improving the CI/CD rebase system
+> **Historical.** This journal records the fork's rebase onto upstream in May 2026.
+> The fork no longer rebases. A [weekly workflow](../.github/workflows/upstream-sync.yml) merges the latest upstream release tag instead, because weekly rebases kept conflicting.
+> The process and lessons below describe the rebase approach. Keep them for context, not as current instructions.
 
 ---
 
@@ -11,7 +10,6 @@ This document records every rebase of the fork against upstream, including confl
 
 **Fork state:** 33 commits (reduced to 27 after cleanup), diverged since `4cc18877c69b`
 **Upstream state:** 410 new commits on `upstream/main`
-**Operator:** Claude (with Juniper)
 
 ### Pre-rebase cleanup
 

@@ -1,29 +1,38 @@
 # Swarm Map Policy Plugin
 
-Integrates Hermes with [Swarm Map](https://github.com/NimbleCoOrg/swarm-map) for multi-tenant group access control.
+Connects a Hermes agent to [Swarm Map](https://github.com/cyborg-garden/swarm-map), which decides which groups the agent may talk in and who counts as an admin.
+Swarm Map was formerly called HSM, and the setting names still use that name.
 
 ## Configuration
 
-Set these environment variables in your agent's `.env`:
+Set these in the agent's `.env`:
 
 ```
 HSM_URL=http://localhost:3002
-HERMES_AGENT_NAME=hermes-personal
-# Optional: registered tool names only HSM platform admins may call
+HERMES_AGENT_NAME=my-agent
+# Optional: comma-separated tool names that only Swarm Map platform admins may call
 SWARM_MAP_ADMIN_GATED_TOOLS=
 ```
 
-This plugin does not gate dangerous-command approval. Approval is not a tool
-call; it is gated by `approvals.admin_only` in `gateway/run.py` and, for
-Discord buttons, by `platforms.discord.extra.require_admin_for_exec_approval`
-+ `allow_admin_from`.
+- `HSM_URL` is the Swarm Map API.
+- `HERMES_AGENT_NAME` is this agent's name in Swarm Map.
+- `SWARM_MAP_ADMIN_GATED_TOOLS` is empty by default, so no tool is limited to admins until you name one. At startup the plugin logs any name that matches no registered tool. MCP tools register later and are not checked.
 
-## Security Model
+The plugin needs the `requests` package. Without it, the plugin logs a warning and does nothing.
 
-- **Group checks:** Fail-closed. If HSM is unreachable, group messages are denied.
-- **Tool checks:** Fail-open. If HSM is not configured, all tools are allowed.
+## What it checks
 
-## Hooks Used
+- **Groups.** When the agent is added to a Telegram group, Swarm Map must approve it. If Swarm Map isn't configured or can't be reached, the group is denied.
+- **Admins.** Each incoming message's sender is looked up in Swarm Map. If the lookup fails, the sender is treated as a non-admin.
+- **Admin-only tools.** A tool listed in `SWARM_MAP_ADMIN_GATED_TOOLS` is blocked for non-admins, and blocked when the plugin has no session context.
 
-- `on_session_start` — validate group access and cache admin status
-- `pre_tool_call` — block tools in `SWARM_MAP_ADMIN_GATED_TOOLS` for non-admins (fail-closed)
+This plugin does not gate approval of dangerous commands.
+Approval is not a tool call. It is gated by `approvals.admin_only`, read in `gateway/slash_commands.py`, and for Discord buttons by `platforms.discord.extra.require_admin_for_exec_approval` and `allow_admin_from`.
+
+## Hooks used
+
+- `pre_gateway_dispatch` stores the platform, chat and sender for the message, and looks up whether the sender is an admin.
+- `pre_tool_call` blocks admin-only tools for non-admins.
+- `on_session_start` logs the session start.
+
+Group-add approval (`approve_group_add`) is called by the Telegram adapter when the bot is added to a group. `is_group_allowed` is a helper for adapters to use; nothing calls it yet.

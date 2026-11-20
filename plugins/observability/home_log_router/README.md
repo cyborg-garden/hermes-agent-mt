@@ -1,18 +1,16 @@
 # home_log_router
 
-Forward the operational logs that actually matter to an agent's **home channel**.
+Forwards important operational warnings to an agent's **home channel**.
 
 ## Why
 
-Hermes agents suppress operational log records to keep chat clean — cascade
-fallbacks, provider errors, persistent reconnects. None of them reach the home
-channel: only shutdown/startup/cron resolve `get_home_channel()`. Suppression
-isn't routing, so operators are blind to agent health.
+Hermes keeps operational log records out of chat: model fallbacks, provider errors, repeated reconnects.
+Only startup, shutdown and cron messages reach the home channel.
+So the person running the agent can't see these problems from chat.
 
-This plugin closes that gap **without touching any emit site**. It installs a
-`logging.Handler` on the root logger and forwards a curated, throttled slice of
-records to the home channel through the existing `send_message` tool (a bare
-platform target resolves to the home channel). It survives upstream rebases.
+This plugin forwards a chosen, rate-limited set of those records.
+It adds a `logging.Handler` to the root logger and sends through the existing `send_message` tool. A bare platform target, such as `signal`, means that platform's home channel.
+It changes no code that writes logs, so it is unaffected by upstream merges.
 
 ## Enable
 
@@ -20,36 +18,36 @@ platform target resolves to the home channel). It survives upstream rebases.
 hermes plugins enable observability/home_log_router
 ```
 
-That's the opt-in. It activates immediately. If no home channel is configured
-(`SIGNAL_HOME_CHANNEL` / `/sethome`), forwarding is a silent no-op until one is.
+It starts working straight away.
+If no home channel is set (`SIGNAL_HOME_CHANNEL` or `/sethome`), it forwards nothing until one is.
 
 ## What it forwards
 
-Records at **WARNING+** from these loggers (prefix-matched):
+Records at **WARNING** or above from these loggers (matched by prefix):
 
-- `plugins.platforms.signal` — reconnects / health (benign churn is DEBUG, so only real problems surface)
-- `agent.conversation_loop` — model cascade fallbacks
-- `model_tools` — provider errors during model calls
+- `plugins.platforms.signal`: reconnects and health. Routine churn logs at DEBUG, so only real problems show.
+- `agent.conversation_loop`: model fallbacks.
+- `agent.degradation`
+- `model_tools`: provider errors during model calls.
+- `agent.auxiliary_client`
 
 ## Storm safety
 
-Identical messages are deduplicated (re-surfacing once per window as a
-heartbeat), sends are rate-capped per window, and the first send after any
-suppression leads with a short "N suppressed" summary. The capture path is
-non-blocking (bounded queue, drop-on-full) and fully decoupled from delivery —
-logging is never blocked by a slow send.
+- Identical messages are sent once, then again once per dedup window.
+- Sends are capped per window.
+- The first send after any were held back starts with a short "N suppressed" line.
+- Capturing a record never waits on sending. Records go into a bounded queue, and are dropped if it is full.
 
 ## Configuration
 
-The only setting anyone needs is the enable switch above. Advanced overrides
-(all optional, sensible defaults):
+Enabling the plugin is usually enough. These optional overrides exist:
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `HERMES_HOME_LOG_ENABLED` | (active) | Kill switch — any non-truthy value (`0`/`false`/`off`) disables without un-enabling the plugin. Non-positive numeric knobs below fall back to their defaults. |
+| `HERMES_HOME_LOG_ENABLED` | (on) | Kill switch. Any value other than `1`, `true`, `yes` or `on` turns forwarding off while the plugin stays enabled. |
 | `HERMES_HOME_LOG_PLATFORM` | `signal` | Platform whose home channel receives forwards |
 | `HERMES_HOME_LOG_LEVEL` | `WARNING` | Minimum level to forward |
-| `HERMES_HOME_LOG_LOGGERS` | (the three above) | Comma-separated logger-name prefixes |
+| `HERMES_HOME_LOG_LOGGERS` | (the five above) | Comma-separated logger-name prefixes |
 | `HERMES_HOME_LOG_RATE` | `20` | Max sends per window |
 | `HERMES_HOME_LOG_WINDOW` | `60` | Rate window (seconds) |
 | `HERMES_HOME_LOG_DEDUP_WINDOW` | `300` | Identical-message dedup window (seconds) |
@@ -57,25 +55,20 @@ The only setting anyone needs is the enable switch above. Advanced overrides
 
 ## Design
 
-Five small, independently testable units:
+Five small units, each tested on its own:
 
-- `RoutePolicy` — pure: does this record forward? (allowlist ∩ level floor)
-- `Throttle` — pure (injectable clock): dedup + rate-cap + suppression summary
-- `HomeLogHandler` — cheap `emit()`: policy-gate, format, non-blocking enqueue
-- `HomeLogWorker` — daemon thread: drain → throttle → guarded send
-- `ReentrancyGuard` — process-wide; suppresses capture while the worker is itself
-  sending (the platform adapter emits its own logs on another thread that a
-  thread-local guard would miss)
+- `RoutePolicy` decides whether a record is forwarded: its logger is on the list and its level is high enough. No side effects.
+- `Throttle` handles dedup, the rate cap and the suppression summary. No side effects; the clock can be injected.
+- `HomeLogHandler.emit()` checks the policy, formats the record and queues it without blocking.
+- `HomeLogWorker` is a background thread that drains the queue, applies the throttle and sends.
+- `ReentrancyGuard` stops capture while the worker is sending. It is process-wide, because the platform adapter logs from another thread that a per-thread guard would miss.
 
-The handler and worker are process-lifetime; teardown is bound to `atexit`, not
-`on_session_end` (which fires every conversation turn). Installation is idempotent.
+The handler and worker live as long as the process. They are torn down at `atexit`, not `on_session_end`, which fires every turn. Installing twice is harmless.
 
 Tests: `tests/plugins/home_log_router/`.
 
 ### Known tradeoff
 
-The logger-name allowlist is coupled to internal module names, so an upstream
-rename of those loggers would silently stop forwarding. A deeper fix (a
-structured "operational alert" emit routed through `get_home_channel()`) would be
-rename-proof but requires core changes, which this thin-patch plugin deliberately
-avoids. The allowlist is env-overridable as a mitigation.
+The logger list uses internal module names. If upstream renames one of those loggers, its records stop being forwarded, with no error.
+A structured alert sent through `get_home_channel()` would survive renames, but needs core changes this plugin avoids.
+You can update the list with `HERMES_HOME_LOG_LOGGERS`.
