@@ -28,7 +28,7 @@ from plugins.platforms.discord.adapter import (
     _resolve_exec_approval_admin_gate,
 )
 
-JUNIPER = "1519531373352849518"
+JUNIPER = "800000000000000001"
 GUILD = "900000000000000001"
 ROLE_APPROVER = "700000000000000001"
 ROLE_OTHER = "700000000000000002"
