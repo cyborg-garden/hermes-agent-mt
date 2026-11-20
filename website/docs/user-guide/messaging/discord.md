@@ -709,7 +709,7 @@ gateway:
   platforms:
     discord:
       extra:
-        allow_admin_from: "1519531373352849518, @alice, bob"
+        allow_admin_from: "123456789012345678, @alice, bob"
         group_allow_admin_from:
           - "@alice"
 ```
@@ -733,7 +733,7 @@ gateway:
     discord:
       extra:
         require_admin_for_exec_approval: true
-        allow_admin_from: "1519531373352849518"
+        allow_admin_from: "123456789012345678"
         # Role IDs or role names. Anyone with one of these roles can approve.
         approver_roles:
           - "operator"

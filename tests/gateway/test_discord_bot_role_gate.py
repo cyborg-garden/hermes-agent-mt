@@ -27,10 +27,10 @@ from tests.gateway.test_discord_connect import FakeBot
 import plugins.platforms.discord.adapter as discord_platform
 from plugins.platforms.discord.adapter import DiscordAdapter
 
-GUILD_ID = 1531068097719570432
+GUILD_ID = 1500000000000000001
 TRUSTED_ROLE = 1600000000000000001
 OTHER_ROLE = 1600000000000000002
-FLEET_BOT_ID = 1531117849433866412
+FLEET_BOT_ID = 1700000000000000001
 STRANGER_BOT_ID = 1700000000000000009
 HUMAN_ID = 100200300
 SELF_ID = 999
