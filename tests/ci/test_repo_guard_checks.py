@@ -126,6 +126,17 @@ def test_only_unmapped_human_emails_fail_the_contributor_check(repo, step):
     assert status["results"][0]["detail"] == "zoe@example.net (Zoë New)"
 
 
+def test_a_hashed_email_passes_the_contributor_check_without_being_published(repo, step):
+    # Fork-only allowance: the tree holds sha256(casefolded email), never the address.
+    import hashlib
+
+    digest = hashlib.sha256(b"private@z.org").hexdigest()
+    commit(repo, {f"contributors/email-hashes/{digest}": "carol\n"})
+    commit(repo, {"h": "1"}, author=("Carol", "Private@Z.org"))
+    assert step.run(repo, "check_contributor_emails.py").returncode == 0
+    assert step.artifact("contributor-check") == []
+
+
 def test_supply_chain_scan_flags_payload_lines_but_not_lockfiles(repo, step):
     base = git(repo, "rev-parse", "HEAD").strip()
     # Built from pieces: the scanner reads this PR's own added lines, so no line here may match it.
