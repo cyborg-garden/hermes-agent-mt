@@ -2828,6 +2828,17 @@ def _normalize_empty_agent_response(
         if agent_result.get("partial"):
             err = agent_result.get("error", "processing incomplete")
             return f"⚠️ Processing stopped: {str(err)[:200]}. Try again."
+        if str(agent_result.get("turn_exit_reason") or "").startswith(
+            ("max_iterations_reached", "budget_exhausted")
+        ):
+            # The step limit ended the turn and even the summary came back
+            # empty. Say that plainly instead of the generic "no response".
+            from agent.chat_completion_helpers import _last_tool_name
+
+            last_tool = _last_tool_name(agent_result.get("messages") or [])
+            return "I ran out of steps before finishing." + (
+                f" Last thing I was doing: {last_tool}." if last_tool else ""
+            )
         return (
             "⚠️ Processing completed but no response was generated. "
             "This may be a transient error — try sending your message again."

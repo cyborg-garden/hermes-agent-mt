@@ -31,7 +31,11 @@ from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.conversation_compression import REBUILD_PROMPT_MARK, conversation_history_after_compression
 from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
-from agent.iteration_budget import IterationBudget
+from agent.iteration_budget import (
+    IterationBudget,
+    should_warn_step_limit,
+    step_limit_warning_text,
+)
 from agent.turn_context import build_turn_context
 from agent.turn_retry_state import TurnRetryState
 from agent.memory_manager import build_memory_context_block
@@ -616,6 +620,41 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
     return sp
 
 
+def _maybe_append_step_limit_warning(agent, messages) -> bool:
+    """Tell the model, once per turn, that most of its step budget is gone.
+
+    The note is appended to the newest tool result instead of a new
+    message: a user row straight after a tool row is rejected by several
+    APIs, and the newest row is not yet part of any cached prompt prefix,
+    so nothing already cached is rewritten.  ``agent._step_limit_warned``
+    is set even if a later compression summarises the note away, so it
+    never fires twice in one turn.
+    """
+    if not getattr(agent, "_step_limit_warning", False):
+        return False
+    if getattr(agent, "_step_limit_warned", False):
+        return False
+    budget = getattr(agent, "iteration_budget", None)
+    if budget is None:
+        return False
+    used, total = budget.used, budget.max_total
+    if not should_warn_step_limit(used, total, getattr(agent, "_step_limit_warning_at", None)):
+        return False
+    if not messages or not isinstance(messages[-1], dict) or messages[-1].get("role") != "tool":
+        return False
+    note = step_limit_warning_text(used, total)
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, list):
+        last["content"] = list(content) + [{"type": "text", "text": note}]
+    else:
+        text = "" if content is None else str(content)
+        last["content"] = f"{text}\n\n{note}" if text else note
+    agent._step_limit_warned = True
+    logger.info("Step-limit wrap-up note sent at %d/%d steps", used, total)
+    return True
+
+
 def run_conversation(
     agent,
     user_message: Any,
@@ -754,7 +793,10 @@ def run_conversation(
             should_review_memory=_should_review_memory,
         )
 
-    while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
+    # The step-limit wrap-up note fires at most once per turn.
+    agent._step_limit_warned = False
+
+    while api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0:
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot
         agent._checkpoint_mgr.new_turn()
 
@@ -770,12 +812,9 @@ def run_conversation(
         agent._api_call_count = api_call_count
         agent._touch_activity(f"starting API call #{api_call_count}")
 
-        # Grace call: the budget is exhausted but we gave the model one
-        # more chance.  Consume the grace flag so the loop exits after
-        # this iteration regardless of outcome.
-        if agent._budget_grace_call:
-            agent._budget_grace_call = False
-        elif not agent.iteration_budget.consume():
+        # At exhaustion the loop stops here; the turn finalizer then makes
+        # the toolless summary call (handle_max_iterations).
+        if not agent.iteration_budget.consume():
             _turn_exit_reason = "budget_exhausted"
             if not agent.quiet_mode:
                 agent._safe_print(f"\n⚠️  Iteration budget exhausted ({agent.iteration_budget.used}/{agent.iteration_budget.max_total} iterations used)")
@@ -5215,6 +5254,10 @@ def run_conversation(
                         agent, messages
                     )
                 
+                # Wrap-up note: once per turn, after compression so the note
+                # sits on the uncompressed tail the next request sends.
+                _maybe_append_step_limit_warning(agent, messages)
+
                 # Save session log incrementally (so progress is visible even if interrupted)
                 agent._session_messages = messages
                 
