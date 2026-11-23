@@ -32,6 +32,20 @@
   },
   "deterministic": {
     "enabled": true,
-    "allow_substrings": []
+    "$comment_allow": "Placeholder strings from upstream-translated docs (website/i18n/zh-Hans). The sanitize workflow skips upstream-sync-* branches to avoid these false positives, but the fork's dev/{author}/upstream-sync-* naming prevented the skip from firing. These are documentation examples — not real credentials or infrastructure IPs.",
+    "allow_substrings": [
+      "xoxb-your-bot-token-here",
+      "xoxb-workspace1-token",
+      "xoxb-workspace2-token",
+      "xoxb-workspace3-token",
+      "xoxb-workspace-token-here",
+      "token-a",
+      "token-b",
+      "192.168.1.100",
+      "192.168.1.10",
+      "172.17.0.1",
+      "172.29.192.1",
+      "10.0.1.50"
+    ]
   }
 }
