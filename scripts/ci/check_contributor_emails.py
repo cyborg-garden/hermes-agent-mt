@@ -83,11 +83,14 @@ def is_mapped(email: str, legacy_map: str) -> bool:
         return True
     if GITHUB_NOREPLY.search(email):
         return True
-    if Path("contributors/emails", email).is_file():
+    # Case-insensitive: the directory cannot hold two case variants of one email.
+    folded = email.casefold()
+    emails_dir = Path("contributors/emails")
+    if emails_dir.is_dir() and any(p.name.casefold() == folded and p.is_file() for p in emails_dir.iterdir()):
         return True
     if (HASHED_DIR / email_hash(email)).is_file():
         return True
-    return f'"{email}"' in legacy_map
+    return f'"{folded}"' in legacy_map.casefold()
 
 
 def author_name(email: str) -> str:
