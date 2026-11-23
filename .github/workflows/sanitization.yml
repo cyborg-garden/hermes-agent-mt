@@ -27,9 +27,7 @@ permissions:
 
 jobs:
   sanitize:
-    # Also skip dev/*/upstream-sync-* — the fork prefixes branches with dev/{author}/
-    # so startsWith alone does not match; the intent is the same (skip upstream syncs).
-    if: ${{ !startsWith(github.head_ref, 'upstream-sync-') && !contains(github.head_ref, '/upstream-sync-') }}
+    if: ${{ !startsWith(github.head_ref, 'upstream-sync-') }}
     uses: cyborg-garden/swarm-map/.github/workflows/sanitization-gate.yml@sanitization-gate-v1.1.0
     with:
       mode: ${{ github.event_name == 'pull_request' && 'pr' || 'full-tree' }}
