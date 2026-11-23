@@ -5,7 +5,7 @@ volume as the store's directory while processes name the profile home that holds
 """
 import pytest
 
-from hermes_state_holders import _argv_scoped_to_other_home
+from persistence.sqlite._state.holders import _argv_scoped_to_other_home
 
 
 @pytest.fixture
