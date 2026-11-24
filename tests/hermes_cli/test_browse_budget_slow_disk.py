@@ -29,8 +29,8 @@ def test_browse_on_a_slower_disk_still_gives_up_inside_its_budget(tmp_path):
     # (200 ms a step) still outlast the gateway's boot wait on Linux; that is not fixed here.
     step_seconds = 0.03
     import gateway.run_bootstrap as bootstrap
-    import hermes_state_reconcile as reconcile
     from gateway.runtime_ownership import ProfileOwnership
+    from persistence.core.admin import BROWSE_RECONCILE_BUDGET_S
 
     assert "time.sleep(0.01)" in _SLOW_BROWSE
     slower = _SLOW_BROWSE.replace("time.sleep(0.01)", f"time.sleep({step_seconds})")
@@ -51,7 +51,7 @@ def test_browse_on_a_slower_disk_still_gives_up_inside_its_budget(tmp_path):
     result = next(line for line in out.splitlines() if line.startswith("RESULT"))
     _, status, elapsed, *detail = result.split(" ", 3)
     assert status == "503", out
-    assert float(elapsed) < reconcile.BROWSE_RECONCILE_BUDGET_S + 2, out
+    assert float(elapsed) < BROWSE_RECONCILE_BUDGET_S + 2, out
     detail = " ".join(detail)
     assert "nothing was changed" in detail, detail
     assert "`hermes -p scribe sessions repair`" in detail and "gateway" not in detail.lower()
