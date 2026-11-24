@@ -173,7 +173,6 @@ def test_session_rows_keep_their_profile_through_a_linked_store(tmp_path, monkey
 
 def _linked_home(tmp_path, monkeypatch):
     """A profile home whose state.db is a dangling link onto a volume, as state-init leaves it."""
-    import hermes_state
     home = tmp_path / '.hermes'
     home.mkdir(mode=0o700)
     volume = tmp_path / 'state-volume'
@@ -181,7 +180,6 @@ def _linked_home(tmp_path, monkeypatch):
     (home / 'state.db').symlink_to(volume / 'state.db')
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     monkeypatch.setenv('HERMES_HOME', str(home))
-    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
     return home, volume
 
 
@@ -219,6 +217,7 @@ async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypat
     from gateway.run import GatewayRunner
     from gateway.run_runtime import initialize_gateway_runtime
     from gateway.runtime_ownership import process_ownership
+    from gateway.session_persistence import authority_persistence
     home, volume = _linked_home(tmp_path, monkeypatch)
     (home / 'config.yaml').write_text('{}')
     process_ownership.reserve([home])
@@ -228,13 +227,15 @@ async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypat
         await initialize_gateway_runtime(runner)
         authority = runner.session_authority
         assert authority is not None
-        assert Path(authority.db.db_path).parent == volume.resolve()
-        assert store_home(authority.db) == home.resolve()
+        assert authority_persistence(authority).scope.profile_dir == volume.resolve()
+        assert Path(authority.profile_id) == home.resolve()
         from gateway.session_authorities import authority_for_home
         assert authority_for_home(runner, home) is authority
     finally:
-        for held in list(getattr(runner, 'session_authorities', []) or []):
-            held.db.close()
+        for held in list(getattr(runner, 'session_authorities', None) or []):
+            ref = getattr(held, 'store_reference', None)
+            if ref is not None:
+                ref.close()
         process_ownership.release(home)
 
 

@@ -447,7 +447,6 @@ def _(rid, params: dict, persistence) -> dict:
         # Over-fetch: per-source filtering + tip merging must not leave us short. ``include_hidden`` is for
         # surfaces that OWN hidden sessions (Bots pane, pickers).
         from hermes_cli.session_listing import show_subagent_sessions
-        from hermes_state_home import store_dir
 
         # ``sessions.show_subagents`` (the store's own profile config) re-admits delegate runs (#97202).
         include_subagents = show_subagent_sessions(persistence.scope.profile_dir)

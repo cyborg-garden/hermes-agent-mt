@@ -18,8 +18,6 @@ from pathlib import Path
 import threading
 import uuid
 
-from gateway.session_store_home import store_belongs_to_profile
-
 logger = logging.getLogger(__name__)
 
 
