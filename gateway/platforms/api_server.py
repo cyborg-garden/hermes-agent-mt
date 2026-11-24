@@ -115,7 +115,8 @@ from gateway.platforms import api_server_room_grants as _room_grants
 from gateway.platforms import api_server_runs as _api_runs
 from gateway.platforms.api_server_openai_routes import OpenAICompatRoutesMixin
 from gateway.platforms.api_server_memory_sessions import ApiServerMemorySessions
-from gateway.platforms.api_server_bot_chat import reset_local_title_owner, store_dir
+from gateway.platforms.api_server_bot_chat import reset_local_title_owner
+from gateway.session_store_home import store_dir
 from gateway.platforms.base import (
     MEDIA_TAG_CLEANUP_RE, BasePlatformAdapter, SendResult, _terminal_sentinel_start, is_network_accessible,
     validate_media_delivery_path)

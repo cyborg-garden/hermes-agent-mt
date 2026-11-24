@@ -60,7 +60,7 @@ class CanonicalHostedRoomService(HostedControls, HostedRoomService):
     @property
     def root(self):
         # The owning profile's home: the store's entry may link onto a state volume.
-        return store_dir(self.authority.db)
+        return authority_persistence(self.authority).scope.profile_dir
 
     def _make_rpc(self, server):
         # Member-specific canonical transports retain exact durable history. They

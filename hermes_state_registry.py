@@ -248,9 +248,9 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
     but stays alive for its holders, and a fresh one is opened in its place. Raises
     whatever ``SessionDB.__init__`` raises; on a replacement-open failure the registry
     holds NO entry for the path."""
-    from hermes_state import _default_db_path
+    from persistence_assembly import profile_scope, store_location
 
-    raw_path = Path(db_path) if db_path is not None else Path(_default_db_path())
+    raw_path = Path(db_path) if db_path is not None else store_location(profile_scope())
     try:
         path = raw_path.resolve()
     except (OSError, RuntimeError):
