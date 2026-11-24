@@ -32,7 +32,7 @@
   },
   "deterministic": {
     "enabled": true,
-    "$comment_allow": "Placeholder strings from upstream-translated docs (website/i18n/zh-Hans). The sanitize workflow skips upstream-sync-* branches to avoid these false positives, but the fork's dev/{author}/upstream-sync-* naming prevented the skip from firing. These are documentation examples — not real credentials or infrastructure IPs.",
+    "$comment_allow": "Fork-permanent exception. Upstream-translated docs (website/i18n/zh-Hans) contain these placeholder Slack tokens and RFC-1918 addresses as documentation examples — not real credentials or infrastructure. The sanitize workflow branch-skip pattern covers 'upstream-sync-*' branches but the fork's 'dev/{author}/upstream-sync-*' naming escaped it; landing the proper fix (!contains pattern in sanitization.yml) requires a GitHub token with 'workflow' scope and must be done by a human with that token. These strings are upstream's published documentation examples and carry no fork-sensitive information.",
     "allow_substrings": [
       "xoxb-your-bot-token-here",
       "xoxb-workspace1-token",

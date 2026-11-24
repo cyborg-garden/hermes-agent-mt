@@ -499,8 +499,9 @@ def bridge_core_env_settings(yaml_cfg: dict, platforms_data: dict) -> None:
     signal_rm = signal_cfg.get("require_mention", yaml_cfg.get("require_mention"))
     if signal_rm is not None:
         sig_plat = platforms_data.setdefault(Platform.SIGNAL.value, {})
-        sig_plat.setdefault("extra", {}).setdefault("require_mention", signal_cfg["require_mention"])
-        set_env("SIGNAL_REQUIRE_MENTION", str(signal_cfg["require_mention"]).lower())
+        sig_plat.setdefault("extra", {}).setdefault("require_mention", signal_rm)
+        if not skip_env_bridge and not os.getenv("SIGNAL_REQUIRE_MENTION"):
+            os.environ["SIGNAL_REQUIRE_MENTION"] = str(signal_rm).lower()
 
 
 # mt (#173): per-platform admin keys that operators sometimes put under the top-level ``approvals:``
