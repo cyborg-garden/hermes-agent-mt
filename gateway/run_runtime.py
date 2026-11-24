@@ -49,9 +49,14 @@ async def _build_profile_authority(runner, name, home, *, register):
             raise RuntimeError(_store_open_failure(runner, home))
         from persistence_assembly import open_persistence, store_location
         location = store_location(persistence.scope)
-        owner = (persistence.scope.profile_dir if location is None
-                 else (await asyncio.to_thread(Path(location).resolve)).parent)
-        if owner != home:
+        # For a symlinked store (swarm-map #273) location is the volume file; compare
+        # resolved paths: both home/state.db and location resolve to the same target.
+        if location is not None:
+            loc_res = await asyncio.to_thread(lambda: Path(location).resolve(strict=False))
+            ent_res = await asyncio.to_thread(lambda: (home / 'state.db').resolve(strict=False))
+            if loc_res != ent_res:
+                raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
+        elif persistence.scope.profile_dir != home:
             raise RuntimeError(f'session authority database does not belong to the reserved profile {home}')
         registry.add(home, None, name=name)
         # The authority reads and writes through its own reference on its store, held until it retires: the stop

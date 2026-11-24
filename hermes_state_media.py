@@ -1,4 +1,8 @@
-"""Durable media retirement candidates survive transcript deletion and failed cleanup."""
+"""Durable media retirement candidates survive transcript deletion and failed cleanup.
+
+Fork divergence: upstream deleted this file in v0.23.3 (persistence/sqlite/ refactor). The fork
+preserves it because hermes_state_sessions and gateway tests import collect_retired_media and
+SPILLOVER_PREFIX. See FORK-NOTICE.md."""
 import hashlib
 import json
 

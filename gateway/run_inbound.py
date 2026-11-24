@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- upstream v0.23.3 added media-preparation and durable-turn-marker helpers; growth offset pending a folder split
 """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner.
 
 Split out of ``gateway/run.py``; bound onto ``GatewayRunner`` via the MRO.

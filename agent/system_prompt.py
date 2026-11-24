@@ -261,8 +261,10 @@ def _agent_home(agent: Any) -> Optional[Path]:
         store = agent_interface(agent)
         if store is not None:
             return store.scope.profile_dir
-        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
-        return Path(db_path).parent if db_path else None
+        from hermes_state_home import store_dir
+        db = getattr(agent, "_session_db", None)
+        # The directory of the store's entry: state.db may link onto a state volume.
+        return store_dir(db) if getattr(db, "db_path", None) else None
     except Exception:
         return None
 

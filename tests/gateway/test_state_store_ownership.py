@@ -132,8 +132,14 @@ def test_cron_owner_is_found_through_a_symlinked_store(tmp_path):
     link = tmp_path / 'profile-link'
     link.symlink_to(home, target_is_directory=True)
 
+    def _authority(db_path):
+        # scope.profile_dir is the unresolved parent of db_path, as the new persistence layer sets it.
+        # bind_owner resolves it to the canonical home (fork symlink-awareness: #swarm-map/273).
+        profile_dir = Path(db_path).parent
+        return SimpleNamespace(persistence=SimpleNamespace(scope=SimpleNamespace(profile_dir=profile_dir)))
+
     async def run(db_path):
-        authority = SimpleNamespace(db=SimpleNamespace(db_path=str(db_path)))
+        authority = _authority(db_path)
         session_cron.bind_owner(authority)
         try:
             return session_cron._owners.get(home) is not None

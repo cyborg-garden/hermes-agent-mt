@@ -203,6 +203,8 @@ class _SessionDB:
     def __init__(self, db_path: "Optional[Path]" = None, read_only: "bool" = False) -> None:
         from persistence_assembly import profile_scope
 
+        # Fork compat: hermes_state_registry and fork tests use .db_path to reopen.
+        self.db_path: "Optional[_Path]" = _Path(db_path) if db_path is not None else None
         self._target: Any
         self._stack: Optional[_ExitStack]
         self._store: Any

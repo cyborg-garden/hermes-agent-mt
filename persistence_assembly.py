@@ -114,10 +114,20 @@ def profile_scope(profile: Optional[str] = None, *, home: Optional[Path] = None)
     else:
         target = get_hermes_home()
     canonical = target.expanduser().resolve(strict=False)
+    # Profile name derives from the entry dir so secondary names survive a volume link.
     name = profile_name_for_home(canonical)
-    if name is not None and name != "default" and (named_profile_home(canonical) or canonical) == canonical:
-        return ProfileScope(profile_dir=canonical, name=name)
-    return ProfileScope(profile_dir=canonical, name="default")
+    label = name if (name is not None and name != "default" and (named_profile_home(canonical) or canonical) == canonical) else "default"
+    # Follow a state.db symlink: fork's state-volume layout links state.db onto a volume
+    # so all openers must share one backend cache key (swarm-map #273).
+    _sdb = canonical / "state.db"
+    try:
+        if _sdb.is_symlink():
+            _vol = _sdb.resolve(strict=False).parent
+            if _vol != canonical:
+                canonical = _vol
+    except OSError:
+        pass
+    return ProfileScope(profile_dir=canonical, name=label)
 
 
 def store_owner_name(profile_dir: Path) -> Optional[str]:

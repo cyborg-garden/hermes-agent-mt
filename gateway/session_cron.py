@@ -21,13 +21,22 @@ _execution: ContextVar[tuple | None] = ContextVar('cron_owner_execution', defaul
 _owners = {}
 
 
+def _cron_owner_home(authority):
+    """Canonical profile home for *authority*: resolve the scope's profile_dir so that
+    a symlinked store (state-volume layout) maps to the same key as a plain one (fork #swarm-map/273)."""
+    profile_dir = authority_persistence(authority).scope.profile_dir
+    try:
+        return Path(profile_dir).resolve()
+    except OSError:
+        return Path(profile_dir)
+
+
 def bind_owner(authority):
-    home = authority_persistence(authority).scope.profile_dir
-    _owners[home] = (os.getpid(), authority, asyncio.get_running_loop())
+    _owners[_cron_owner_home(authority)] = (os.getpid(), authority, asyncio.get_running_loop())
 
 
 def unbind_owner(authority):
-    home = authority_persistence(authority).scope.profile_dir
+    home = _cron_owner_home(authority)
     bound = _owners.get(home)
     if bound is not None and bound[1] is authority:
         del _owners[home]

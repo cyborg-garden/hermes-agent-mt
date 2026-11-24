@@ -1,5 +1,10 @@
 """Shared constants and helpers for the SessionDB family of modules.  Lives outside hermes_state so
-the mixin modules can import it without a cycle."""
+the mixin modules can import it without a cycle.
+
+Fork divergence: upstream shrank this file to a ~17-line title-constant stub in v0.23.3 as part of the
+persistence/sqlite/ refactor. The fork preserves the full module because hermes_state_sessions,
+hermes_state_registry, hermes_state_compression, and hermes_state_media still import its helpers
+(session-event helpers, SQL fragments, stat_db_file_identity, etc.). See FORK-NOTICE.md."""
 
 import contextlib
 import errno

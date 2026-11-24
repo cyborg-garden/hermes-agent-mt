@@ -1,5 +1,11 @@
 """Process-wide shared SessionDB registry.
 
+Fork divergence: upstream shrank this file to a ~37-line stub in v0.23.3 (persistence/sqlite/ refactor).
+The fork preserves the full shared-registry because hermes_state_home, gateway tests, and the
+persistence entry-path tests still depend on acquire/release and the generation lifecycle.
+Callers use hermes_state.SessionDB (the upstream shim) which now exposes db_path for compat.
+See FORK-NOTICE.md.
+
 Each bare ``SessionDB()`` mints its own writer connection, lock, close-time WAL checkpoint
 and token writer thread, and one connection's close-time checkpoint can race another's
 growth (lost/reordered-page-write corruption). This module owns that boundary: one shared

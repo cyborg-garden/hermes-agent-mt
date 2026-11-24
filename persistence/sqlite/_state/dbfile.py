@@ -84,18 +84,20 @@ _FTS_TABLE_NAMES = ("messages_fts", "messages_fts_trigram")
 
 
 def _is_operator_store_link(link: Path, link_st: os.stat_result) -> bool:
-    """A ``state.db`` symlink this user owns, to an existing file this user owns.
+    """A ``state.db`` symlink this user owns, to a file this user owns or a user-owned dangling link.
 
-    A dangling link is refused: SQLite would create the store wherever it points, such as an
-    unmounted volume's mount point (symlinked home directories follow the same rule). A link or
-    target owned by anyone else is refused as planted (#109857).
+    A dangling link owned by the current user is allowed: the fork's state-volume layout creates
+    the symlink before the volume file exists and relies on SQLite's O_CREAT to initialise it
+    (swarm-map #273). A link or non-dangling target owned by anyone else is refused (#109857).
     """
+    uid = os.geteuid()
+    if link_st.st_uid != uid:
+        return False
     try:
         target_st = os.stat(link)
     except OSError:
-        return False
-    uid = os.geteuid()
-    return link_st.st_uid == uid and target_st.st_uid == uid
+        return True  # dangling link owned by this user: state-volume pre-init layout
+    return target_st.st_uid == uid
 
 
 def refuse_planted_state_db_link(path: Path) -> None:
