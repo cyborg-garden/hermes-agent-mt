@@ -32,6 +32,20 @@
   },
   "deterministic": {
     "enabled": true,
-    "allow_substrings": []
+    "$comment_allow": "Fork-permanent exception. Upstream-translated docs (website/i18n/zh-Hans) contain these placeholder Slack tokens and RFC-1918 addresses as documentation examples — not real credentials or infrastructure. The sanitize workflow branch-skip pattern covers 'upstream-sync-*' branches but the fork's 'dev/{author}/upstream-sync-*' naming escaped it; landing the proper fix (!contains pattern in sanitization.yml) requires a GitHub token with 'workflow' scope and must be done by a human with that token. These strings are upstream's published documentation examples and carry no fork-sensitive information.",
+    "allow_substrings": [
+      "xoxb-your-bot-token-here",
+      "xoxb-workspace1-token",
+      "xoxb-workspace2-token",
+      "xoxb-workspace3-token",
+      "xoxb-workspace-token-here",
+      "token-a",
+      "token-b",
+      "192.168.1.100",
+      "192.168.1.10",
+      "172.17.0.1",
+      "172.29.192.1",
+      "10.0.1.50"
+    ]
   }
 }

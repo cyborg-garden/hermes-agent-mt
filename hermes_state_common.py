@@ -1,5 +1,10 @@
 """Shared constants and helpers for the SessionDB family of modules.  Lives outside hermes_state so
-the mixin modules can import it without a cycle."""
+the mixin modules can import it without a cycle.
+
+Fork divergence: upstream shrank this file to a ~17-line title-constant stub in v0.23.3 as part of the
+persistence/sqlite/ refactor. The fork preserves the full module because hermes_state_sessions,
+hermes_state_registry, hermes_state_compression, and hermes_state_media still import its helpers
+(session-event helpers, SQL fragments, stat_db_file_identity, etc.). See FORK-NOTICE.md."""
 
 import contextlib
 import errno
@@ -13,7 +18,8 @@ from typing import Any
 from hermes_cli.timefmt import EPOCH_MAX, EPOCH_MIN
 from hermes_state_keys import CRON_PRINCIPAL_ID
 from hermes_state_pidns import persistent_record_pidns_checkable, pid_namespace_id
-from agent.skill_commands import AUTO_LOAD_SCAFFOLD_SQL_LIKE, SKILL_EXCERPT_JOINT, SKILL_SCAFFOLD_SQL_LIKE, describe_skill_invocation
+from agent.skill_commands import AUTO_LOAD_SCAFFOLD_SQL_LIKE, SKILL_SCAFFOLD_SQL_LIKE
+from session_rules.turns import SKILL_EXCERPT_JOINT, describe_skill_invocation
 from agent.context_compressor import (LEGACY_SUMMARY_PREFIX, SUMMARY_PREFIX, _MERGED_PRIOR_CONTEXT_HEADER,
     _MERGED_SUMMARY_DELIMITER, _SUMMARY_END_MARKER)
 

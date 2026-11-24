@@ -250,7 +250,7 @@ async def test_legacy_adoption_sees_a_live_owner_registered_in_the_profile_home(
     from gateway.session_contract import SessionActor
     from gateway.session_local_title import resolve_titled_session
     from hermes_cli.active_sessions import release_active_session, try_acquire_active_session
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
 
     home, volume = _linked_home(tmp_path, monkeypatch)
     monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
@@ -266,7 +266,7 @@ async def test_legacy_adoption_sees_a_live_owner_registered_in_the_profile_home(
         lease, refusal = try_acquire_active_session(session_id='old-live', surface='cli', registry_home=home.resolve(), config={})
         assert lease is not None, refusal
         try:
-            with pytest.raises(RuntimeStoreError, match='runtime_coordination_required'):
+            with pytest.raises(AuthorityRefusal, match='runtime_coordination_required'):
                 resolve_titled_session(authority, native, 'old-live')
         finally:
             release_active_session(lease)

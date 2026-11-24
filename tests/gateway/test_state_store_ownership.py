@@ -132,8 +132,14 @@ def test_cron_owner_is_found_through_a_symlinked_store(tmp_path):
     link = tmp_path / 'profile-link'
     link.symlink_to(home, target_is_directory=True)
 
+    def _authority(db_path):
+        # scope.profile_dir is the unresolved parent of db_path, as the new persistence layer sets it.
+        # bind_owner resolves it to the canonical home (fork symlink-awareness: #swarm-map/273).
+        profile_dir = Path(db_path).parent
+        return SimpleNamespace(persistence=SimpleNamespace(scope=SimpleNamespace(profile_dir=profile_dir)))
+
     async def run(db_path):
-        authority = SimpleNamespace(db=SimpleNamespace(db_path=str(db_path)))
+        authority = _authority(db_path)
         session_cron.bind_owner(authority)
         try:
             return session_cron._owners.get(home) is not None
@@ -173,7 +179,6 @@ def test_session_rows_keep_their_profile_through_a_linked_store(tmp_path, monkey
 
 def _linked_home(tmp_path, monkeypatch):
     """A profile home whose state.db is a dangling link onto a volume, as state-init leaves it."""
-    import hermes_state
     home = tmp_path / '.hermes'
     home.mkdir(mode=0o700)
     volume = tmp_path / 'state-volume'
@@ -181,7 +186,6 @@ def _linked_home(tmp_path, monkeypatch):
     (home / 'state.db').symlink_to(volume / 'state.db')
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     monkeypatch.setenv('HERMES_HOME', str(home))
-    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
     return home, volume
 
 
@@ -219,6 +223,7 @@ async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypat
     from gateway.run import GatewayRunner
     from gateway.run_runtime import initialize_gateway_runtime
     from gateway.runtime_ownership import process_ownership
+    from gateway.session_persistence import authority_persistence
     home, volume = _linked_home(tmp_path, monkeypatch)
     (home / 'config.yaml').write_text('{}')
     process_ownership.reserve([home])
@@ -228,13 +233,15 @@ async def test_gateway_boots_on_a_store_linked_onto_a_volume(tmp_path, monkeypat
         await initialize_gateway_runtime(runner)
         authority = runner.session_authority
         assert authority is not None
-        assert Path(authority.db.db_path).parent == volume.resolve()
-        assert store_home(authority.db) == home.resolve()
+        assert authority_persistence(authority).scope.profile_dir == volume.resolve()
+        assert Path(authority.profile_id) == home.resolve()
         from gateway.session_authorities import authority_for_home
         assert authority_for_home(runner, home) is authority
     finally:
-        for held in list(getattr(runner, 'session_authorities', []) or []):
-            held.db.close()
+        for held in list(getattr(runner, 'session_authorities', None) or []):
+            ref = getattr(held, 'store_reference', None)
+            if ref is not None:
+                ref.close()
         process_ownership.release(home)
 
 

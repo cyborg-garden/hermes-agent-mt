@@ -581,22 +581,29 @@ class SignalAdapter(BasePlatformAdapter):
         quote_data = data_message.get("quote") or {}
         reply_to_id = str(quote_data.get("id")) if quote_data.get("id") else None
         reply_to_author = self._extract_quote_author(quote_data)
+        source = self.build_source(
+            chat_id=chat_id, chat_name=group_info.get("groupName") if group_info else sender_name,
+            chat_type="group" if is_group else "dm", user_id=sender,
+            user_name=sender_name or sender, user_id_alt=sender_uuid if sender_uuid else None,
+            chat_id_alt=group_id if is_group else None)
         attachments_data = data_message.get("attachments", [])
         media_urls, media_types = [], []
+        # The fetch copies a sender-chosen file into Hermes' cache (AAC is remuxed through ffmpeg): only the
+        # gateway's explicit True permits it (dm_allow_from misses pairing and global allowlists). signal-cli
+        # has already stored it unless its daemon runs with --ignore-attachments. The text still dispatches so
+        # the runner applies denial/pairing.
         if attachments_data and not getattr(self, "ignore_attachments", False):
-            media_urls, media_types = await self._collect_attachments(attachments_data)
+            # source.is_bot (bot_users) so a peer bot gets the gateway's bot verdict (loop-guard cooldown).
+            if self._is_sender_authorized(sender, source.chat_type, chat_id, is_bot=source.is_bot) is True:
+                media_urls, media_types = await self._collect_attachments(attachments_data)
+            else:
+                logger.debug("Signal: skipping attachments for unauthorized sender %s", redact_phone(sender))
         # Skip contentless envelopes (profile key updates, empty messages) that still carry a
         # dataMessage wrapper — otherwise msg='' triggers a full agent turn.
         if (not text or not text.strip()) and not media_urls:
             logger.debug("Signal: skipping contentless envelope from %s (%d attachments)", redact_phone(sender),
                          len(media_urls) if media_urls else 0)
             return
-        source = self.build_source(
-            chat_id=chat_id,
-            chat_name=(group_info.get("groupName") if isinstance(group_info, dict) else None) or sender_name,
-            chat_type="group" if is_group else "dm", user_id=sender,
-            user_name=sender_name or sender, user_id_alt=sender_uuid if sender_uuid else None,
-            chat_id_alt=group_id if is_group else None)
         # First matching MIME prefix wins; everything else (application/*, text/*, unknown) is a DOCUMENT
         # so run.py's document-context injection surfaces the cached path.
         msg_type = MessageType.TEXT if not media_types else next(
@@ -1689,37 +1696,42 @@ class SignalAdapter(BasePlatformAdapter):
         return (raw["sender"], raw["timestamp_ms"]) if ok else None
 
     def _reactions_enabled(self, event: MessageEvent = None) -> bool:
-        """SIGNAL_REACTIONS env gate, then the DM allowlist: reactions fire before run.py's auth gate,
-        so an unauthorized contact's 👀 would otherwise reveal a listening bot."""
+        """SIGNAL_REACTIONS env gate, then the DM allowlist and the gateway's own authorization check:
+        reactions fire before run.py's auth gate, so an unauthorized contact's 👀 would otherwise reveal
+        a listening bot. The default "*" allowlist defers to GATEWAY_ALLOWED_USERS / pairing."""
         if str(_sig_secret("SIGNAL_REACTIONS", "true")).lower() in {"false", "0", "no"}:
             return False
         source = getattr(event, "source", None) if event is not None else None
         sender = getattr(source, "user_id", None)
-        if not (sender and "*" not in self.dm_allow_from and sender not in self.dm_allow_from):
+        if not sender:
             return True
-        # Sealed-sender messages may carry the UUID as user_id_alt — match it against the allowlist
-        # (incl. resolved UUIDs) before denying. "approved = admin": the DM allowlist is the approved set.
-        sender_uuid = getattr(source, "user_id_alt", None)
-        return bool(sender_uuid and (sender_uuid in self.dm_allow_from
-                                     or sender_uuid in getattr(self, "dm_allow_from_uuids", set())))
+        if "*" not in self.dm_allow_from and sender not in self.dm_allow_from:
+            # Sealed-sender messages may carry the UUID as user_id_alt — match it against the allowlist
+            # (incl. resolved UUIDs) before denying. "approved = admin": the DM allowlist is the approved set.
+            sender_uuid = getattr(source, "user_id_alt", None)
+            if not (sender_uuid and (sender_uuid in self.dm_allow_from
+                                     or sender_uuid in getattr(self, "dm_allow_from_uuids", set()))):
+                return False
+        return self._is_sender_authorized(sender, source.chat_type, source.chat_id,
+                                          is_bot=bool(getattr(source, "is_bot", False))) is not False
 
     async def on_processing_start(self, event: MessageEvent) -> None:
         """React with 👀 when processing begins (never for observe-only group messages)."""
         if getattr(event, "observe_only", False):
             return
         if self._reactions_enabled(event) and (target := self._extract_reaction_target(event)):
-            await self.send_reaction(event.source.chat_id, "👀", *target)
+            event._signal_eyes_sent = await self.send_reaction(event.source.chat_id, "👀", *target)
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
-        """Swap 👀 for ✅/❌; on CANCELLED the 👀 stays to keep reflecting "in progress" (matches Telegram)."""
-        if getattr(event, "observe_only", False):
-            return
-        if outcome == ProcessingOutcome.CANCELLED or not self._reactions_enabled(event):
+        """Swap 👀 for ✅/❌; on CANCELLED the 👀 stays to keep reflecting "in progress" (matches Telegram).
+        Keyed on the 👀 actually sent: the gateway check can flip mid-turn (the message that trips a bot's
+        loop-guard budget passes it at start), so re-asking it here would strand that 👀."""
+        if outcome == ProcessingOutcome.CANCELLED or not getattr(event, "_signal_eyes_sent", False):
             return
         if not (target := self._extract_reaction_target(event)):
             return
         await self.remove_reaction(event.source.chat_id, *target)
-        if emoji := _OUTCOME_REACTION.get(outcome):
+        if self._reactions_enabled(event) and (emoji := _OUTCOME_REACTION.get(outcome)):
             await self.send_reaction(event.source.chat_id, emoji, *target)
 
     async def get_chat_info(self, chat_id: str) -> dict[str, Any]:

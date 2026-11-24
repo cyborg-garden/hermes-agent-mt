@@ -1,6 +1,10 @@
 """Session lifecycle mixin for SessionDB: row upsert/inheritance, lifecycle
 flags (end/reopen/archive/pin/hide/read), model_config patching, listing and
-counting, delete cascades, and the auto-archive sweep."""
+counting, delete cascades, and the auto-archive sweep.
+
+Fork divergence: upstream deleted this file in v0.23.3 (persistence/sqlite/ refactor). The fork
+preserves it because hermes_state_compression and gateway tests still import its mixins and
+helpers. See FORK-NOTICE.md."""
 
 import glob
 import json

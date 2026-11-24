@@ -1,5 +1,11 @@
 """Process-wide shared SessionDB registry.
 
+Fork divergence: upstream shrank this file to a ~37-line stub in v0.23.3 (persistence/sqlite/ refactor).
+The fork preserves the full shared-registry because hermes_state_home, gateway tests, and the
+persistence entry-path tests still depend on acquire/release and the generation lifecycle.
+Callers use hermes_state.SessionDB (the upstream shim) which now exposes db_path for compat.
+See FORK-NOTICE.md.
+
 Each bare ``SessionDB()`` mints its own writer connection, lock, close-time WAL checkpoint
 and token writer thread, and one connection's close-time checkpoint can race another's
 growth (lost/reordered-page-write corruption). This module owns that boundary: one shared
@@ -248,9 +254,9 @@ def acquire(db_path: Optional[Path] = None) -> SessionDB:
     but stays alive for its holders, and a fresh one is opened in its place. Raises
     whatever ``SessionDB.__init__`` raises; on a replacement-open failure the registry
     holds NO entry for the path."""
-    from hermes_state import _default_db_path
+    from persistence_assembly import profile_scope, store_location
 
-    raw_path = Path(db_path) if db_path is not None else Path(_default_db_path())
+    raw_path = Path(db_path) if db_path is not None else store_location(profile_scope())
     try:
         path = raw_path.resolve()
     except (OSError, RuntimeError):
