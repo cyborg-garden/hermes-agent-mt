@@ -1437,6 +1437,8 @@ def restore_primary_runtime(agent) -> bool:
         agent._routing_override_saved_primary = None
         agent._routing_override_saved_extra_body = None
         agent._routing_override_overrides_ref = None
+        agent._routing_escalate_pending = False
+        agent._routing_escalation_target = None
         # Do NOT return here — proceed to rebuild the runtime from the restored
         # (premium) _primary_runtime via the shared body below.
 

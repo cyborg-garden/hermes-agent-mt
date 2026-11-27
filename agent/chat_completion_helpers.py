@@ -2046,6 +2046,11 @@ def try_activate_fallback(agent, reason: FailoverReason | None = None, reset_at=
     model slug and provider in place so the retry loop continues on the new backend; client
     construction goes through resolve_provider_client (no duplicated provider→key mappings)."""
     from agent.fallback_cooldown import _arm_rate_limit_cooldown, switch_deferred_by_reset
+    # A cheap-routed turn that fails goes back to the route it started on (the
+    # configured primary) before any fallback-chain entry: agent/routing_override.py.
+    from agent.routing_override import escalate_routed_turn
+    if escalate_routed_turn(agent, reason):
+        return True
     if switch_deferred_by_reset(agent, reason, reset_at):
         return False
     cooldown_seconds = _arm_rate_limit_cooldown(agent, reason, reset_at=reset_at)

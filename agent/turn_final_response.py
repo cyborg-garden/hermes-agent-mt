@@ -192,6 +192,23 @@ def finish_text_response(
         api_call_count = _ev.api_call_count
         return _verdict(_ev.action, _ev.result)
 
+    # A cheap-routed turn that refuses is retried on the primary before the refusal
+    # is accepted as the answer (agent/routing_override.py). The refusal row is not
+    # appended: the retry re-sends the same request on the primary.
+    from agent.routing_override import looks_like_refusal, routed_escalation_pending
+    if (
+        routed_escalation_pending(agent)
+        and looks_like_refusal(agent._strip_think_blocks(final_response or ""))
+        and agent._try_activate_fallback()
+    ):
+        from agent.conversation_loop import _sync_failover_system_message
+        from agent.turn_context_compaction import _refund_api_call
+        active_system_prompt = _sync_failover_system_message(agent, api_messages, active_system_prompt)
+        _preflight_compression_blocked = False
+        api_call_count = _refund_api_call(agent, api_call_count)
+        final_response = None
+        return _verdict("continue")
+
     agent._empty_content_retries = 0
     agent._thinking_prefill_retries = 0
     # Surface the one-shot fallback switch notice before dropping the retry buffer so a

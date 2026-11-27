@@ -30,6 +30,11 @@ by ollama's OpenAI-compat ``/v1`` endpoint (ollama#14820), and the switch that
 does work (``reasoning_effort``) is already resolved PER-MODEL by
 ``switch_model`` from ``agent.reasoning_overrides``.
 
+An optional ``escalate: True`` arms escalation for the turn: if the routed model
+errors, returns an empty reply or refuses, :func:`escalate_routed_turn` moves the
+turn back to the route it started on (the configured primary) before any
+fallback-chain entry is tried. See "Escalation" below.
+
 ``turn_context`` extracts the first well-formed override and applies it right
 after the hook fires, before the turn's first API call assembles.
 
@@ -59,6 +64,18 @@ Why the dedicated flag (three audit-confirmed bugs the old overload caused):
     429 got no cooldown (Major 3). Keeping ``_primary_runtime`` == cheap and using
     a dedicated flag fixes all three: reactive fallback runs normally UNDERNEATH a
     routed turn with the cheap runtime as its "primary".
+
+── Escalation ──
+A cheap turn that fails must not cost the user an answer. ``try_activate_fallback``
+calls :func:`escalate_routed_turn` first; the empty-response ladder and the final
+text check (refusals) call it directly. It fires at most once per turn, switches
+back via ``switch_model`` to the pre-turn route, and logs one
+``routing_escalation {json}`` line (reason only, never text). The revert at the
+top of the next turn clears it with the rest of the override state.
+
+Delegated children routed cheap by the task-routing delegation backend carry
+``_routing_escalate_pending`` with no target: their fallback chain already starts
+with the parent's primary, so escalation there is the chain's first hop.
 
 ── Fail-safe ──
 Any error (bad override, ``switch_model`` raising on a bad key/network) leaves
@@ -142,6 +159,14 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
     # read _primary_runtime stay on cheap) and use the stash + a dedicated flag
     # for the revert, NOT the reactive-fallback state.
     primary_snapshot = getattr(agent, "_primary_runtime", None)
+    # The route the agent is on right now: what escalation returns to if the routed
+    # turn fails. Captured before switch_model replaces it.
+    escalation_target = {
+        "model": cur_model, "provider": cur_provider,
+        "base_url": str(getattr(agent, "base_url", "") or ""),
+        "api_key": getattr(agent, "api_key", "") or "",
+        "api_mode": str(getattr(agent, "api_mode", "") or ""),
+    }
 
     kwargs = {
         k: override[k] for k in _PASSTHROUGH_FIELDS if override.get(k)
@@ -250,6 +275,14 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
             agent._routing_override_saved_extra_body = saved_extra_body
             agent._routing_override_overrides_ref = overrides_ref
         agent._routing_override_active = True
+        # Escalation is armed only by a route that asks for it (the plugin sets
+        # it on cheap routes; a user's "use <model>" directive does not), and only
+        # on the first apply of a turn, so the target is the pre-turn route.
+        if override.get("escalate") is True and getattr(
+            agent, "_routing_escalation_target", None
+        ) is None:
+            agent._routing_escalation_target = escalation_target
+            agent._routing_escalate_pending = True
     except Exception:
         logger.debug("intelligent_routing: could not scope override to turn",
                      exc_info=True)
@@ -259,3 +292,107 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
         target_model, target_provider or "?", cur_model, cur_provider,
     )
     return True
+
+
+# ── Escalation ────────────────────────────────────────────────────────────────
+
+# Short refusal openers. Matched only against a SHORT reply from a cheap-routed
+# model with no tool calls: a long answer that happens to say "I can't" is not one.
+_REFUSAL_MAX_CHARS = 600
+_REFUSAL_PREFIXES = (
+    "i can't help", "i cannot help", "i can't assist", "i cannot assist", "i can't do that",
+    "i cannot do that", "i'm unable to", "i am unable to", "i'm not able to", "i am not able to",
+    "i won't be able to", "i will not be able to", "i can't comply", "i cannot comply",
+    "sorry, i can't", "sorry, but i can't", "i'm sorry, but i can't", "i'm sorry, i can't",
+    "i'm sorry, but i cannot", "i apologize, but i can't", "i apologise, but i can't",
+    "as an ai", "i don't have access", "i do not have access", "i'm not allowed",
+)
+
+
+def looks_like_refusal(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    t = text.strip().lower().replace("\u2019", "'")
+    if not t or len(t) > _REFUSAL_MAX_CHARS:
+        return False
+    return t.startswith(_REFUSAL_PREFIXES)
+
+
+def routed_escalation_pending(agent: Any) -> bool:
+    """True when this agent runs a cheap-routed turn that has not escalated yet."""
+    return getattr(agent, "_routing_escalate_pending", False) is True
+
+
+def _log_escalation(agent: Any, trigger: str, to_model: str, ok: bool) -> None:
+    try:
+        import json
+
+        logger.info("routing_escalation %s", json.dumps({
+            "trigger": trigger, "from_model": str(getattr(agent, "model", "") or ""),
+            "to_model": to_model, "ok": ok,
+            "session_id": getattr(agent, "session_id", None),
+            "child": bool(getattr(agent, "_delegate_depth", 0)),
+        }, default=str))
+    except Exception:
+        logger.debug("intelligent_routing: escalation metric failed", exc_info=True)
+
+
+def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
+    """Move a cheap-routed turn back to the route it started on. True iff it switched.
+
+    Fires once per turn. A child (no target) returns False after disarming, so the
+    caller walks its fallback chain, whose first entry is the parent's primary.
+    Never raises.
+    """
+    try:
+        if not routed_escalation_pending(agent):
+            return False
+        agent._routing_escalate_pending = False
+        trigger_name = str(getattr(trigger, "value", trigger) or "unknown")
+        target = getattr(agent, "_routing_escalation_target", None)
+        if not isinstance(target, dict) or not target.get("model"):
+            _log_escalation(agent, trigger_name, "fallback-chain", True)
+            return False
+        to_model = str(target["model"])
+        kwargs = {k: target[k] for k in ("api_key", "base_url", "api_mode") if target.get(k)}
+        try:
+            agent.switch_model(to_model, str(target.get("provider") or ""), **kwargs)
+        except Exception as exc:
+            logger.warning("intelligent_routing: escalation to %s failed (%s)", to_model,
+                           type(exc).__name__)
+            _log_escalation(agent, trigger_name, to_model, False)
+            return False
+        # The cheap route's body params must not ride along to the primary: put the
+        # pre-turn extra_body back now and leave nothing for next turn's revert.
+        try:
+            saved_eb = getattr(agent, "_routing_override_saved_extra_body", _UNTOUCHED)
+            overrides = getattr(agent, "_routing_override_overrides_ref", None)
+            if saved_eb is not _UNTOUCHED and isinstance(overrides, dict):
+                if saved_eb is _NOT_SET:
+                    overrides.pop("extra_body", None)
+                else:
+                    overrides["extra_body"] = saved_eb
+                agent._routing_override_saved_extra_body = _UNTOUCHED
+        except Exception:
+            logger.debug("intelligent_routing: could not revert extra_body on escalation",
+                         exc_info=True)
+        try:
+            from agent.chat_completion_helpers import rewrite_prompt_model_identity
+
+            rewrite_prompt_model_identity(agent, agent.model, agent.provider)
+        except Exception:
+            logger.debug("intelligent_routing: could not rewrite model identity", exc_info=True)
+        _log_escalation(agent, trigger_name, to_model, True)
+        try:
+            agent._buffer_diagnostic_status(f"↻ Retrying on {to_model}")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        logger.debug("intelligent_routing: escalation failed", exc_info=True)
+        return False
+
+
+def clear_escalation_state(agent: Any) -> None:
+    agent._routing_escalate_pending = False
+    agent._routing_escalation_target = None
