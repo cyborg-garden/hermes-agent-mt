@@ -717,6 +717,9 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+    # Read by the fallback guard (agent/routing_override.py): this turn's plugin
+    # context and memory recall travel with the messages, so they count too.
+    agent._turn_protected_extras = (_plugin_user_context, _ext_prefetch_cache)
 
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.

@@ -464,11 +464,90 @@ def _status_line(agent: Any, text: str) -> None:
 
 def try_activate_fallback(agent: Any, reason: Any = None) -> bool:
     """The agent's ``_try_activate_fallback``: a failing cheap-routed turn goes back to the
-    route it started on (the configured primary) before any fallback-chain entry."""
+    route it started on (the configured primary) before any fallback-chain entry.
+
+    While the session holds protected text, the only hop allowed is onto the primary:
+    a failing primary fails the turn with its own error instead of resending the
+    protected text to another model. Routed or not; sessions without protected text
+    walk the chain as before."""
     if escalate_routed_turn(agent, reason):
         return True
     from agent.chat_completion_helpers import try_activate_fallback as walk_fallback_chain
-    return walk_fallback_chain(agent, reason)
+    if not session_holds_protected_text(agent):
+        return walk_fallback_chain(agent, reason)
+    return _walk_to_primary_only(agent, reason, walk_fallback_chain)
+
+
+def _configured_primary(agent: Any) -> Optional[str]:
+    """The model protected text may go to: the pre-turn route, else the configured primary."""
+    primary = _primary_model_of(agent)
+    if primary:
+        return primary
+    runtime = getattr(agent, "_primary_runtime", None)
+    if getattr(agent, "_routing_override_active", False) is True:
+        saved = getattr(agent, "_routing_override_saved_primary", None)
+        if isinstance(saved, dict) and saved.get("model"):
+            runtime = saved
+    model = str(runtime.get("model") or "").strip() if isinstance(runtime, dict) else ""
+    return model or None
+
+
+def _walk_to_primary_only(agent: Any, reason: Any, walk: Any) -> bool:
+    """Walk the fallback chain, skipping every entry that is not the primary."""
+    try:
+        primary = _configured_primary(agent)
+        if not primary or str(getattr(agent, "model", "") or "").strip() == primary:
+            logger.warning("intelligent_routing: protected text in this session; not falling "
+                           "back from the primary to another model")
+            return False
+        chain = getattr(agent, "_fallback_chain", None) or []
+        while agent._fallback_index < len(chain):
+            entry = chain[agent._fallback_index]
+            if isinstance(entry, dict) and str(entry.get("model") or "").strip() == primary:
+                break
+            agent._fallback_index += 1
+        if agent._fallback_index >= len(chain):
+            return False
+        return bool(walk(agent, reason)) and str(getattr(agent, "model", "") or "") == primary
+    except Exception:
+        logger.warning("intelligent_routing: protected fallback check failed; not falling back",
+                       exc_info=True)
+        return False
+
+
+def agent_extra_text(agent: Any, extras: Any = ()) -> list:
+    """Text sent alongside the messages: ``extras`` plus the system prompts and prefill."""
+    texts = [e for e in (extras or ()) if e]
+    try:
+        # The cached system prompt carries memory, the user profile and context files.
+        if getattr(agent, "_cached_system_prompt", None):
+            texts.append(agent._cached_system_prompt)
+    except Exception:
+        pass
+    try:
+        if getattr(agent, "ephemeral_system_prompt", None):
+            texts.append(agent.ephemeral_system_prompt)
+    except Exception:
+        pass
+    try:
+        for pfm in getattr(agent, "prefill_messages", None) or []:
+            if isinstance(pfm, dict):
+                texts.append(pfm.get("content"))
+    except Exception:
+        pass
+    return texts
+
+
+def session_holds_protected_text(agent: Any) -> bool:
+    """True when the agent's session (messages, this turn's plugin context and memory
+    recall, system prompt) carries a protected marker. Fails closed. Never raises."""
+    try:
+        extras = getattr(agent, "_turn_protected_extras", None) or ()
+        markers = getattr(agent, "_routing_protected_markers", None)
+        return carries_protected_text(getattr(agent, "_session_messages", None),
+                                      agent_extra_text(agent, tuple(extras)), markers)
+    except Exception:
+        return True
 
 
 def clear_escalation_state(agent: Any) -> None:

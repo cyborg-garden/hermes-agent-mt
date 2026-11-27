@@ -240,3 +240,48 @@ def test_child_of_a_primary_turn_is_unchanged(tmp_path, monkeypatch):
     parent = _cheap_parent(model=PRIMARY["model"])
     _, built = _spawn_from(tmp_path, monkeypatch, parent, [{"goal": "Refactor the module."}], {})
     assert built[0]["model"] is None
+
+
+# ── A parent holding protected text keeps every child on the primary ─────────
+
+_FOOTER = "\n\nTranscribed by Papa Reo. Kaitiakitanga License."
+_BODY = "Kia ora koutou, notes from the meeting about the garden and the weather."
+
+
+def test_marker_split_across_lines_is_still_protected(cfg):
+    route = _route("Summarise the transcript in the context.",
+                   context=_BODY + "\nTranscribed by\nPapa   Reo")
+    assert route.get("model") != "cheap/model"
+
+
+def test_parent_holding_protected_text_keeps_children_off_the_cheap_model(cfg):
+    from agent import delegation_provider as dp
+    from tools import delegate_tool as dt
+
+    dp.register_provider(deleg.TaskRoutingDelegationProvider())
+    parent = types.SimpleNamespace(
+        model="prem/m", provider="openrouter", _fallback_chain=[],
+        _session_messages=[{"role": "tool", "content": _BODY + _FOOTER}],
+    )
+    creds = {"model": None, "provider": None, "base_url": None, "api_key": None, "api_mode": None}
+    with patch.object(dt, "_resolve_delegation_credentials", side_effect=lambda c, _p: {**creds, **c}):
+        routes = dt._task_routes([{"goal": "Summarise the context.", "context": _BODY}],
+                                 {"backend": deleg.BACKEND_NAME}, creds, parent)
+    child_creds, route = routes[0]
+    assert route is None and child_creds.get("model") != "cheap/model"
+
+
+def test_parent_without_protected_text_still_routes_children(cfg):
+    from agent import delegation_provider as dp
+    from tools import delegate_tool as dt
+
+    dp.register_provider(deleg.TaskRoutingDelegationProvider())
+    parent = types.SimpleNamespace(
+        model="prem/m", provider="openrouter", _fallback_chain=[],
+        _session_messages=[{"role": "tool", "content": _BODY}],
+    )
+    creds = {"model": None, "provider": None, "base_url": None, "api_key": None, "api_mode": None}
+    with patch.object(dt, "_resolve_delegation_credentials", side_effect=lambda c, _p: {**creds, **c}):
+        routes = dt._task_routes([{"goal": "Summarise the context.", "context": _BODY}],
+                                 {"backend": deleg.BACKEND_NAME}, creds, parent)
+    assert routes[0][0].get("model") == "cheap/model"

@@ -15,7 +15,8 @@ from contextlib import suppress
 from typing import Any, Optional
 
 from agent.routing_override import (
-    PROTECTED_BLOCK_MESSAGE, PROTECTED_BLOCKED, PROTECTED_SWITCHED, escalate_if_protected,
+    PROTECTED_BLOCK_MESSAGE, PROTECTED_BLOCKED, PROTECTED_SWITCHED, agent_extra_text,
+    escalate_if_protected,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,19 +26,7 @@ __all__ = ["PROTECTED_BLOCK_MESSAGE", "PROTECTED_BLOCKED", "PROTECTED_SWITCHED",
 
 
 def _extra_text(agent: Any, extras: tuple) -> list:
-    texts = [e for e in extras if e]
-    with suppress(Exception):
-        # The cached system prompt carries memory, the user profile and context files.
-        if getattr(agent, "_cached_system_prompt", None):
-            texts.append(agent._cached_system_prompt)
-    with suppress(Exception):
-        if getattr(agent, "ephemeral_system_prompt", None):
-            texts.append(agent.ephemeral_system_prompt)
-    with suppress(Exception):
-        for pfm in getattr(agent, "prefill_messages", None) or []:
-            if isinstance(pfm, dict):
-                texts.append(pfm.get("content"))
-    return texts
+    return agent_extra_text(agent, extras)
 
 
 def protected_content_gate(agent: Any, messages: Any, *extras: Any) -> Optional[str]:

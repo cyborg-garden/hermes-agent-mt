@@ -23,6 +23,7 @@ import logging
 from typing import Any, Mapping
 
 from agent.delegation_provider import DelegationProvider
+from agent.routing_override import normalize_for_markers
 
 from .config import (
     cheap_reasoning_effort,
@@ -79,10 +80,10 @@ class TaskRoutingDelegationProvider(DelegationProvider):
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
         goal, context = str(task.get("goal") or ""), str(task.get("context") or "")
-        text = (goal + "\n" + context).lower()
+        text = normalize_for_markers(goal + "\n" + context)
         decision = classify_task(TaskSignals(
             instruction=goal, context=context, scope=SCOPE_SUBAGENT,
-            is_protected=any(m in text for m in protected_markers()),
+            is_protected=any(normalize_for_markers(m) in text for m in protected_markers()),
         ))
         cheap_model, cheap_provider = cheap_tier_target()
         route: dict[str, Any]

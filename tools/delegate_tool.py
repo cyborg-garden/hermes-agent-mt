@@ -3239,6 +3239,14 @@ def _task_routes(task_list: list, cfg: dict, creds: dict, parent_agent) -> list:
     if provider is None:
         logger.warning("delegation.backend %r is not registered; using the default route", backend)
         return default
+    # A parent holding protected text can hand its body (without the marker) to a
+    # child, so the backend cannot judge from the task alone: every child stays on
+    # the default route.
+    from agent.routing_override import session_holds_protected_text
+    if session_holds_protected_text(parent_agent):
+        logger.info("delegation backend %s: parent session holds protected text; "
+                    "default route for every task", backend)
+        return default
     out = []
     for i, t in enumerate(task_list):
         try:

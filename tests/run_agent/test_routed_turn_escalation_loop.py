@@ -232,3 +232,50 @@ def test_malformed_tool_call_on_a_cheap_turn_goes_to_the_primary(call):
     result, calls = _run(a, lambda m, i: _reply("", tool_calls=[call]) if m == CHEAP else _reply("fixed"))
     assert [c["model"] for c in calls] == [CHEAP, PRIMARY]
     assert result["final_response"] == "fixed"
+
+
+# ── Fallback hops after protected text: primary only ─────────────────────────
+# The retry loop walks the fallback chain on its own; the protected check at the
+# top of each pass never sees that hop. Protected text must stay on the primary.
+
+FALLBACK = "fallback/other"
+
+
+def _chain_walk(agent, reason=None):
+    """Stand-in for the real chain walk: one hop to FALLBACK, then exhausted."""
+    if agent.model == FALLBACK:
+        return False
+    agent.model = FALLBACK
+    return True
+
+
+def _leaks(calls):
+    return [c for c in calls if c["model"] != PRIMARY and "papa reo" in _sent_text(c).lower()]
+
+
+def test_primary_error_after_protected_escalation_never_falls_back():
+    a = _agent()
+    hook = [{"route": dict(ROUTE)}, {"context": PAPA_REO}]
+    with patch("agent.chat_completion_helpers.try_activate_fallback", _chain_walk):
+        result, calls = _run(a, lambda m, i: _Http500() if m == PRIMARY else _reply("ok"),
+                             hook_results=hook)
+    assert calls and not _leaks(calls)
+    assert all(c["model"] == PRIMARY for c in calls)
+
+
+def test_unrouted_protected_session_never_falls_back():
+    a = _agent()
+    with patch("agent.chat_completion_helpers.try_activate_fallback", _chain_walk):
+        result, calls = _run(a, lambda m, i: _Http500() if m == PRIMARY else _reply("ok"),
+                             hook_results=[{"context": PAPA_REO}])
+    assert calls and not _leaks(calls)
+    assert all(c["model"] == PRIMARY for c in calls)
+
+
+def test_unrouted_session_without_protected_text_still_falls_back():
+    a = _agent()
+    with patch("agent.chat_completion_helpers.try_activate_fallback", _chain_walk):
+        result, calls = _run(a, lambda m, i: _Http500() if m == PRIMARY else _reply("ok"),
+                             hook_results=[])
+    assert calls[-1]["model"] == FALLBACK
+    assert result["final_response"] == "ok"
