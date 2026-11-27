@@ -336,14 +336,14 @@ def revert_routing_override(agent: Any) -> bool:
 
 # ── Escalation ────────────────────────────────────────────────────────────────
 
-# Text that marks content as protected. The defaults are the footer the
-# papareo_transcribe plugin puts on every Papa Reo transcript (Kaitiakitanga
-# License): that text must never reach a model other than the configured primary.
-# A route may add more with ``protected_markers``.
+# Text that marks content as protected: the footer the papareo_transcribe plugin
+# writes into every Papa Reo transcript ("This text transcribed by Papa Reo API.
+# Please be sure to comply with ..."). Only text inside real transcript output
+# matches. The licence name alone does not: the plugin's own instructions and
+# skill name it on every run without carrying any transcript. A route or
+# ``routing.protected_markers`` may add more.
 DEFAULT_PROTECTED_MARKERS: tuple = (
-    "transcribed by papa reo",
-    "kaitiakitanga license",
-    "kaitiakitanga licence",
+    "transcribed by papa reo api",
 )
 
 # Short refusal openers. Matched only against a SHORT reply from a cheap-routed

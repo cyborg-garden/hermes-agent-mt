@@ -244,13 +244,13 @@ def test_child_of_a_primary_turn_is_unchanged(tmp_path, monkeypatch):
 
 # ── A parent holding protected text keeps every child on the primary ─────────
 
-_FOOTER = "\n\nTranscribed by Papa Reo. Kaitiakitanga License."
+_FOOTER = "\n\nThis text transcribed by Papa Reo API. Please comply with the licence terms."
 _BODY = "Kia ora koutou, notes from the meeting about the garden and the weather."
 
 
 def test_marker_split_across_lines_is_still_protected(cfg):
     route = _route("Summarise the transcript in the context.",
-                   context=_BODY + "\nTranscribed by\nPapa   Reo")
+                   context=_BODY + "\nThis text transcribed by\nPapa   Reo\u00a0API.")
     assert route.get("model") != "cheap/model"
 
 
