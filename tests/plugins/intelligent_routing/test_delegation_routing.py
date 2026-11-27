@@ -143,7 +143,11 @@ def test_delegate_task_routes_each_child_by_task(tmp_path, monkeypatch):
         assert cheap["model"] == "cheap/model"
         assert cheap["routing_cfg"]["fallback_providers"][0]["model"] == PRIMARY["model"]
         assert getattr(children[0], "_routing_escalate_pending", False) is True
+        assert children[0]._routing_protected_watch is True
+        assert children[0]._routing_cheap_model == "cheap/model"
+        assert children[0]._routing_primary_model == PRIMARY["model"]
         assert premium["model"] is None  # inherits the parent, as the default backend would
         assert not getattr(children[1], "_routing_escalate_pending", False)
+        assert not getattr(children[1], "_routing_protected_watch", False)
     finally:
         manager.unload()

@@ -159,7 +159,7 @@ _PREMIUM_SIGNALS: tuple[tuple[str, re.Pattern], ...] = (
         r"edit|modify|change|update|write|create|configure|set up|setup|enable|disable|"
         r"rename|move|overwrite|replace|approve|reject|grant|execute|exec|push|--force|installer|"
         r"mass|bulk|broadcast)\b",
-        r"\.(sh|bash|ps1|bat|exe)\b|\bemails? (all|every\w*)\b",
+        r"\.(sh|bash|ps1|bat|exe)\b|\bemails? (all|every\w*)\b|(?<![\w-])--?(force|hard|no-verify)\b",
     )),
 )
 

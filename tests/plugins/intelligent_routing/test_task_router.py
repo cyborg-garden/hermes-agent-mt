@@ -99,6 +99,11 @@ def test_a_hard_later_step_makes_the_task_premium():
     assert _tier("fetch the new tickets and handle them") == TIER_PREMIUM
 
 
+def test_force_flags_are_side_effects():
+    assert _tier("run git status --force") == TIER_PREMIUM
+    assert _tier("run the tests --no-verify") == TIER_PREMIUM
+
+
 def test_subagent_context_can_veto_a_cheap_goal():
     assert _tier("Summarise the context.", context="Notes on the weather.", scope=SCOPE_SUBAGENT) == TIER_CHEAP
     assert _tier("Summarise the context.", context="Then publish it on the blog.",

@@ -1765,12 +1765,20 @@ def _run_conversation_turn(
     ):
         if _run_phase(begin_iteration, agent, s).action == "break":
             break
-        # A cheap-routed turn or child never sends protected text (e.g. a tool result
-        # carrying a Papa Reo transcript) to the cheap model: agent/routing_override.py.
-        from agent.routing_override import escalate_if_protected
-        if escalate_if_protected(agent, s.messages):
-            s.active_system_prompt = _sync_failover_system_message(agent, None, s.active_system_prompt)
         _run_phase(prepare_iteration, agent, s)
+        # A cheap-routed turn or child never sends protected text (a tool result or steer
+        # carrying a Papa Reo transcript) to the cheap model: it moves to the primary
+        # first, or ends the turn if the primary is unreachable. agent/routing_override.py.
+        # Runs after prepare_iteration, which may append a steer, and before assembly.
+        from agent.routing_override import (
+            PROTECTED_BLOCK_MESSAGE, PROTECTED_BLOCKED, PROTECTED_SWITCHED, escalate_if_protected,
+        )
+        _protected = escalate_if_protected(agent, s.messages, s._plugin_user_context)
+        if _protected == PROTECTED_SWITCHED:
+            s.active_system_prompt = _sync_failover_system_message(agent, None, s.active_system_prompt)
+        elif _protected == PROTECTED_BLOCKED:
+            s.final_response, s._turn_exit_reason = PROTECTED_BLOCK_MESSAGE, "protected_content_blocked"
+            return _finalize_from_state(agent, s)
         _run_phase(assemble_api_request, agent, s)
         _pg = _run_phase(run_preflight_gate, agent, s)
         if _pg.action == "return":

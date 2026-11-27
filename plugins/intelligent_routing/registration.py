@@ -374,10 +374,12 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
                 # refuses, the runtime retries it on the primary this turn.
                 if escalation_enabled():
                     route["escalate"] = True
-                    # Configured markers ride along so the mid-turn check sees them.
-                    extra_markers = extra_protected_markers()
-                    if extra_markers:
-                        route["protected_markers"] = extra_markers
+                # Protected content arriving mid-turn moves the turn to the primary, with
+                # or without escalation; configured markers ride along for that check.
+                route["protected_watch"] = True
+                extra_markers = extra_protected_markers()
+                if extra_markers:
+                    route["protected_markers"] = extra_markers
                 result["route"] = route
                 routed_model, routed_provider = cheap_model, cheap_provider
 

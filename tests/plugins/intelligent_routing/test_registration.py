@@ -146,6 +146,7 @@ def test_cheap_route_emits_route_override():
     assert result.get("route") == {
         "model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter",
         "escalate": True,
+        "protected_watch": True,
     }
 
 
@@ -181,7 +182,7 @@ def test_route_override_honors_config_target():
         result = registration.on_pre_llm_call(
             user_message="grep for TODO", model="claude-sonnet-5", platform="cli",
         )
-    assert result["route"] == {"model": "qwen/qwen-2.5", "provider": "ollama", "escalate": True}
+    assert result["route"] == {"model": "qwen/qwen-2.5", "provider": "ollama", "escalate": True, "protected_watch": True}
 
 
 # ---- group [sender] attribution prefix (Signal/group classifier bug) ---------
@@ -207,6 +208,7 @@ def test_group_prefixed_mechanical_turn_routes_cheap():
     assert result.get("route") == {
         "model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter",
         "escalate": True,
+        "protected_watch": True,
     }
 
 
@@ -328,7 +330,7 @@ def test_no_directive_falls_through_to_classifier():
             model="claude-sonnet-5", platform="cli",
         )
     assert isinstance(result, dict)
-    assert result.get("route") == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True}
+    assert result.get("route") == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True, "protected_watch": True}
 
 
 # ---- kimi / glm directives (three-tier fleet hierarchy) ----------------------

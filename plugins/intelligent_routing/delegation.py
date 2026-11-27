@@ -94,9 +94,10 @@ class TaskRoutingDelegationProvider(DelegationProvider):
             }
             if escalation_enabled():
                 route["escalate"] = True
-                extra = extra_protected_markers()
-                if extra:
-                    route["protected_markers"] = extra
+            route["protected_watch"] = True
+            extra = extra_protected_markers()
+            if extra:
+                route["protected_markers"] = extra
             effort = cheap_reasoning_effort()
             if effort:
                 route["reasoning_effort"] = effort

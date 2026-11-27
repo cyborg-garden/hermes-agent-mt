@@ -125,20 +125,27 @@ def _default_completion(text: str, settings: dict) -> Any:
 _completion: Callable[[str, dict], Any] = _default_completion
 
 _WORKER_NAME = "intelligent-routing-router"
-# HTTP client loggers that, at DEBUG, print request options (which hold the router
-# text) or response bodies. Records from the router thread are dropped.
-_CLIENT_LOGGERS = ("openai", "openai._base_client", "httpx", "httpcore", "httpcore.connection",
-                   "httpcore.http11", "httpcore.http2", "httpcore.proxy")
-
-
 class _DropRouterThread(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return record.threadName != _WORKER_NAME
 
 
 _DROP_FILTER = _DropRouterThread()
-for _name in _CLIENT_LOGGERS:
-    logging.getLogger(_name).addFilter(_DROP_FILTER)
+
+
+def _install_log_filter() -> None:
+    """Drop every record the router thread emits, whatever logger or client it comes
+    from (openai, anthropic, httpx, botocore, ...): the filter sits on every handler,
+    which is where a propagated record is written. Idempotent; called per router call."""
+    loggers = [logging.getLogger()] + [
+        lg for lg in list(logging.root.manager.loggerDict.values()) if isinstance(lg, logging.Logger)
+    ]
+    for lg in loggers:
+        if _DROP_FILTER not in lg.filters:
+            lg.addFilter(_DROP_FILTER)
+        for handler in lg.handlers:
+            if _DROP_FILTER not in handler.filters:
+                handler.addFilter(_DROP_FILTER)
 
 
 def ask_router(text: str, settings: dict) -> RouterResult:
@@ -152,6 +159,7 @@ def ask_router(text: str, settings: dict) -> RouterResult:
         except Exception as exc:  # the router must never break a turn
             box["error"] = type(exc).__name__
 
+    _install_log_filter()
     started = time.monotonic()
     worker = threading.Thread(target=_work, name=_WORKER_NAME, daemon=True)
     worker.start()

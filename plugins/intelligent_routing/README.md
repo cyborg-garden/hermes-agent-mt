@@ -73,7 +73,6 @@ A cheap route carries `escalate: true`. During that turn:
 - An empty reply: escalates at once, without spending empty-retries on the cheap model.
 - A short refusal ("I can't help with that", "As an AI..."): the refusal is dropped and the request re-sent on the primary.
 
-- Protected content arriving mid-turn (a tool result carrying a protected marker): before the next API call, the turn moves to the primary, so the cheap model never receives it.
 
 It fires at most once per turn and logs `routing_escalation {json}` with the trigger and models. Cheap subagents do the same through their fallback chain, whose first entry is the primary.
 
@@ -102,9 +101,11 @@ routing:
 
 ## Protected content
 
-The papareo_transcribe plugin does not mark turns as protected, so this plugin looks for the text itself. Any turn whose message or history contains the Papa Reo transcript footer ("transcribed by Papa Reo", "Kaitiakitanga License") stays on the primary and never reaches the LLM router. History counts because a cheap turn sends the whole conversation to the cheap provider. A subagent whose goal or context carries a marker stays on the primary. If a marker arrives later in a cheap turn or child, through a tool result, the runtime moves to the primary before the next call (see Escalation).
+The papareo_transcribe plugin does not mark turns as protected, so this plugin looks for the text itself. Any turn whose message or history contains the Papa Reo transcript footer ("transcribed by Papa Reo", "Kaitiakitanga License") stays on the primary and never reaches the LLM router. History counts because a cheap turn sends the whole conversation to the cheap provider. A subagent whose goal or context carries a marker stays on the primary.
 
-The router thread's records on the `openai`, `httpx` and `httpcore` loggers are dropped, so DEBUG logging cannot print the router text.
+Every cheap route also watches for markers that arrive later: before each API call of a cheap turn or child, everything about to be sent (messages, tool results, steers, plugin context, nested content parts) is checked. On a match the turn moves to the primary first. If the primary cannot be reached, the turn ends with a short notice and no model call is made; it never falls through to the cheap model or another fallback entry. This runs whether or not `routing.escalate` is on.
+
+Every record the router thread emits is dropped at the logging handlers, whichever client logs it (openai, anthropic, httpx, botocore), so DEBUG logging cannot print the router text.
 
 Add more markers per agent:
 

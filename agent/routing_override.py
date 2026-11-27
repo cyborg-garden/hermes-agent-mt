@@ -278,13 +278,14 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
         # Escalation is armed only by a route that asks for it (the plugin sets
         # it on cheap routes; a user's "use <model>" directive does not), and only
         # on the first apply of a turn, so the target is the pre-turn route.
-        if override.get("escalate") is True and getattr(
-            agent, "_routing_escalation_target", None
-        ) is None:
+        escalate = override.get("escalate") is True
+        watch = escalate or override.get("protected_watch") is True
+        if watch and getattr(agent, "_routing_escalation_target", None) is None:
             agent._routing_escalation_target = escalation_target
-            agent._routing_escalate_pending = True
+            agent._routing_escalate_pending = escalate
+            agent._routing_protected_watch = True
             agent._routing_protected_markers = _markers(override.get("protected_markers"))
-            agent._routing_protected_scanned = 0
+            agent._routing_cheap_model = target_model
     except Exception:
         logger.debug("intelligent_routing: could not scope override to turn",
                      exc_info=True)
@@ -349,6 +350,39 @@ def _log_escalation(agent: Any, trigger: str, to_model: str, ok: bool) -> None:
         logger.debug("intelligent_routing: escalation metric failed", exc_info=True)
 
 
+def _switch_to(agent: Any, target: dict) -> bool:
+    """Switch the agent back to ``target`` (the pre-turn route). True on success."""
+    to_model = str(target["model"])
+    kwargs = {k: target[k] for k in ("api_key", "base_url", "api_mode") if target.get(k)}
+    try:
+        agent.switch_model(to_model, str(target.get("provider") or ""), **kwargs)
+    except Exception as exc:
+        logger.warning("intelligent_routing: escalation to %s failed (%s)", to_model,
+                       type(exc).__name__)
+        return False
+    # The cheap route's body params must not ride along to the primary: put the
+    # pre-turn extra_body back now and leave nothing for next turn's revert.
+    try:
+        saved_eb = getattr(agent, "_routing_override_saved_extra_body", _UNTOUCHED)
+        overrides = getattr(agent, "_routing_override_overrides_ref", None)
+        if saved_eb is not _UNTOUCHED and isinstance(overrides, dict):
+            if saved_eb is _NOT_SET:
+                overrides.pop("extra_body", None)
+            else:
+                overrides["extra_body"] = saved_eb
+            agent._routing_override_saved_extra_body = _UNTOUCHED
+    except Exception:
+        logger.debug("intelligent_routing: could not revert extra_body on escalation",
+                     exc_info=True)
+    try:
+        from agent.chat_completion_helpers import rewrite_prompt_model_identity
+
+        rewrite_prompt_model_identity(agent, agent.model, agent.provider)
+    except Exception:
+        logger.debug("intelligent_routing: could not rewrite model identity", exc_info=True)
+    return True
+
+
 def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
     """Move a cheap-routed turn back to the route it started on. True iff it switched.
 
@@ -366,34 +400,9 @@ def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
             _log_escalation(agent, trigger_name, "fallback-chain", True)
             return False
         to_model = str(target["model"])
-        kwargs = {k: target[k] for k in ("api_key", "base_url", "api_mode") if target.get(k)}
-        try:
-            agent.switch_model(to_model, str(target.get("provider") or ""), **kwargs)
-        except Exception as exc:
-            logger.warning("intelligent_routing: escalation to %s failed (%s)", to_model,
-                           type(exc).__name__)
+        if not _switch_to(agent, target):
             _log_escalation(agent, trigger_name, to_model, False)
             return False
-        # The cheap route's body params must not ride along to the primary: put the
-        # pre-turn extra_body back now and leave nothing for next turn's revert.
-        try:
-            saved_eb = getattr(agent, "_routing_override_saved_extra_body", _UNTOUCHED)
-            overrides = getattr(agent, "_routing_override_overrides_ref", None)
-            if saved_eb is not _UNTOUCHED and isinstance(overrides, dict):
-                if saved_eb is _NOT_SET:
-                    overrides.pop("extra_body", None)
-                else:
-                    overrides["extra_body"] = saved_eb
-                agent._routing_override_saved_extra_body = _UNTOUCHED
-        except Exception:
-            logger.debug("intelligent_routing: could not revert extra_body on escalation",
-                         exc_info=True)
-        try:
-            from agent.chat_completion_helpers import rewrite_prompt_model_identity
-
-            rewrite_prompt_model_identity(agent, agent.model, agent.provider)
-        except Exception:
-            logger.debug("intelligent_routing: could not rewrite model identity", exc_info=True)
         _log_escalation(agent, trigger_name, to_model, True)
         try:
             agent._buffer_diagnostic_status(f"↻ Retrying on {to_model}")
@@ -408,6 +417,8 @@ def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
 def clear_escalation_state(agent: Any) -> None:
     agent._routing_escalate_pending = False
     agent._routing_escalation_target = None
+    agent._routing_protected_watch = False
+    agent._routing_cheap_model = None
 
 
 def _markers(extra: Any) -> tuple:
@@ -418,40 +429,72 @@ def _markers(extra: Any) -> tuple:
     return DEFAULT_PROTECTED_MARKERS + tuple(str(m).strip().lower() for m in extra if str(m).strip())
 
 
-def _content_text(content: Any) -> str:
+def _content_text(content: Any, _depth: int = 0) -> str:
+    """All text in a message's content, including nested parts (tool_result blocks)."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return " ".join(str(p.get("text") or "") for p in content if isinstance(p, dict))
-    return str(content or "")
+    if _depth > 6:
+        return ""
+    if isinstance(content, dict):
+        parts = [str(content.get("text") or "")]
+        for key in ("content", "output", "result"):
+            if key in content:
+                parts.append(_content_text(content[key], _depth + 1))
+        return " ".join(p for p in parts if p)
+    if isinstance(content, (list, tuple)):
+        return " ".join(_content_text(p, _depth + 1) for p in content)
+    return "" if content is None else str(content)
 
 
-def escalate_if_protected(agent: Any, messages: Any) -> bool:
-    """Before each API call: move a cheap-routed turn or child to the primary when any
-    message added since the last check (a tool result, typically) carries a protected
-    marker, so the cheap model never receives it. True iff the agent switched. Never raises.
+PROTECTED_SWITCHED = "switched"
+PROTECTED_BLOCKED = "blocked"
+
+PROTECTED_BLOCK_MESSAGE = (
+    "I stopped here: this conversation now contains protected text that may only be "
+    "handled by this agent's main model, and that model could not be reached. "
+    "Nothing was sent to another model. Please try again shortly."
+)
+
+
+def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Optional[str]:
+    """Run right before each API call of a cheap-routed turn or child.
+
+    If anything about to be sent (``messages`` plus ``extra_text``, e.g. plugin context)
+    carries a protected marker while the agent is still on the cheap model, move to the
+    primary first. Returns ``"switched"``, ``"blocked"`` (the primary could not be
+    reached: the caller must end the turn without calling any model), or None.
+    Armed by every cheap route, independent of ``escalate``. Never raises.
     """
     try:
-        if not routed_escalation_pending(agent) or not isinstance(messages, list):
-            return False
-        start = getattr(agent, "_routing_protected_scanned", 0)
-        start = start if isinstance(start, int) and 0 <= start <= len(messages) else 0
-        agent._routing_protected_scanned = len(messages)
+        if getattr(agent, "_routing_protected_watch", False) is not True:
+            return None
+        cheap_model = getattr(agent, "_routing_cheap_model", None)
+        if cheap_model and str(getattr(agent, "model", "") or "") != str(cheap_model):
+            return None  # already off the cheap model
         markers = getattr(agent, "_routing_protected_markers", None) or DEFAULT_PROTECTED_MARKERS
-        for msg in messages[start:]:
-            if not isinstance(msg, dict):
-                continue
-            text = _content_text(msg.get("content")).lower()
-            if text and any(m in text for m in markers):
-                if escalate_routed_turn(agent, "protected_content"):
-                    return True
-                # A cheap child: no target; its fallback chain starts with the primary.
-                switched = bool(agent._try_activate_fallback())
-                if not switched:
-                    logger.warning("intelligent_routing: protected content on a cheap route and "
-                                   "no primary to move to")
-                return switched
-        return False
+        texts = [_content_text(m.get("content")) for m in (messages or []) if isinstance(m, dict)]
+        texts.append(_content_text(extra_text))
+        if not any(any(mk in t.lower() for mk in markers) for t in texts if t):
+            return None
+        agent._routing_escalate_pending = False
+        target = getattr(agent, "_routing_escalation_target", None)
+        if isinstance(target, dict) and target.get("model"):
+            ok = _switch_to(agent, target)
+            _log_escalation(agent, "protected_content", str(target["model"]), ok)
+        else:
+            # A cheap child: its fallback chain starts with the parent's primary. Accept the
+            # hop only if it really landed there.
+            primary = getattr(agent, "_routing_primary_model", None)
+            ok = bool(agent._try_activate_fallback()) and bool(primary) and (
+                str(getattr(agent, "model", "") or "") == str(primary))
+            _log_escalation(agent, "protected_content", str(primary or "?"), ok)
+        if ok:
+            agent._routing_protected_watch = False
+            return PROTECTED_SWITCHED
+        logger.warning("intelligent_routing: protected content on a cheap route and the primary "
+                       "is unreachable; ending the turn without a model call")
+        return PROTECTED_BLOCKED
     except Exception:
-        logger.debug("intelligent_routing: protected-content check failed", exc_info=True)
-        return False
+        logger.warning("intelligent_routing: protected-content check failed; ending the turn",
+                       exc_info=True)
+        return PROTECTED_BLOCKED

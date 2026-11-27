@@ -50,7 +50,7 @@ def test_mechanical_turn_swaps_to_cheap_end_to_end():
     results = _run_hook("grep for TODO in the repo")
 
     override = extract_routing_override(results)
-    assert override == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True}
+    assert override == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True, "protected_watch": True}
 
     swapped = apply_routing_override(agent, override)
     assert swapped is True

@@ -135,6 +135,9 @@ def test_http_client_debug_logs_from_the_router_thread_are_dropped(router_env, c
     def fake(text, s):
         logging.getLogger("openai._base_client").debug("Request options: %s", text)
         logging.getLogger("httpcore.http11").debug("send_request_body %s", text)
+        logging.getLogger("anthropic._base_client").debug("Request options: %s", text)
+        logging.getLogger("botocore.endpoint").debug("Sending %s", text)
+        logging.getLogger("some.client.created.later").warning("body %s", text)
         return '{"type": "lookup", "confidence": 0.95}'
 
     with patch.object(lr, "_completion", fake), caplog.at_level(logging.DEBUG):
