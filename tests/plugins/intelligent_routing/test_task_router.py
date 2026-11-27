@@ -92,6 +92,8 @@ def test_a_hard_later_step_makes_the_task_premium():
     assert _tier("check the code in utils.py") == TIER_PREMIUM  # code is a signal
     assert _tier("list the open cards and rank them") == TIER_PREMIUM
     assert _tier("list the open cards and their owners") == TIER_CHEAP
+    # Caught only by the later-step rule: "handle" is no keyword signal on its own.
+    assert _tier("fetch the new tickets and handle them") == TIER_PREMIUM
 
 
 def test_subagent_context_can_veto_a_cheap_goal():

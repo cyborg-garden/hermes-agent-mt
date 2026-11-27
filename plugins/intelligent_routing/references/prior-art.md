@@ -14,7 +14,7 @@ This page is a short citation. The original data stays in the original PR.
 
 **Kept:** the five task categories, and the principle of routing by task type with benchmarks treated as rough guides.
 
-**Changed:** the tiers. Premium is Claude, cheap is OpenRouter `deepseek/deepseek-v3.2`, and the local floor is ollama. The PR's defaults were GPT-5.4 and GPT-5.5.
+**Changed:** the tiers. Premium is Claude, cheap is OpenRouter `deepseek/deepseek-v4-flash-0731` (`deepseek-v3.2` was retired by OpenRouter on 2026-09-28), and the local floor is ollama. The PR's defaults were GPT-5.4 and GPT-5.5.
 
 ## The data behind the cheap-tier choice
 
@@ -23,5 +23,5 @@ From the DeepSWE reference in #43534, and the correction thread in `datacurve-ai
 - DeepSeek V4-Pro scored low on DeepSWE **coding**, about 8%. That number comes with caveats: no effort tuning, OpenRouter guardrail 404s, and a community range of about 5–8%. So hard code generation never goes to DeepSeek.
 - DeepSeek V4-Pro is **competitive at CLI and tool orchestration**: 67.9% on Terminal-Bench at $0.87 per million output tokens. So DeepSeek gets only the turns where it is both competitive and cheap: mechanical and orchestration work.
 
-That gap is why the cheap tier is `deepseek-v3.2` and code generation stays on Claude.
+That gap is why the cheap tier gets only cheap-safe work and code generation stays on the primary.
 Treat the numbers as rough. Recalibrate from your own measurements before relying on them.
