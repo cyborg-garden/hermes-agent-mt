@@ -1034,7 +1034,8 @@ def run_conversation(
         if effective_system:
             api_messages = [{"role": "system", "content": effective_system}] + api_messages
 
-        if moa_config:
+        from agent.protected_session import skip_side_task as _skip_side_task
+        if moa_config and not _skip_side_task("moa_advisors", agent, *api_messages):
             try:
                 from agent.message_content import flatten_message_text as _flatten_mt
                 from agent.moa_loop import _preset_temperature, aggregate_moa_context

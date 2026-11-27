@@ -841,6 +841,7 @@ def judge_goal(
     subgoals: Optional[List[str]] = None,
     background_processes: Optional[List[Dict[str, Any]]] = None,
     contract: Optional[GoalContract] = None,
+    session_id: Optional[str] = None,
 ) -> Tuple[str, str, bool, Optional[Dict[str, Any]]]:
     """Ask the auxiliary model whether the goal is satisfied.
 
@@ -876,6 +877,17 @@ def judge_goal(
     if not last_response.strip():
         # No substantive reply this turn — almost certainly not done yet.
         return "continue", "empty response (nothing to evaluate)", False, None
+
+    # The judge is a side model: never in a protected session.
+    try:
+        from agent.protected_session import skip_side_task
+
+        if skip_side_task("goal_judge", None, goal, last_response,
+                          session_db=_get_session_db() if session_id else None,
+                          session_id=session_id):
+            return "skipped", "protected session", False, None
+    except Exception:
+        return "skipped", "protected session check failed", False, None
 
     try:
         from agent.auxiliary_client import call_llm
@@ -1431,6 +1443,7 @@ class GoalManager:
             subgoals=state.subgoals or None,
             background_processes=background_processes,
             contract=state.contract if state.has_contract() else None,
+            session_id=self.session_id,
         )
         state.last_verdict = verdict
         state.last_reason = reason
