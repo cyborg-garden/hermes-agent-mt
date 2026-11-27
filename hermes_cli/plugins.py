@@ -1936,9 +1936,16 @@ class PluginManager:
         kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
         callbacks = self._hooks.get(hook_name, [])
         results: List[Any] = []
+        # Each callback runs in its plugin's egress scope: in a protected session
+        # its outbound requests off the primary are refused (agent/protected_session.py).
+        from agent.protected_session import egress_scope, plugin_scope_name, skip_plugin_hook
         for cb in callbacks:
             try:
-                ret = cb(**kwargs)
+                _scope = plugin_scope_name(cb)
+                if skip_plugin_hook(_scope):
+                    continue  # an exporter never receives a protected session's payload
+                with egress_scope(_scope):
+                    ret = cb(**kwargs)
                 if ret is not None:
                     results.append(ret)
             except Exception as exc:
@@ -2273,6 +2280,13 @@ def resolve_pre_tool_block(
     times out is fail-closed to a block; ``block`` blocks with its message;
     anything else proceeds.
     """
+    # Protected session (agent/protected_session.py): default-deny tool allowlist,
+    # enforced here because every dispatch site (registry, the agent-loop tools
+    # such as memory and delegate_task, concurrent and sequential) passes through.
+    from agent.protected_session import refuse_tool_if_protected
+    _protected_refusal = refuse_tool_if_protected(tool_name, args)
+    if _protected_refusal is not None:
+        return _protected_refusal
     details = _get_pre_tool_call_directive_details(
         tool_name, args, task_id=task_id, session_id=session_id,
         tool_call_id=tool_call_id, turn_id=turn_id,

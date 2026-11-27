@@ -2798,6 +2798,47 @@ class SessionDB:
             )
         self._execute_write(_do)
 
+    def mark_session_protected(self, session_id: str) -> None:
+        """Set the sticky ``_protected`` flag in a session's ``model_config``.
+
+        The flag marks a session that has held protected text (see
+        ``agent/protected_session.py``); nothing clears it. A non-JSON
+        ``model_config`` is replaced by one holding only the flag.
+        """
+        def _do(conn):
+            conn.execute(
+                "UPDATE sessions SET model_config = json_set("
+                "CASE WHEN json_valid(model_config) THEN model_config ELSE '{}' END, "
+                "'$._protected', json('true')) WHERE id = ?",
+                (session_id,),
+            )
+        self._execute_write(_do)
+
+    def session_is_protected(self, session_id: str, max_hops: int = 64) -> bool:
+        """True when this session or any ancestor (compression continuation,
+        branch source, delegating parent) carries the ``_protected`` flag."""
+        seen = set()
+        sid = session_id
+        while sid and sid not in seen and len(seen) < max_hops:
+            seen.add(sid)
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT model_config, parent_session_id FROM sessions WHERE id = ?",
+                    (sid,),
+                ).fetchone()
+            if not row:
+                return False
+            raw, parent = row[0], row[1]
+            if raw:
+                try:
+                    cfg = json.loads(raw)
+                except (TypeError, ValueError):
+                    cfg = None
+                if isinstance(cfg, dict) and cfg.get("_protected") is True:
+                    return True
+            sid = parent
+        return False
+
     def update_system_prompt(self, session_id: str, system_prompt: str) -> None:
         """Store the full assembled system prompt snapshot."""
         def _do(conn):

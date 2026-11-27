@@ -159,22 +159,24 @@ def build_turn_context(
 
     # Restore the primary runtime if the previous turn activated fallback.
     agent._restore_primary_runtime()
+    # Protected session (agent/protected_session.py): pick the sticky flag back up
+    # from the session record, scan what this turn starts with (which only ever
+    # sets it), and make this agent the running session for the egress hooks.
+    from agent import protected_session as _ps
+    _ps.load_persisted(agent)
+    _turn_start = list(conversation_history or []) + [{"role": "user", "content": user_message}]
+    _ps.scan(agent, _turn_start, source="turn_start")
+    _ps.activate(agent)
     # A fallback kept by a rate-limit cooldown must not carry protected text (in the
     # history or this message): back to the primary now, whatever the cooldown.
     try:
         from agent.routing_override import restore_primary_if_protected
-        restore_primary_if_protected(
-            agent, list(conversation_history or []) + [{"role": "user", "content": user_message}])
+        restore_primary_if_protected(agent, _turn_start)
     except Exception:
         logger.debug("protected-content primary restore failed", exc_info=True)
 
     # Tell auxiliary_client what the live main provider/model are for this turn
     # after primary restoration has settled the runtime.
-    try:
-        from agent.auxiliary_client import set_protected_session
-        set_protected_session(getattr(agent, "_protected_session", False) is True)
-    except Exception:
-        pass
     try:
         from agent.auxiliary_client import set_runtime_main
         set_runtime_main(

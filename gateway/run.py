@@ -5857,8 +5857,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event.text = _synth
                     _reply = await _approval_handler(event)
                     logger.info(
-                        "Approval response via plain text: session=%s verb=%s args=%r",
-                        session_key, _verb, _normalized_args,
+                        "Approval response via plain text: session=%s verb=%s args_len=%d",
+                        session_key, _verb, len(str(_normalized_args or "")),
                     )
                     _adapter = self._adapter_for_source(event.source)
                     if _adapter and _reply:
@@ -7480,6 +7480,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._gateway_loop = asyncio.get_running_loop()
         except RuntimeError:
             self._gateway_loop = None
+        # Work a tool thread hands to this loop is delivery to the person, not the
+        # tool's own egress (agent/protected_session.py).
+        try:
+            from agent.protected_session import register_delivery_loop
+            register_delivery_loop(self._gateway_loop)
+        except Exception:
+            logger.debug("could not register the delivery loop", exc_info=True)
         logger.info("Session storage: %s", self.config.sessions_dir)
 
         # Sanity-check that systemd's TimeoutStopSec covers our drain
@@ -9803,12 +9810,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not is_internal:
             try:
                 from hermes_cli.plugins import invoke_hook as _invoke_hook
-                _hook_results = _invoke_hook(
-                    "pre_gateway_dispatch",
-                    event=event,
-                    gateway=self,
-                    session_store=self.session_store,
-                )
+                from agent.protected_session import protected_chat as _protected_chat
+                # Fired outside any turn: a chat whose session is protected runs the
+                # hook as a protected session (agent/protected_session.py).
+                _chat_sid = None
+                try:
+                    _chat_entry = self.session_store._entries.get(
+                        self._session_key_for_source(event.source))
+                    _chat_sid = getattr(_chat_entry, "session_id", None)
+                    if not isinstance(_chat_sid, str):
+                        _chat_sid = None
+                except Exception:
+                    _chat_sid = None
+                with _protected_chat(protected=await self._session_is_protected(_chat_sid)):
+                    _hook_results = _invoke_hook(
+                        "pre_gateway_dispatch",
+                        event=event,
+                        gateway=self,
+                        session_store=self.session_store,
+                    )
             except Exception as _hook_exc:
                 logger.warning("pre_gateway_dispatch invocation failed: %s", _hook_exc)
                 _hook_results = []
@@ -11782,13 +11802,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
-        _msg_preview = (event.text or "")[:80].replace("\n", " ")
         _reply_id = getattr(event, "reply_to_message_id", None)
-        _reply_txt = (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " ")
         logger.info(
-            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
+            "inbound message: platform=%s user=%s chat=%s msg_len=%d reply_to_id=%s reply_to_text_len=%d",
             _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
+            source.chat_id or "unknown", len(event.text or ""), _reply_id,
+            len(getattr(event, "reply_to_text", None) or ""),
         )
 
         # Get or create session
@@ -14224,10 +14243,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if self._is_duplicate_voice_transcript(guild_id, user_id, transcript):
             logger.info(
-                "Suppressing duplicate voice transcript for guild=%s user=%s: %s",
+                "Suppressing duplicate voice transcript for guild=%s user=%s (%d chars)",
                 guild_id,
                 user_id,
-                transcript[:100],
+                len(transcript),
             )
             return
 
@@ -14408,6 +14427,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # through send_document (preserving bytes) instead of
             # send_multiple_images (Telegram sendPhoto recompresses to ~1280px).
             force_document_attachments = "[[as_document]]" in response
+
+            # A protected session never fetches an image URL the model wrote.
+            from agent import protected_session as _ps
+            if _ps.is_protected():
+                response = _ps.defang_images(response)
 
             from gateway.platforms.base import BasePlatformAdapter, should_send_media_as_audio
 
@@ -18793,7 +18817,40 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
         finally:
             _already_sent_media = self.__dict__.setdefault("_interim_media_sent", {}).pop(_media_key, None)
-        return _strip_already_sent_media(result, _already_sent_media)
+        result = _strip_already_sent_media(result, _already_sent_media)
+        # A protected session's reply never makes the gateway fetch an image URL
+        # the model wrote: image tags become plain alt text (agent/protected_session.py).
+        try:
+            from agent import protected_session as _ps
+            if isinstance(result, dict) and isinstance(result.get("final_response"), str):
+                for _sid in {session_id, result.get("session_id")}:
+                    if await self._session_is_protected(_sid):
+                        result["final_response"] = _ps.defang_images(result["final_response"])
+                        break
+        except Exception:
+            logger.debug("protected reply image check failed", exc_info=True)
+        return result
+
+    async def _session_is_protected(self, session_id: Any) -> bool:
+        """Whether a session holds protected text (agent/protected_session.py): the
+        in-process registry, else its record, read off the loop. Fails closed."""
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        from agent import protected_session as _ps
+        if _ps.session_id_is_protected(session_id):
+            return True
+        _protected_flag_db = getattr(self, "_session_db", None)
+        if _protected_flag_db is None or not hasattr(_protected_flag_db, "session_is_protected"):
+            return False
+        try:
+            # AsyncSessionDB offloads the read; a plain stub answers directly.
+            _read = getattr(_protected_flag_db, "session_is_protected")
+            _answer = _read(session_id)
+            if inspect.isawaitable(_answer):
+                _answer = await _answer
+            return _answer is True
+        except Exception:
+            return True
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
         """Resolve the profile name for an inbound source via configured routes.
@@ -19864,10 +19921,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             if prepared_message is None:
                 logger.debug(
-                    "status_callback suppressed for %s/%s: %s",
+                    "status_callback suppressed for %s/%s (%d chars)",
                     source.platform.value if source.platform else "unknown",
                     event_type,
-                    _redact_gateway_user_facing_secrets(str(message or ""))[:160],
+                    len(str(message or "")),
                 )
                 return
             _fut = safe_schedule_threadsafe(
@@ -21810,7 +21867,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     else:
                         pending = _pending_text or _build_media_placeholder(pending_event)
                     if pending:
-                        logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
+                        logger.debug("Processing queued message after agent completion (%d chars)", len(pending))
 
             # Leftover /steer: if a steer arrived after the last tool batch
             # (e.g. during the final API call), the agent couldn't inject it
@@ -21820,7 +21877,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _leftover_steer = result.get("pending_steer")
                 if _leftover_steer:
                     pending = _leftover_steer
-                    logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
+                    logger.debug("Delivering leftover /steer as next turn (%d chars)", len(pending))
 
             # Safety net: if the pending text is a slash command (e.g. "/stop",
             # "/new"), discard it — commands should never be passed to the agent
@@ -21854,7 +21911,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pending = None
 
             if pending_event or pending:
-                logger.debug("Processing pending message: '%s...'", pending[:40])
+                logger.debug("Processing pending message (%d chars)", len(pending))
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent

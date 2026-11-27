@@ -397,6 +397,11 @@ def _run_references_parallel(
     ``CanonicalUsage`` (zeroed for skipped/failed references).
     """
     from agent.usage_pricing import CanonicalUsage
+    from agent.protected_session import skip_side_task
+
+    # MoA advisors are other models: a protected session never consults them.
+    if skip_side_task("moa_advisors", None, *(ref_messages or [])):
+        return []
 
     if not reference_models:
         return []

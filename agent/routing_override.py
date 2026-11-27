@@ -336,14 +336,14 @@ def revert_routing_override(agent: Any) -> bool:
 
 # ── Escalation ────────────────────────────────────────────────────────────────
 
-# Text that marks content as protected. The defaults are the footer the
-# papareo_transcribe plugin puts on every Papa Reo transcript (Kaitiakitanga
-# License): that text must never reach a model other than the configured primary.
-# A route may add more with ``protected_markers``.
+# Text that marks content as protected: the footer the papareo_transcribe plugin
+# writes into every Papa Reo transcript ("This text transcribed by Papa Reo API.
+# Please be sure to comply with ..."). Only text inside real transcript output
+# matches. The licence name alone does not: the plugin's own instructions and
+# skill name it on every run without carrying any transcript. A route or
+# ``routing.protected_markers`` may add more.
 DEFAULT_PROTECTED_MARKERS: tuple = (
-    "transcribed by papa reo",
-    "kaitiakitanga license",
-    "kaitiakitanga licence",
+    "transcribed by papa reo api",
 )
 
 # Short refusal openers. Matched only against a SHORT reply from a cheap-routed
@@ -527,17 +527,15 @@ def agent_extra_text(agent: Any, extras: Any = ()) -> list:
 
 
 def session_holds_protected_text(agent: Any) -> bool:
-    """True when the agent's session (messages, this turn's plugin context and memory
-    recall, system prompt) carries a protected marker. Fails closed. Never raises."""
+    """The session's sticky protected flag (``agent/protected_session.py``), after
+    scanning its messages, this turn's plugin context and memory recall and the system
+    prompt, which only ever sets it. Fails closed. Never raises."""
     try:
-        # Set on a child by a parent holding protected text: the child may have been
-        # handed the body without the marker.
-        if getattr(agent, "_protected_session", False) is True:
-            return True
+        from agent import protected_session
+
         extras = getattr(agent, "_turn_protected_extras", None) or ()
-        markers = getattr(agent, "_routing_protected_markers", None)
-        return carries_protected_text(getattr(agent, "_session_messages", None),
-                                      agent_extra_text(agent, tuple(extras)), markers)
+        return protected_session.scan(agent, getattr(agent, "_session_messages", None),
+                                      *tuple(extras))
     except Exception:
         return True
 
@@ -604,8 +602,14 @@ def _message_text(message: Any) -> str:
 
 def carries_protected_text(messages: Any, extra_text: Any = "", markers: Any = None) -> bool:
     """True when any message (content or tool-call arguments) or ``extra_text`` holds a marker."""
-    marks = [normalize_for_markers(m) for m in (markers or DEFAULT_PROTECTED_MARKERS)]
-    marks = [m for m in marks if m]
+    try:
+        from agent.protected_session import configured_markers
+
+        base = configured_markers()
+    except Exception:
+        base = DEFAULT_PROTECTED_MARKERS
+    marks = [normalize_for_markers(m) for m in (tuple(base) + tuple(markers or ()))]
+    marks = [m for m in dict.fromkeys(marks) if m]
     texts = [_message_text(m) for m in (messages or [])]
     texts.append(_content_text(extra_text))
     for t in texts:
@@ -635,6 +639,14 @@ def _primary_model_of(agent: Any) -> Optional[str]:
     child_primary = getattr(agent, "_routing_primary_model", None)
     if child_primary:
         return str(child_primary)
+    try:
+        from agent.protected_session import configured_primary
+
+        frozen = configured_primary(agent)
+        if frozen:
+            return str(frozen["model"]).strip() or None
+    except Exception:
+        pass
     runtime = _configured_primary_runtime(agent)
     if runtime:
         return str(runtime["model"]).strip() or None
@@ -679,12 +691,14 @@ def restore_primary_if_protected(agent: Any, messages: Any, extras: Any = ()) ->
     back to the primary. ``"switched"``, ``"blocked"`` (the primary could not be
     restored: send nothing) or None. Scans only when off the primary. Never raises."""
     try:
-        primary = _primary_model_of(agent)
-        if not primary or str(getattr(agent, "model", "") or "") == primary:
+        from agent import protected_session
+
+        if not protected_session.scan(agent, messages, *tuple(extras or ())):
             return None
-        markers = getattr(agent, "_routing_protected_markers", None)
-        if getattr(agent, "_protected_session", False) is not True and not carries_protected_text(
-                messages, agent_extra_text(agent, tuple(extras or ())), markers):
+        primary = _primary_model_of(agent)
+        if not primary:
+            return PROTECTED_BLOCKED
+        if str(getattr(agent, "model", "") or "") == primary:
             return None
         return PROTECTED_SWITCHED if _force_restore_primary(agent) else PROTECTED_BLOCKED
     except Exception:
@@ -699,13 +713,15 @@ def protected_on_routed_model(agent: Any, messages: Any, extra_text: Any = "") -
     Side-effect free; post-turn work (background review, manual compression) uses it
     to stay off the cheap model after a blocked turn. Never raises."""
     try:
+        from agent import protected_session
+
+        protected = protected_session.scan(agent, messages, extra_text)
         if getattr(agent, "_routing_protected_watch", False) is not True:
             return False
         primary = _primary_model_of(agent)
         if primary and str(getattr(agent, "model", "") or "") == primary:
             return False
-        markers = getattr(agent, "_routing_protected_markers", None)
-        return carries_protected_text(messages, extra_text, markers)
+        return protected
     except Exception:
         return True
 

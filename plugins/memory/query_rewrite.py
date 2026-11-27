@@ -111,6 +111,10 @@ def rewrite_memory_query(user_message: str) -> str:
     bounded = _bounded_user_message(user_message)
     if not bounded:
         return ""
+    # The rewrite model is a side model: never in a protected session.
+    from agent.protected_session import skip_side_task
+    if skip_side_task("memory_query_rewrite", None, user_message):
+        return ""
 
     try:
         from agent.auxiliary_client import call_llm

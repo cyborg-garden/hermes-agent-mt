@@ -113,6 +113,9 @@ from agent.process_bootstrap import (
     _SafeWriter,  # noqa: F401  # re-exported for tests that `from run_agent import _SafeWriter`
     _get_proxy_for_base_url,
 )
+# Installs the protected-session egress hooks (httpx, requests, urllib, aiohttp,
+# botocore, thread context) once per process. See agent/protected_session.py.
+import agent.protected_session  # noqa: F401,E402
 from agent.iteration_budget import IterationBudget
 
 
@@ -740,6 +743,11 @@ class AIAgent:
         
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
+
+        # A new session starts unflagged; a protected one is re-read from its
+        # record (or its history rescanned) at the next turn start.
+        from agent.protected_session import reset_for_new_session
+        reset_for_new_session(self)
 
         # Copilot x-initiator: True for the first API call of a user turn,
         # False for tool-loop follow-ups (#3040).
@@ -5991,19 +5999,23 @@ class AIAgent:
         auto-compress abort.  Auto-compress callers use the default
         ``force=False``.
         """
-        # Compression sends the transcript to the compressor's model, which on a
-        # cheap route is the cheap model: protected text moves the agent to its
-        # primary first, or compression is skipped (agent/routing_override.py).
-        from agent.routing_override import PROTECTED_BLOCKED, escalate_if_protected
-        if escalate_if_protected(self, messages, getattr(self, "_cached_system_prompt", "")) == PROTECTED_BLOCKED:
-            logger.warning("Skipping compression: protected text on a cheap route, primary unreachable")
-            return messages, getattr(self, "_cached_system_prompt", None) or system_message
-        from agent.conversation_compression import compress_context
-        result = compress_context(
-            self, messages, system_message,
-            approx_tokens=approx_tokens, task_id=task_id, focus_topic=focus_topic,
-            force=force,
-        )
+        # Compression sends the transcript to a model. In a protected session that
+        # is the configured primary only: the agent goes back to it first (a cheap
+        # route, a sticky fallback), the summary call is pinned to it, and the
+        # egress hooks refuse anything else. Unreachable primary: skip.
+        from agent import protected_session as _ps
+        from agent.turn_protected_gate import PROTECTED_BLOCKED, protected_content_gate
+        _ps.scan(self, messages, source="compression")
+        with _ps.session(self):
+            if _ps.is_protected(self) and protected_content_gate(self, messages) == PROTECTED_BLOCKED:
+                logger.warning("Skipping compression: protected session and the primary is unreachable")
+                return messages, getattr(self, "_cached_system_prompt", None) or system_message
+            from agent.conversation_compression import compress_context
+            result = compress_context(
+                self, messages, system_message,
+                approx_tokens=approx_tokens, task_id=task_id, focus_topic=focus_topic,
+                force=force,
+            )
         # Compression returns a NEW list (conversation_compression checks
         # `compressed is messages` to detect the no-progress case), and every
         # caller rebinds its local `messages` to it. Re-publish here rather
@@ -6261,6 +6273,11 @@ class AIAgent:
         # replaces the value with the live runtime after fallback restoration.
         # Keep the scope local instead of storing ContextVar tokens on the agent,
         # which may be observed from another thread.
+        # The running protected-egress session (agent/protected_session.py) is set
+        # at turn start; it is scoped to the turn, so the caller's Context (a reused
+        # worker thread, a CLI main thread) gets its own value back afterwards.
+        from agent import protected_session as _protected_session
+        egress_token = _protected_session._SESSION.set(None)
         with scoped_runtime_main({}):
             try:
                 result = run_conversation(
@@ -6284,6 +6301,7 @@ class AIAgent:
             finally:
                 reset_accounting_context(acct_token)
                 reset_conversation_context(token)
+                _protected_session.reset(egress_token)
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """

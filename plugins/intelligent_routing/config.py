@@ -49,9 +49,7 @@ _DEFAULT_ROUTER_MAX_CHARS = 800
 # The mid-turn check in core (agent/routing_override.py) keeps the same list; a test
 # holds the two equal. Extend per agent with routing.protected_markers.
 DEFAULT_PROTECTED_MARKERS: tuple[str, ...] = (
-    "transcribed by papa reo",
-    "kaitiakitanga license",
-    "kaitiakitanga licence",
+    "transcribed by papa reo api",
 )
 
 # Provider-specific request-BODY params to send WITH a cheap-routed turn — e.g.

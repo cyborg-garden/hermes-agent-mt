@@ -2765,6 +2765,10 @@ def delegate_task(
                 **_route_build_kwargs(t_route),
             )
             _arm_routed_child(child, t_route, t_creds)
+            # Children inherit the parent's configured primary and its sticky
+            # protected flag (agent/protected_session.py).
+            from agent.protected_session import inherit as _inherit_protected
+            _inherit_protected(child, parent_agent)
             if _parent_protected:
                 child._protected_session = True
             # Override with correct parent tool names (before child construction mutated global)
@@ -3230,6 +3234,16 @@ def _primary_creds_for_routed_parent(creds: dict, parent_agent) -> dict:
 
 def _task_routes(task_list: list, cfg: dict, creds: dict, parent_agent) -> list:
     """One ``(creds, route)`` pair per task; ``route`` is None on the default route."""
+    from agent import protected_session
+    if protected_session.is_protected(parent_agent):
+        # A protected parent's children run on the parent's configured primary
+        # (never delegation.model, a cheap route or a sticky fallback), or not at all.
+        primary = protected_session.configured_primary(parent_agent) or {}
+        if not (primary.get("model") and primary.get("base_url")):
+            raise ValueError("This conversation holds protected text and its main model "
+                             "cannot be named, so subagents cannot be started.")
+        pinned = {**creds, **{k: primary.get(k) or None for k in _ROUTE_CRED_KEYS}}
+        return [(pinned, None)] * len(task_list)
     creds = _primary_creds_for_routed_parent(creds, parent_agent)
     default = [(creds, None)] * len(task_list)
     backend = str((cfg or {}).get("backend") or "").strip()

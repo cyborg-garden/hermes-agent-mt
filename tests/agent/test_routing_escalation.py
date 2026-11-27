@@ -373,4 +373,4 @@ def test_blocked_agent_skips_background_review():
     import inspect
     from agent import turn_finalizer
     src = inspect.getsource(turn_finalizer)
-    assert "not protected_on_routed_model(agent, messages)" in src
+    assert 'not skip_side_task("background_review", agent, *(messages or []))' in src

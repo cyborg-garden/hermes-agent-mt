@@ -1167,6 +1167,18 @@ def handle_function_call(
         if function_name in _AGENT_LOOP_TOOLS:
             return json.dumps({"error": f"{function_name} must be handled by the agent loop"})
 
+        # Protected session (agent/protected_session.py): tools that exist to send
+        # text out are refused, and every other tool runs in an egress scope where
+        # outbound requests off the primary are refused before they are sent.
+        from agent.protected_session import (
+            egress_scope as _egress_scope,
+            refuse_tool_if_protected as _refuse_tool_if_protected,
+            scan_tool_result as _scan_tool_result,
+        )
+        _protected_refusal = _refuse_tool_if_protected(function_name, function_args)
+        if _protected_refusal is not None:
+            return json.dumps({"error": _protected_refusal}, ensure_ascii=False)
+
         # Check plugin hooks for a block/approve directive (unless caller
         # already checked — e.g. run_agent._invoke_tool passes skip=True to
         # avoid double-firing the hook).
@@ -1278,17 +1290,21 @@ def handle_function_call(
                     )
             from hermes_cli.middleware import run_tool_execution_middleware
 
-            result = run_tool_execution_middleware(
-                function_name,
-                function_args,
-                _dispatch,
-                original_args=_tool_original_args,
-                task_id=task_id or "",
-                session_id=session_id or "",
-                tool_call_id=tool_call_id or "",
-                turn_id=turn_id or "",
-                api_request_id=api_request_id or "",
-            )
+            with _egress_scope(f"tool:{function_name}"):
+                result = run_tool_execution_middleware(
+                    function_name,
+                    function_args,
+                    _dispatch,
+                    original_args=_tool_original_args,
+                    task_id=task_id or "",
+                    session_id=session_id or "",
+                    tool_call_id=tool_call_id or "",
+                    turn_id=turn_id or "",
+                    api_request_id=api_request_id or "",
+                )
+            # A transcript arriving in a tool result marks the session before any
+            # post-tool hook or the next request can see it.
+            _scan_tool_result(function_name, result)
         finally:
             if _approval_tokens is not None and reset_current_observability_context is not None:
                 try:

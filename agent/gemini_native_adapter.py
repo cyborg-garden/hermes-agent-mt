@@ -670,7 +670,7 @@ def _iter_sse_events(response: httpx.Response) -> Iterator[Dict[str, Any]]:
             try:
                 payload = json.loads(data)
             except json.JSONDecodeError:
-                logger.debug("Non-JSON Gemini SSE line: %s", data[:200])
+                logger.debug("Non-JSON Gemini SSE line (%d chars)", len(data))
                 continue
             if isinstance(payload, dict):
                 yield payload

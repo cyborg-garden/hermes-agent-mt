@@ -6960,46 +6960,51 @@ def _obj_get(obj: Any, key: str, default: Any = None) -> Any:
     return value
 
 
-# True while the running turn belongs to a session marked protected (a child
-# spawned by a parent holding protected text): its requests may carry protected
-# text without the marker. Context-local, set at every turn start.
-_PROTECTED_SESSION_CONTEXT: contextvars.ContextVar = contextvars.ContextVar(
-    "hermes_aux_protected_session", default=False)
-
-
+# Protected sessions (agent/protected_session.py). These two keep the older API for
+# callers and tests: they mark the running context protected without an agent.
 def set_protected_session(protected: bool) -> contextvars.Token:
-    return _PROTECTED_SESSION_CONTEXT.set(bool(protected))
+    from agent import protected_session
+
+    return protected_session._SESSION.set(
+        protected_session.EgressSession(None, None, protected=bool(protected)))
 
 
 def reset_protected_session(token: contextvars.Token) -> None:
+    from agent import protected_session
+
+    protected_session.reset(token)
+
+
+def _protected_text_pin(messages: Any, main_runtime: Dict[str, Any], task: Any,
+                        explicit_runtime: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """None outside a protected session; otherwise the runtime the call is pinned to.
+
+    A request holding a marker marks the running session (the scan only sets the
+    flag). The pin is the running session's configured primary, never the live
+    "main" runtime, which a fallback can have moved; with no running session, a
+    runtime the caller passed explicitly. Raises (sending nothing) when there is
+    neither."""
     try:
-        _PROTECTED_SESSION_CONTEXT.reset(token)
-    except (RuntimeError, ValueError):
-        pass
+        from agent import protected_session
 
-
-def _protected_text_pin(messages: Any, main_runtime: Dict[str, Any], task: Any) -> Optional[Dict[str, Any]]:
-    """None when ``messages`` hold no protected text; otherwise the main runtime the
-    call is pinned to. Raises (sending nothing) when there is no main model to pin to."""
-    try:
-        from agent.routing_override import carries_protected_text
-
-        protected = _PROTECTED_SESSION_CONTEXT.get() is True or carries_protected_text(messages)
+        protected = protected_session.scan_running(messages, source="auxiliary")
+        primary = protected_session.running_primary()
     except Exception:
-        protected = True  # fail closed
+        protected, primary = True, None  # fail closed
     if not protected:
         return None
-    if not (main_runtime or {}).get("model") or not (main_runtime or {}).get("provider"):
+    pin = primary or explicit_runtime
+    if not (pin or {}).get("model") or not (pin or {}).get("provider"):
         raise _protected_unavailable(task)
-    logger.info("Auxiliary %s: protected text; pinned to the main model, no fallback",
+    logger.info("Auxiliary %s: protected session; pinned to the configured primary, no fallback",
                 task or "call")
-    return main_runtime
+    return pin
 
 
 def _protected_unavailable(task: Any) -> RuntimeError:
     return RuntimeError(
-        f"Auxiliary {task or 'call'}: the request holds protected text and the main "
-        "model is unavailable; nothing was sent to another model.")
+        f"Auxiliary {task or 'call'}: the session holds protected text and its configured "
+        "primary model is unavailable; nothing was sent to another model.")
 
 
 def call_llm(
@@ -7060,10 +7065,11 @@ def call_llm(
     # and fallbacks. Reading ambient state independently in each phase lets a
     # concurrent /model switch produce a key for one runtime and a client for
     # another.
+    _explicit_main_runtime = main_runtime
     main_runtime = _normalize_main_runtime(main_runtime)
-    # Protected text (a Papa Reo transcript) may only reach the main model: pin the
-    # call to it, whatever this task is configured to use, and never fall back.
-    _protected_pin = _protected_text_pin(messages, main_runtime, task)
+    # Protected text (a Papa Reo transcript) may only reach the configured primary:
+    # pin the call to it, whatever this task is configured to use, never fall back.
+    _protected_pin = _protected_text_pin(messages, main_runtime, task, _explicit_main_runtime)
     if _protected_pin is not None:
         provider, model = _protected_pin["provider"], _protected_pin["model"]
         base_url, api_key = _protected_pin.get("base_url") or None, _protected_pin.get("api_key") or None
@@ -7724,10 +7730,11 @@ async def async_call_llm(
     """
     # Keep every async phase on the same runtime identity, even if another
     # session switches models while this task is awaiting network I/O.
+    _explicit_main_runtime = main_runtime
     main_runtime = _normalize_main_runtime(main_runtime)
-    # Protected text (a Papa Reo transcript) may only reach the main model: pin the
-    # call to it, whatever this task is configured to use, and never fall back.
-    _protected_pin = _protected_text_pin(messages, main_runtime, task)
+    # Protected text (a Papa Reo transcript) may only reach the configured primary:
+    # pin the call to it, whatever this task is configured to use, never fall back.
+    _protected_pin = _protected_text_pin(messages, main_runtime, task, _explicit_main_runtime)
     if _protected_pin is not None:
         provider, model = _protected_pin["provider"], _protected_pin["model"]
         base_url, api_key = _protected_pin.get("base_url") or None, _protected_pin.get("api_key") or None

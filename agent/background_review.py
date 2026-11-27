@@ -626,6 +626,10 @@ def _run_review_in_thread(
     review prompt, and surfaces a compact action summary back to the user
     via ``agent._safe_print`` and ``agent.background_review_callback``.
     """
+    # A protected session's text never goes to a review fork (a side model).
+    from agent.protected_session import skip_side_task
+    if skip_side_task("background_review", agent, *(messages_snapshot or [])):
+        return
     # Local import to avoid a hard circular dep at module load.
     from run_agent import AIAgent
     from tools.terminal_tool import set_approval_callback as _set_approval_callback

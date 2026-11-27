@@ -2552,6 +2552,13 @@ class BasePlatformAdapter(ABC):
     def __init__(self, config: PlatformConfig, platform: Platform):
         self.config = config
         self.platform = platform
+        # This adapter's own configured endpoint is a delivery host in protected
+        # sessions (agent/protected_session.py); taken from config, not traffic.
+        try:
+            from agent.protected_session import register_adapter_endpoints
+            register_adapter_endpoints(config)
+        except Exception:
+            pass
         self._message_handler: Optional[MessageHandler] = None
         # Optional hook (e.g. Telegram DM topic recovery) that rewrites
         # ``event.source.thread_id`` before session keying. Returns the
@@ -3456,10 +3463,10 @@ class BasePlatformAdapter(ABC):
                 await asyncio.sleep(human_delay)
             try:
                 logger.info(
-                    "[%s] Sending image: %s (alt=%s)",
+                    "[%s] Sending image: %s (alt_len=%d)",
                     self.name,
                     safe_url_for_log(image_url),
-                    alt_text[:30] if alt_text else "",
+                    len(alt_text or ""),
                 )
                 if image_url.startswith("file://"):
                     img_result = await self.send_image_file(

@@ -636,7 +636,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             duration = time.time() - start
             is_error, _ = _detect_tool_failure(function_name, result)
             if is_error:
-                logger.info("tool %s failed (%.2fs): %s", function_name, duration, result[:200])
+                logger.info("tool %s failed (%.2fs, %d chars)", function_name, duration, len(str(result)))
             else:
                 logger.info("tool %s completed (%.2fs, %d chars)", function_name, duration, len(result))
             results[index] = (function_name, function_args, result, duration, is_error, False, middleware_trace)
@@ -898,8 +898,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
             if is_error:
                 _err_text = _multimodal_text_summary(function_result)
-                result_preview = _err_text[:200] if len(_err_text) > 200 else _err_text
-                logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
+                logger.warning("Tool %s returned error (%.2fs, %d chars)", function_name, tool_duration, len(_err_text))
 
             # Track file-mutation outcome for the turn-end verifier.
             # `blocked` calls never actually ran — don't let a guardrail
@@ -924,7 +923,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
             if agent.verbose_logging:
                 logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
-                logging.debug(f"Tool result ({len(function_result)} chars): {function_result}")
+                logging.debug("Tool result (%d chars)", len(function_result))
 
         # Print cute message per tool
         if agent._should_emit_quiet_tool_messages():
@@ -1559,13 +1558,9 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             tool_duration = time.time() - tool_start_time
 
         if isinstance(function_result, str):
-            result_preview = function_result if agent.verbose_logging else (
-                function_result[:200] if len(function_result) > 200 else function_result
-            )
             _result_len = len(function_result)
         else:
             # Multimodal dict result (_multimodal=True) — not sliceable as string
-            result_preview = function_result
             _result_len = len(str(function_result))
 
         # Log tool errors to the persistent error log so [error] tags
@@ -1600,11 +1595,8 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 function_result,
                 failed=_is_error_result,
             )
-            result_preview = function_result if agent.verbose_logging else (
-                function_result[:200] if len(function_result) > 200 else function_result
-            )
         if _is_error_result:
-            logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
+            logger.warning("Tool %s returned error (%.2fs, %d chars)", function_name, tool_duration, len(str(function_result)))
         else:
             logger.info("tool %s completed (%.2fs, %d chars)", function_name, tool_duration, _result_len)
 
@@ -1636,7 +1628,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         if agent.verbose_logging:
             logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
             _log_result = _multimodal_text_summary(function_result)
-            logging.debug(f"Tool result ({len(_log_result)} chars): {_log_result}")
+            logging.debug("Tool result (%d chars)", len(_log_result))
 
         if not _execution_blocked and agent.tool_complete_callback:
             try:

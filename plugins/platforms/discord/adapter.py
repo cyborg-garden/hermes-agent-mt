@@ -28,6 +28,17 @@ from typing import Callable, Dict, List, Optional, Any, Tuple
 logger = logging.getLogger(__name__)
 
 
+
+def _holds_protected_transcript(raw: Any) -> bool:
+    """True when file bytes hold the Papa Reo transcript footer."""
+    try:
+        from agent.protected_session import text_has_marker
+
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return text_has_marker(text)
+    except Exception:
+        return True
+
 class _Snowflake:
     """Minimal object exposing ``.id`` — satisfies discord.py's Snowflake
     protocol for ``channel.history(before=...)`` without constructing a
@@ -6886,6 +6897,12 @@ class DiscordAdapter(BasePlatformAdapter):
         resolved_reference = getattr(reference, "resolved", None) if reference else None
         if resolved_reference is not None:
             referenced_attachments = list(getattr(resolved_reference, "attachments", []) or [])
+        # Attachments of the bot's own message being replied to: a transcript file
+        # this agent sent (Papa Reo) is never pulled back into the conversation.
+        _own_reference_attachments = set()
+        if resolved_reference is not None and self._client is not None and \
+                getattr(resolved_reference, "author", None) == getattr(self._client, "user", None):
+            _own_reference_attachments = {id(a) for a in referenced_attachments}
 
         all_attachments = list(message.attachments) + snapshot_attachments + referenced_attachments
 
@@ -7021,6 +7038,12 @@ class DiscordAdapter(BasePlatformAdapter):
                 else:
                     try:
                         raw_bytes = await self._cache_discord_document(att, ext)
+                        if id(att) in _own_reference_attachments and _holds_protected_transcript(raw_bytes):
+                            _placeholder = (f"[{att.filename or 'transcript'}: a Papa Reo transcript this "
+                                            "agent sent earlier; its text is not shown]")
+                            pending_text_injection = (f"{pending_text_injection}\n\n{_placeholder}"
+                                                      if pending_text_injection else _placeholder)
+                            continue
                         cached_path = cache_document_from_bytes(
                             raw_bytes, att.filename or f"document{ext or '.bin'}"
                         )

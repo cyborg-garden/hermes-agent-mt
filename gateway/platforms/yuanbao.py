@@ -1218,8 +1218,8 @@ class DecodeMiddleware(InboundMiddleware):
             push, via = self._decode_single(ctx.adapter, data)
             if not push:
                 logger.info(
-                "[%s] Push decoded but no valid message. raw hex(first64)=%s",
-                    ctx.adapter.name, data.hex()[:128] if data else "(empty)",
+                "[%s] Push decoded but no valid message. raw_len=%d",
+                    ctx.adapter.name, len(data or b""),
                 )
                 continue
 
@@ -2012,7 +2012,7 @@ class PlaceholderFilterMiddleware(InboundMiddleware):
 
     async def handle(self, ctx: InboundContext, next_fn) -> None:
         if self.is_skippable_placeholder(ctx.raw_text, len(ctx.media_refs)):
-            logger.debug("[%s] Skipping placeholder message: %r", ctx.adapter.name, ctx.raw_text)
+            logger.debug("[%s] Skipping placeholder message (%d chars)", ctx.adapter.name, len(ctx.raw_text or ""))
             return  # Stop pipeline
         await next_fn()
 
@@ -3165,7 +3165,7 @@ class MediaResolveMiddleware(InboundMiddleware):
         # semantics: a placeholder text accompanied only by quote/observed
         # media (i.e. no fresh attachment of its own) is still skippable.
         if PlaceholderFilterMiddleware.is_skippable_placeholder(ctx.raw_text, own_count):
-            logger.debug("[%s] Skip placeholder after media download: %r", adapter.name, ctx.raw_text)
+            logger.debug("[%s] Skip placeholder after media download (%d chars)", adapter.name, len(ctx.raw_text or ""))
             return  # Stop pipeline
         await next_fn()
 

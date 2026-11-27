@@ -150,7 +150,11 @@ def convert_to_trajectory_format(agent, messages: List[Dict[str, Any]], user_que
                     except json.JSONDecodeError:
                         # This shouldn't happen since we validate and retry during conversation,
                         # but if it does, log warning and use empty dict
-                        logger.warning(f"Unexpected invalid JSON in trajectory conversion: {tool_call['function']['arguments'][:100]}")
+                        logger.warning(
+                            "Unexpected invalid JSON in trajectory conversion: tool=%s args_len=%d",
+                            tool_call["function"].get("name"),
+                            len(tool_call["function"]["arguments"]),
+                        )
                         arguments = {}
                     
                     tool_call_json = {
@@ -315,15 +319,14 @@ def sanitize_tool_call_arguments(
                 # itself becomes an orphan (#58168).
                 tool_call_id = _ra().AIAgent._get_tool_call_id_static(tool_call) or None
                 function_name = function.get("name", "?")
-                preview = arguments[:80]
                 log.warning(
                     "Corrupted tool_call arguments repaired before request "
-                    "(session=%s, message_index=%s, tool_call_id=%s, function=%s, preview=%r)",
+                    "(session=%s, message_index=%s, tool_call_id=%s, function=%s, args_len=%d)",
                     session_id or "-",
                     message_index,
                     tool_call_id or "-",
                     function_name,
-                    preview,
+                    len(arguments),
                 )
                 function["arguments"] = "{}"
 
@@ -3321,9 +3324,8 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
     else:
         messages[target_idx]["content"] = existing_content + marker
     _ra().logger.info(
-        "Delivered /steer to agent after tool batch (%d chars): %s",
+        "Delivered /steer to agent after tool batch (%d chars)",
         len(steer_text),
-        steer_text[:120] + ("..." if len(steer_text) > 120 else ""),
     )
 
 

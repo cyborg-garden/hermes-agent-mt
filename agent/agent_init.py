@@ -1482,6 +1482,8 @@ def init_agent(
                 from agent.memory_manager import MemoryManager as _MemoryManager
                 from plugins.memory import load_memory_provider as _load_mem
                 agent._memory_manager = _MemoryManager()
+                import weakref as _weakref
+                agent._memory_manager._protected_owner = _weakref.ref(agent)
                 _mp = _load_mem(_mem_provider_name)
                 if _mp and _mp.is_available():
                     agent._memory_manager.add_provider(_mp)
@@ -2220,6 +2222,13 @@ def init_agent(
             "anthropic_base_url": agent._anthropic_base_url,
             "is_anthropic_oauth": agent._is_anthropic_oauth,
         })
+    # The configured primary, frozen: the only destination a protected session's
+    # text may reach (agent/protected_session.py). Never updated from the live
+    # runtime, which a fallback, cooldown or cheap route can move.
+    from agent.protected_session import freeze_primary
+    freeze_primary(agent)
+    if getattr(agent, "_protected_session", None) is not True:
+        agent._protected_session = False
 
 
 

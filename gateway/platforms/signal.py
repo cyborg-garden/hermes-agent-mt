@@ -611,7 +611,7 @@ class SignalAdapter(BasePlatformAdapter):
                                     data = json.loads(data_str)
                                     await self._handle_envelope(data)
                                 except json.JSONDecodeError:
-                                    logger.debug("Signal SSE: invalid JSON: %s", data_str[:100])
+                                    logger.debug("Signal SSE: invalid JSON (%d chars)", len(data_str))
                                 except Exception:
                                     logger.exception("Signal SSE: error handling event")
 
@@ -1435,8 +1435,8 @@ class SignalAdapter(BasePlatformAdapter):
             ),
         )
 
-        logger.debug("Signal: message from %s in %s: %s",
-                      redact_phone(sender), chat_id[:20], (text or "")[:50])
+        logger.debug("Signal: message from %s in %s (%d chars)",
+                      redact_phone(sender), chat_id[:20], len(text or ""))
 
         # Sealed-sender DMs carry only the sender's ACI UUID. The startup
         # _resolve_allowlist_uuids() pass may have cached the wrong UUID for
