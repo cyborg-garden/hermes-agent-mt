@@ -1765,6 +1765,11 @@ def _run_conversation_turn(
     ):
         if _run_phase(begin_iteration, agent, s).action == "break":
             break
+        # A cheap-routed turn or child never sends protected text (e.g. a tool result
+        # carrying a Papa Reo transcript) to the cheap model: agent/routing_override.py.
+        from agent.routing_override import escalate_if_protected
+        if escalate_if_protected(agent, s.messages):
+            s.active_system_prompt = _sync_failover_system_message(agent, None, s.active_system_prompt)
         _run_phase(prepare_iteration, agent, s)
         _run_phase(assemble_api_request, agent, s)
         _pg = _run_phase(run_preflight_gate, agent, s)

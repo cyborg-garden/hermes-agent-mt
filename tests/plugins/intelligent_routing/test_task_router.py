@@ -8,6 +8,7 @@ the length-gated classifier this replaces, both leak on the same cases.
 import pytest
 
 from plugins.intelligent_routing.eval.cases import ALL_CASES, SUBAGENT_CASES, TURN_CASES
+from plugins.intelligent_routing.eval.cases_audit import AUDIT_CASES
 from plugins.intelligent_routing.eval.cases_blind import BLIND_CASES
 from plugins.intelligent_routing.eval.cases_holdout import HOLDOUT_CASES
 from plugins.intelligent_routing.eval.run_eval import legacy_router, score, task_router
@@ -16,11 +17,13 @@ from plugins.intelligent_routing.task_router import (
 )
 
 SETS = {"dev": ALL_CASES, "holdout": HOLDOUT_CASES, "blind": BLIND_CASES}
+# Premium-only: every case here was routed cheap by an earlier version (independent audit).
+GATED = {**SETS, "audit": AUDIT_CASES}
 
 
-@pytest.mark.parametrize("name", sorted(SETS))
+@pytest.mark.parametrize("name", sorted(GATED))
 def test_no_premium_task_is_routed_cheap(name):
-    result = score(task_router, SETS[name])
+    result = score(task_router, GATED[name])
     assert result["premium->cheap"] == 0, result["leaks"]
 
 

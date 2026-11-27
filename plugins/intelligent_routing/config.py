@@ -44,16 +44,11 @@ _DEFAULT_ROUTER_TIMEOUT_S = 2.5
 _DEFAULT_ROUTER_MIN_CONFIDENCE = 0.85
 _DEFAULT_ROUTER_MAX_CHARS = 800
 
-# Text that marks content as protected: a turn carrying any of these never reaches
-# the LLM router and never leaves the primary. The defaults are the footer the
-# papareo_transcribe plugin attaches to every Papa Reo transcript (Kaitiakitanga
-# License): that text must never be sent to another model. Extend per agent with
-# routing.protected_markers.
-DEFAULT_PROTECTED_MARKERS: tuple[str, ...] = (
-    "transcribed by papa reo",
-    "kaitiakitanga license",
-    "kaitiakitanga licence",
-)
+# Text that marks content as protected (the Papa Reo transcript footer by default):
+# a turn carrying it never reaches the LLM router and never leaves the primary.
+# The list lives in core so the mid-turn check (agent/routing_override.py) uses the
+# same one. Extend per agent with routing.protected_markers.
+from agent.routing_override import DEFAULT_PROTECTED_MARKERS
 
 # Provider-specific request-BODY params to send WITH a cheap-routed turn — e.g.
 # ollama ``{"options": {"num_ctx": 8192}}``, or an aggregator's ``provider``
@@ -154,6 +149,11 @@ def escalation_enabled() -> bool:
     """``routing.escalate`` (default ON): retry a failed, empty or refused cheap turn on the primary."""
     value = _routing_section().get("escalate", True)
     return True if value is None else _coerce_bool(value)
+
+
+def extra_protected_markers() -> list[str]:
+    """``routing.protected_markers`` only (lower-cased), for passing along on a route."""
+    return list(protected_markers()[len(DEFAULT_PROTECTED_MARKERS):])
 
 
 def protected_markers() -> tuple[str, ...]:

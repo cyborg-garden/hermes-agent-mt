@@ -81,6 +81,11 @@ _PREMIUM_SIGNALS: tuple[tuple[str, re.Pattern], ...] = (
         r"\b(password|passphrase|credential\w*|secret\w*|api[ _-]?keys?|private key|2fa|mfa|ssh key|"
         r"vulnerab\w*|exploit\w*|cve-\d|malware|phishing|security|permissions?|access|admins?)\b",
         r"\b(harass\w*|abuse\w*|stalk\w*|threat\w*|doxx\w*|consent|minor|child(ren)?|immigration|visa)\b",
+        r"\b(patients?|clinical|drugs?|interact(s|ion|ions)? with|pills?|ibuprofen|paracetamol|acetaminophen|"
+        r"lithium|antidepressants?|vaccines?)\b",
+        r"\b(home address|address of|(his|her|their) address|where (he|she|they) lives?|"
+        r"personal (data|details|info\w*)|pii|"
+        r"(user|customer|member|client|subscriber)s?'? (emails?|data|addresses|details|records|phone\w*))\b",
         r"\b(te reo|m[aā]ori|tikanga|kaitiakitanga|taonga|iwi|hap[uū]|marae|whakapapa|karakia|waiata|"
         r"t[aā] moko|translat\w*)\b",
         r"\b(i feel|i'm (so )?(sad|anxious|stressed|upset|worried|scared|depressed|overwhelmed|lonely|angry)|"
@@ -99,6 +104,8 @@ _PREMIUM_SIGNALS: tuple[tuple[str, re.Pattern], ...] = (
         r"\bon behalf of\b",
         r"\b(to|for|with) the (team|channel|group|server|community|public|client|customer|users|board|investors?)\b",
         r"\bpublicly\b",
+        r"\b(paste (it |this )?in(to)?|to paste|to share with|to forward|for (everyone|everybody|my boss|the boss|"
+        r"my manager|my team|a client|clients|the board|investors|my landlord))\b",
         r"#[a-z][\w-]+",  # a named channel destination
     )),
     (T_CREATIVE, _rx(
@@ -139,7 +146,10 @@ _PREMIUM_SIGNALS: tuple[tuple[str, re.Pattern], ...] = (
         r"think (through|about)|figure out|reason about|help me (decide|choose|understand|think)|"
         r"choose|pick (a|the|one|between)|which (one|is|should|option)|negotiat\w*|"
         r"persuad\w*|convince|apolog\w*|sorry|safe to|risky|risk\w*|is it ok|okay to|"
-        r"wise|careful|sensible|fair)\b",
+        r"wise|careful|sensible|fair|wrong|went wrong|holds? up|logic|argument|makes sense|"
+        r"importance|priority|relevance|wins?|winner|"
+        r"tell me (what|why|if|whether|which|how)|say (which|whether|if|what|why)|"
+        r"what (it|this|that|these|those) means?)\b",
     )),
     (T_SIDE_EFFECT, _rx(
         r"\b(delete|remove|drop|purge|wipe|erase|destroy|kill|terminate|uninstall|revoke|"
@@ -147,7 +157,9 @@ _PREMIUM_SIGNALS: tuple[tuple[str, re.Pattern], ...] = (
         r"deploy|rollback|roll back|install|upgrade|downgrade|rotate|"
         r"buy|purchase|place an order|book|booking|reserve|cancel|unsubscribe|transfer|pay|send|forward|invite|ban|kick|"
         r"edit|modify|change|update|write|create|configure|set up|setup|enable|disable|"
-        r"rename|move|overwrite|replace|approve|reject|grant)\b",
+        r"rename|move|overwrite|replace|approve|reject|grant|execute|exec|push|--force|installer|"
+        r"mass|bulk|broadcast)\b",
+        r"\.(sh|bash|ps1|bat|exe)\b|\bemails? (all|every\w*)\b",
     )),
 )
 
@@ -301,6 +313,11 @@ _CLAUSE_SPLIT_RX = re.compile(r"\b(?:and then|and|then|after that|also|but)\b|[;
 _PRONOUN_LEAD_RX = re.compile(r"^(?:i|we|you|please|maybe|if|so|to)\s+", re.IGNORECASE)
 
 
+_TOGGLE_VERBS = frozenset({"mark", "tag", "label", "pin", "unpin", "archive", "unarchive", "star",
+                           "close", "snooze"})
+_BULK_RX = re.compile(r"\b(all|every\w*|each|entire|whole|any)\b", re.IGNORECASE)
+
+
 def _later_step_is_hard(instruction: str) -> Optional[str]:
     clauses = [c.strip() for c in _CLAUSE_SPLIT_RX.split(instruction) if c and c.strip()]
     for clause in clauses[1:]:
@@ -352,6 +369,10 @@ def classify_task(sig: TaskSignals) -> RouteDecision:
     evidence = _cheap_evidence(instruction)
     if evidence is None:
         return _premium(T_UNCERTAIN, "no cheap evidence", confident=False)
+
+    # A board toggle is cheap for one item; applied to everything it is a mass change.
+    if _lead_verb(instruction) in _TOGGLE_VERBS and _BULK_RX.search(instruction):
+        return _premium(T_SIDE_EFFECT, "bulk change")
 
     hard_step = _later_step_is_hard(instruction)
     if hard_step is not None:

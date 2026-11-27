@@ -29,7 +29,9 @@ Route vocabulary (:meth:`DelegationProvider.route_task` returns a dict with any 
 * ``label`` - short text shown with the child's progress and result (e.g. the option title).
 * ``escalate`` - ``True`` marks a cheap route: if the child's reply is empty or a refusal, core
   moves it to the next ``fallback_providers`` entry at once instead of retrying the cheap model
-  (put the stronger model first in that list). API errors already walk the chain.
+  (put the stronger model first in that list). API errors already walk the chain. Before each
+  call, a protected marker in new messages (default: the Papa Reo transcript footer, plus any
+  ``protected_markers`` strings on the route) moves it the same way.
 
 A backend's own settings live under ``delegation.backends.<backend name>`` (:meth:`DelegationProvider.settings`),
 never beside the core ``delegation`` keys.
@@ -54,6 +56,7 @@ RESERVED_TASK_PARAMETERS = frozenset({
 ROUTE_KEYS = frozenset({
     "model", "provider", "base_url", "api_key", "api_mode", "request_overrides",
     "reasoning_effort", "service_tier", "fallback_providers", "profile", "label", "escalate",
+    "protected_markers",
 })
 
 

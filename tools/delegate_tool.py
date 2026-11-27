@@ -503,6 +503,9 @@ def _build_children(
         # refused reply hops straight to its fallback chain (agent/routing_override.py).
         if isinstance(route.routing_cfg, dict) and route.routing_cfg.get("escalate") is True:
             child._routing_escalate_pending = True
+            from agent.routing_override import _markers
+            child._routing_protected_markers = _markers(route.routing_cfg.get("protected_markers"))
+            child._routing_protected_scanned = 0
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema

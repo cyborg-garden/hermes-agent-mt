@@ -127,3 +127,18 @@ def test_parse_reply():
     assert llm_router.parse_reply('sure: {"type": "summarise", "confidence": 0.9}') == ("summarise", 0.9)
     assert llm_router.parse_reply('{"type": "lookup", "confidence": 3}') is None
     assert llm_router.parse_reply(None) is None
+
+
+def test_http_client_debug_logs_from_the_router_thread_are_dropped(router_env, caplog):
+    import plugins.intelligent_routing.llm_router as lr
+
+    def fake(text, s):
+        logging.getLogger("openai._base_client").debug("Request options: %s", text)
+        logging.getLogger("httpcore.http11").debug("send_request_body %s", text)
+        return '{"type": "lookup", "confidence": 0.95}'
+
+    with patch.object(lr, "_completion", fake), caplog.at_level(logging.DEBUG):
+        _hook("Nightly: go through the LEAKMARK folder.")
+        logging.getLogger("openai._base_client").debug("main-thread record stays")
+    assert "LEAKMARK" not in caplog.text
+    assert "main-thread record stays" in caplog.text

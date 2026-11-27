@@ -12,6 +12,9 @@ from collections import Counter
 from typing import Callable, Iterable
 
 from plugins.intelligent_routing.eval.cases import ALL_CASES, SUBAGENT_CASES, TURN_CASES
+from plugins.intelligent_routing.eval.cases_audit import AUDIT_CASES
+from plugins.intelligent_routing.eval.cases_blind import BLIND_CASES
+from plugins.intelligent_routing.eval.cases_holdout import HOLDOUT_CASES
 from plugins.intelligent_routing.task_router import (
     SCOPE_SUBAGENT, SCOPE_TURN, TIER_CHEAP, TIER_PREMIUM, TaskSignals, classify_task,
 )
@@ -78,7 +81,9 @@ def _print(name: str, result: dict) -> None:
 
 
 def main() -> None:
-    for scope_name, cases in (("main turn", TURN_CASES), ("subagent", SUBAGENT_CASES), ("all", ALL_CASES)):
+    for scope_name, cases in (("dev main turn", TURN_CASES), ("dev subagent", SUBAGENT_CASES),
+                              ("dev all", ALL_CASES), ("holdout", HOLDOUT_CASES), ("blind", BLIND_CASES),
+                              ("audit", AUDIT_CASES)):
         _print(f"task router - {scope_name}", score(task_router, cases))
         _print(f"legacy router - {scope_name}", score(legacy_router, cases))
 

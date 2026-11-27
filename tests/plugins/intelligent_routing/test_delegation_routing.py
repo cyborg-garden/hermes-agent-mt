@@ -67,6 +67,25 @@ def test_decision_is_logged_without_task_text(cfg, caplog):
     assert "GOALMARK" not in caplog.text and "CONTEXTMARK" not in caplog.text
 
 
+def test_protected_marker_in_context_keeps_the_child_premium(cfg):
+    route = _route("Summarise the transcript in the context.",
+                   context="...\nThis text transcribed by Papa Reo API.")
+    assert "escalate" not in route and route.get("model") != "cheap/model"
+    with patch.object(deleg, "protected_markers", return_value=("do-not-route",)):
+        assert _route("List the files.", context="DO-NOT-ROUTE").get("model") != "cheap/model"
+
+
+def test_escalate_off_is_honoured_for_children(cfg):
+    with patch.object(deleg, "escalation_enabled", return_value=False):
+        route = _route("Count the test files.")
+    assert route["model"] == "cheap/model" and "escalate" not in route
+
+
+def test_primary_without_provider_resolves_auto(cfg):
+    with patch.object(deleg, "primary_route", return_value={"model": "m"}):
+        assert _route("Count the test files.")["fallback_providers"][0] == {"model": "m", "provider": "auto"}
+
+
 # ── the real spawn path ──
 
 def _home(tmp_path, monkeypatch):

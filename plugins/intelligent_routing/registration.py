@@ -44,6 +44,7 @@ from .config import (
     cheap_extra_body,
     cheap_tier_target,
     escalation_enabled,
+    extra_protected_markers,
     is_intelligent_routing_enabled,
     protected_markers,
     router_settings,
@@ -373,6 +374,10 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
                 # refuses, the runtime retries it on the primary this turn.
                 if escalation_enabled():
                     route["escalate"] = True
+                    # Configured markers ride along so the mid-turn check sees them.
+                    extra_markers = extra_protected_markers()
+                    if extra_markers:
+                        route["protected_markers"] = extra_markers
                 result["route"] = route
                 routed_model, routed_provider = cheap_model, cheap_provider
 

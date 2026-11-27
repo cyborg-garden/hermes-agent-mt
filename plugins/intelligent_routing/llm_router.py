@@ -124,6 +124,22 @@ def _default_completion(text: str, settings: dict) -> Any:
 # Patched in tests; never set from config.
 _completion: Callable[[str, dict], Any] = _default_completion
 
+_WORKER_NAME = "intelligent-routing-router"
+# HTTP client loggers that, at DEBUG, print request options (which hold the router
+# text) or response bodies. Records from the router thread are dropped.
+_CLIENT_LOGGERS = ("openai", "openai._base_client", "httpx", "httpcore", "httpcore.connection",
+                   "httpcore.http11", "httpcore.http2", "httpcore.proxy")
+
+
+class _DropRouterThread(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.threadName != _WORKER_NAME
+
+
+_DROP_FILTER = _DropRouterThread()
+for _name in _CLIENT_LOGGERS:
+    logging.getLogger(_name).addFilter(_DROP_FILTER)
+
 
 def ask_router(text: str, settings: dict) -> RouterResult:
     """Classify ``text`` with the router model. Never raises; never logs the text or reply."""
@@ -137,7 +153,7 @@ def ask_router(text: str, settings: dict) -> RouterResult:
             box["error"] = type(exc).__name__
 
     started = time.monotonic()
-    worker = threading.Thread(target=_work, name="intelligent-routing-router", daemon=True)
+    worker = threading.Thread(target=_work, name=_WORKER_NAME, daemon=True)
     worker.start()
     worker.join(settings["timeout_s"])
     latency_ms = int((time.monotonic() - started) * 1000)

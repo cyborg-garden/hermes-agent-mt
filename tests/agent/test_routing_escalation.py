@@ -167,9 +167,100 @@ def test_refusal_on_routed_turn_is_retried_on_the_primary():
 
 
 def test_refusal_on_unrouted_turn_is_left_alone():
+    """The check is reached and declines; later guards may trip on a bare MagicMock."""
+    import agent.routing_override as ro
     a = _text_agent(pending=False)
-    try:
-        _finish(a, "I'm sorry, but I can't help with that.")
-    except Exception:
-        pass  # later guards on a bare MagicMock may trip; only the escalation matters here
+    seen = []
+    real = ro.routed_escalation_pending
+    with patch.object(ro, "routed_escalation_pending", side_effect=lambda ag: seen.append(ag) or real(ag)):
+        try:
+            _finish(a, "I'm sorry, but I can't help with that.")
+        except Exception:
+            pass
+    assert seen == [a]
     a._try_activate_fallback.assert_not_called()
+
+
+# ── protected content arriving mid-turn ──
+
+from agent.routing_override import escalate_if_protected
+
+PAPA_REO = ("kōrero ...\n\nThis text transcribed by Papa Reo API. Please be sure to comply with the terms "
+            "of the Kaitiakitanga license in use of this material.")
+
+
+def test_protected_tool_result_moves_a_cheap_turn_to_the_primary_before_the_next_call():
+    a = _agent()
+    apply_routing_override(a, CHEAP)
+    msgs = [{"role": "user", "content": "summarise notes/hui.txt"}]
+    assert escalate_if_protected(a, msgs) is False
+    msgs.append({"role": "tool", "content": PAPA_REO})
+    with patch("agent.chat_completion_helpers.rewrite_prompt_model_identity"):
+        assert escalate_if_protected(a, msgs) is True
+    assert a.model == "claude-sonnet-5"
+
+
+def test_configured_marker_on_the_route_is_honoured():
+    a = _agent()
+    apply_routing_override(a, {**CHEAP, "protected_markers": ["Do-Not-Route"]})
+    with patch("agent.chat_completion_helpers.rewrite_prompt_model_identity"):
+        assert escalate_if_protected(a, [{"role": "tool", "content": "x DO-NOT-ROUTE y"}]) is True
+
+
+def test_protected_content_on_a_cheap_child_walks_its_chain():
+    a = MagicMock()
+    a._routing_escalate_pending = True
+    a._routing_escalation_target = None
+    a._routing_protected_markers = None
+    a._routing_protected_scanned = 0
+    a._try_activate_fallback.return_value = True
+    assert escalate_if_protected(a, [{"role": "tool", "content": [{"type": "text", "text": PAPA_REO}]}])
+    a._try_activate_fallback.assert_called_once()
+
+
+def test_unrouted_turn_is_not_touched_by_the_protected_check():
+    a = _agent()
+    assert escalate_if_protected(a, [{"role": "tool", "content": PAPA_REO}]) is False
+    assert a.model == "claude-sonnet-5"
+
+
+def test_has_pending_fallback_counts_a_routed_turn():
+    from run_agent import AIAgent
+    a = SimpleNamespace(_fallback_index=0, _fallback_chain=[], _routing_escalate_pending=True,
+                        _routing_escalation_target={"model": "m"})
+    assert AIAgent._has_pending_fallback(a) is True
+    a._routing_escalate_pending = False
+    assert AIAgent._has_pending_fallback(a) is False
+
+
+def test_deterministic_error_on_a_cheap_turn_still_escalates():
+    """should_fallback=False (the model's own malformed tool-call JSON) normally ends the
+    turn; on a cheap route the primary gets a try."""
+    from tests.agent.test_malformed_tool_args_no_fallback import _Agent, _Err, _settle
+    agent = _Agent()
+    agent._routing_escalate_pending = True
+    _settle(agent, _Err("invalid tool call arguments"), "openrouter", 400)
+    assert agent.activated == [True]
+
+
+def test_content_filter_stall_on_a_cheap_turn_escalates_with_an_empty_chain():
+    from agent import turn_truncation as tt
+    a = MagicMock()
+    a._fallback_index, a._fallback_chain = 0, []
+    a._has_pending_fallback.return_value = True
+    a._try_activate_fallback.return_value = True
+    st = MagicMock()
+    st.agent = a
+    st.response = SimpleNamespace(_content_filter_terminated=True)
+    st.truncated_response_parts = []
+    tt._content_filter_fallback(st, MagicMock())
+    a._try_activate_fallback.assert_called_once()
+
+
+def test_turn_loop_runs_the_protected_check_before_each_call():
+    import inspect
+    from agent import conversation_loop
+    src = inspect.getsource(conversation_loop)
+    i = src.index("escalate_if_protected(agent, s.messages)")
+    assert src.rfind("_run_phase(begin_iteration", 0, i) != -1
+    assert i < src.index("_run_phase(assemble_api_request", i)

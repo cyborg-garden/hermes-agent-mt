@@ -283,6 +283,8 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
         ) is None:
             agent._routing_escalation_target = escalation_target
             agent._routing_escalate_pending = True
+            agent._routing_protected_markers = _markers(override.get("protected_markers"))
+            agent._routing_protected_scanned = 0
     except Exception:
         logger.debug("intelligent_routing: could not scope override to turn",
                      exc_info=True)
@@ -295,6 +297,16 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
 
 
 # ── Escalation ────────────────────────────────────────────────────────────────
+
+# Text that marks content as protected. The defaults are the footer the
+# papareo_transcribe plugin puts on every Papa Reo transcript (Kaitiakitanga
+# License): that text must never reach a model other than the configured primary.
+# A route may add more with ``protected_markers``.
+DEFAULT_PROTECTED_MARKERS: tuple = (
+    "transcribed by papa reo",
+    "kaitiakitanga license",
+    "kaitiakitanga licence",
+)
 
 # Short refusal openers. Matched only against a SHORT reply from a cheap-routed
 # model with no tool calls: a long answer that happens to say "I can't" is not one.
@@ -396,3 +408,50 @@ def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
 def clear_escalation_state(agent: Any) -> None:
     agent._routing_escalate_pending = False
     agent._routing_escalation_target = None
+
+
+def _markers(extra: Any) -> tuple:
+    if isinstance(extra, str):
+        extra = [extra]
+    if not isinstance(extra, (list, tuple)):
+        extra = []
+    return DEFAULT_PROTECTED_MARKERS + tuple(str(m).strip().lower() for m in extra if str(m).strip())
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(p.get("text") or "") for p in content if isinstance(p, dict))
+    return str(content or "")
+
+
+def escalate_if_protected(agent: Any, messages: Any) -> bool:
+    """Before each API call: move a cheap-routed turn or child to the primary when any
+    message added since the last check (a tool result, typically) carries a protected
+    marker, so the cheap model never receives it. True iff the agent switched. Never raises.
+    """
+    try:
+        if not routed_escalation_pending(agent) or not isinstance(messages, list):
+            return False
+        start = getattr(agent, "_routing_protected_scanned", 0)
+        start = start if isinstance(start, int) and 0 <= start <= len(messages) else 0
+        agent._routing_protected_scanned = len(messages)
+        markers = getattr(agent, "_routing_protected_markers", None) or DEFAULT_PROTECTED_MARKERS
+        for msg in messages[start:]:
+            if not isinstance(msg, dict):
+                continue
+            text = _content_text(msg.get("content")).lower()
+            if text and any(m in text for m in markers):
+                if escalate_routed_turn(agent, "protected_content"):
+                    return True
+                # A cheap child: no target; its fallback chain starts with the primary.
+                switched = bool(agent._try_activate_fallback())
+                if not switched:
+                    logger.warning("intelligent_routing: protected content on a cheap route and "
+                                   "no primary to move to")
+                return switched
+        return False
+    except Exception:
+        logger.debug("intelligent_routing: protected-content check failed", exc_info=True)
+        return False

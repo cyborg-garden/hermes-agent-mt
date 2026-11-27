@@ -69,9 +69,11 @@ Delegated children and review forks are not re-routed by the main-turn hook; the
 
 A cheap route carries `escalate: true`. During that turn:
 
-- An API error: `try_activate_fallback` switches back to the pre-turn route before trying any fallback-chain entry.
+- An API error: `try_activate_fallback` switches back to the pre-turn route before trying any fallback-chain entry. This includes errors that normally end the turn (the model's own malformed tool-call JSON), a content-filter stall, a 429 the credential pool might otherwise wait out, and an auth failure, even when the agent has no fallback chain.
 - An empty reply: escalates at once, without spending empty-retries on the cheap model.
 - A short refusal ("I can't help with that", "As an AI..."): the refusal is dropped and the request re-sent on the primary.
+
+- Protected content arriving mid-turn (a tool result carrying a protected marker): before the next API call, the turn moves to the primary, so the cheap model never receives it.
 
 It fires at most once per turn and logs `routing_escalation {json}` with the trigger and models. Cheap subagents do the same through their fallback chain, whose first entry is the primary.
 
@@ -100,7 +102,9 @@ routing:
 
 ## Protected content
 
-The papareo_transcribe plugin does not mark turns as protected, so this plugin looks for the text itself. Any turn whose message or history contains the Papa Reo transcript footer ("transcribed by Papa Reo", "Kaitiakitanga License") stays on the primary and never reaches the LLM router. History counts because a cheap turn sends the whole conversation to the cheap provider.
+The papareo_transcribe plugin does not mark turns as protected, so this plugin looks for the text itself. Any turn whose message or history contains the Papa Reo transcript footer ("transcribed by Papa Reo", "Kaitiakitanga License") stays on the primary and never reaches the LLM router. History counts because a cheap turn sends the whole conversation to the cheap provider. A subagent whose goal or context carries a marker stays on the primary. If a marker arrives later in a cheap turn or child, through a tool result, the runtime moves to the primary before the next call (see Escalation).
+
+The router thread's records on the `openai`, `httpx` and `httpcore` loggers are dropped, so DEBUG logging cannot print the router text.
 
 Add more markers per agent:
 
@@ -122,6 +126,7 @@ One `routing_decision {json}` line per decision, at INFO. Fields: `tier`, `model
 | `cases.py` | 196 (127 turn, 69 subagent) | written with the router; tuned against |
 | `cases_holdout.py` | 68 | written after tuning, scored once, then fixed |
 | `cases_blind.py` | 100 | written by a separate agent that never saw the rules |
+| `cases_audit.py` | 20 | premium-worthy tasks an independent audit found routed cheap; all fixed |
 
 First scored run on each unseen set (premium-worthy tasks routed cheap):
 
@@ -134,7 +139,8 @@ Current numbers, all sets:
 |---|---|---|---|
 | dev | 0 / 131 | 65 / 65 | 33% |
 | holdout | 0 / 38 | 28 / 30 | 41% |
-| blind | 0 / 50 | 30 / 50 | 30% |
+| blind | 0 / 50 | 29 / 50 | 29% |
+| audit | 0 / 20 | (none) | 0% |
 | legacy classifier, dev | 25 / 131 | 20 / 65 | 23% |
 
 The legacy row is the length-gated classifier this replaces. It sent 25 premium-worthy dev tasks cheap and never routed a subagent cheap.

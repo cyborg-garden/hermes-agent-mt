@@ -27,7 +27,10 @@ from agent.delegation_provider import DelegationProvider
 from .config import (
     cheap_reasoning_effort,
     cheap_tier_target,
+    escalation_enabled,
+    extra_protected_markers,
     primary_route,
+    protected_markers,
     top_level_fallback_chain,
 )
 from .task_router import SCOPE_SUBAGENT, TaskSignals, classify_task
@@ -48,8 +51,9 @@ def _escalation_chain(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     pinned = {k: config[k] for k in ("model", "provider", "base_url") if config.get(k)}
     first = pinned if pinned.get("model") else primary_route()
     if first.get("model"):
-        if "provider" not in first and config.get("provider"):
-            first = {**first, "provider": config["provider"]}
+        if not first.get("provider"):
+            # No provider named: let the runtime resolve it, as it does for the primary.
+            first = {**first, "provider": config.get("provider") or "auto"}
         chain.append(first)
     inherited = config.get("fallback_providers")
     rest = inherited if isinstance(inherited, list) else top_level_fallback_chain()
@@ -74,11 +78,11 @@ class TaskRoutingDelegationProvider(DelegationProvider):
                 "everything else on the normal subagent model.")
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+        goal, context = str(task.get("goal") or ""), str(task.get("context") or "")
+        text = (goal + "\n" + context).lower()
         decision = classify_task(TaskSignals(
-            instruction=str(task.get("goal") or ""),
-            context=str(task.get("context") or ""),
-            scope=SCOPE_SUBAGENT,
-            toolsets=tuple(task.get("toolsets") or ()),
+            instruction=goal, context=context, scope=SCOPE_SUBAGENT,
+            is_protected=any(m in text for m in protected_markers()),
         ))
         cheap_model, cheap_provider = cheap_tier_target()
         route: dict[str, Any]
@@ -86,9 +90,13 @@ class TaskRoutingDelegationProvider(DelegationProvider):
             route = {
                 "model": cheap_model, "provider": cheap_provider,
                 "fallback_providers": _escalation_chain(config),
-                "escalate": True,
                 "label": f"cheap · {decision.task_type}",
             }
+            if escalation_enabled():
+                route["escalate"] = True
+                extra = extra_protected_markers()
+                if extra:
+                    route["protected_markers"] = extra
             effort = cheap_reasoning_effort()
             if effort:
                 route["reasoning_effort"] = effort
