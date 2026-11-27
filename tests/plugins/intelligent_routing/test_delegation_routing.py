@@ -193,3 +193,50 @@ def test_backend_error_falls_back_to_the_default_route(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "get_provider", lambda name: Boom())
     _, built, _ = _spawn(tmp_path, monkeypatch, [{"goal": "Count the test files."}])
     assert built[0]["model"] is None
+
+
+# ── children of a cheap-routed parent ──
+
+def _cheap_parent(**extra):
+    p = types.SimpleNamespace(session_id="root", model="cheap/model", provider="openrouter",
+                              tool_progress_callback=None, _delegate_spinner=None, request_overrides={},
+                              _delegate_depth=0, _safe_print=lambda line: None,
+                              _routing_protected_watch=True, _routing_cheap_model="cheap/model",
+                              _routing_escalation_target={"model": PRIMARY["model"], "provider": "openrouter",
+                                                          "base_url": "https://primary.example/v1",
+                                                          "api_key": "k", "api_mode": "chat_completions"},
+                              _fallback_chain=[])
+    for k, v in extra.items():
+        setattr(p, k, v)
+    return p
+
+
+def _spawn_from(tmp_path, monkeypatch, parent, tasks, delegation):
+    from tools import delegate_tool as dt
+    built = []
+    monkeypatch.setattr(dt, "_build_child_agent", lambda **kw: built.append(kw) or types.SimpleNamespace(
+        tool_progress_callback=None, model=kw.get("model")))
+    monkeypatch.setattr(dt, "_run_single_child", lambda task_index, goal, child=None, parent_agent=None, **kw: {
+        "task_index": task_index, "status": "completed", "summary": "ok", "api_calls": 1, "duration_seconds": 0})
+    _home(tmp_path, monkeypatch, delegation)
+    return json.loads(dt.delegate_task(tasks=tasks, parent_agent=parent)), built
+
+
+@pytest.mark.parametrize("delegation", [{}, {"backend": "task-routing"}])
+def test_child_of_a_cheap_turn_runs_on_the_parents_primary(tmp_path, monkeypatch, delegation):
+    out, built = _spawn_from(tmp_path, monkeypatch, _cheap_parent(), [
+        {"goal": "Refactor delegate_tool.py so routing is a separate module."}], delegation)
+    assert built[0]["model"] == PRIMARY["model"]
+    assert built[0]["override_base_url"] == "https://primary.example/v1"
+
+
+def test_child_of_a_cheap_turn_is_refused_when_the_primary_is_unknown(tmp_path, monkeypatch):
+    parent = _cheap_parent(_routing_escalation_target=None, _routing_primary_model=None)
+    out, built = _spawn_from(tmp_path, monkeypatch, parent, [{"goal": "Refactor the module."}], {})
+    assert built == [] and "error" in out
+
+
+def test_child_of_a_primary_turn_is_unchanged(tmp_path, monkeypatch):
+    parent = _cheap_parent(model=PRIMARY["model"])
+    _, built = _spawn_from(tmp_path, monkeypatch, parent, [{"goal": "Refactor the module."}], {})
+    assert built[0]["model"] is None

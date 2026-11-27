@@ -287,3 +287,90 @@ def test_gate_checks_memory_recall_and_ephemeral_prompt():
     apply_routing_override(b, CHEAP)
     with patch(_RW):
         assert protected_content_gate(b, []) == PROTECTED_SWITCHED
+
+
+# ── audit follow-ups ──
+
+def test_user_model_directive_still_guards_protected_text():
+    from plugins.intelligent_routing import registration
+    with patch.object(registration, "is_intelligent_routing_enabled", return_value=True):
+        out = registration.on_pre_llm_call(user_message="we use kimi for this. " + PAPA_REO,
+                                           model="claude-sonnet-5", provider="anthropic", platform="cli")
+    assert out["route"]["protected_watch"] is True
+    a = _agent()
+    apply_routing_override(a, out["route"])
+    with patch(_RW):
+        assert escalate_if_protected(a, [{"role": "user", "content": PAPA_REO}]) == PROTECTED_SWITCHED
+    assert a.model == "claude-sonnet-5"
+
+
+def test_marker_in_tool_call_arguments_is_seen():
+    a = _agent()
+    apply_routing_override(a, CHEAP)
+    msgs = [{"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c1", "type": "function",
+         "function": {"name": "write_file", "arguments": '{"text": "' + PAPA_REO.replace("\n", " ") + '"}'}}]}]
+    with patch(_RW):
+        assert escalate_if_protected(a, msgs) == PROTECTED_SWITCHED
+    from plugins.intelligent_routing.config import protected_markers
+    from plugins.intelligent_routing.registration import _is_protected
+    assert _is_protected("list the files in /tmp", msgs, protected_markers())
+
+
+def test_whitespace_variants_of_the_marker_still_match():
+    for sep in ("\n", " ", "  "):
+        a = _agent()
+        apply_routing_override(a, CHEAP)
+        text = f"x transcribed{sep}by papa reo api"
+        with patch(_RW):
+            assert escalate_if_protected(a, [{"role": "tool", "content": text}]) == PROTECTED_SWITCHED, repr(sep)
+
+
+def test_gate_checks_the_system_prompt():
+    from agent.turn_protected_gate import PROTECTED_SWITCHED as SW, protected_content_gate
+    a = _agent()
+    a._cached_system_prompt = "memory: " + PAPA_REO
+    apply_routing_override(a, CHEAP)
+    with patch(_RW):
+        assert protected_content_gate(a, []) == SW
+
+
+def test_watch_stays_on_after_a_hop_to_a_non_primary_entry():
+    """Off the cheap model but not on the primary (a fallback entry): still guarded."""
+    a = _agent()
+    apply_routing_override(a, {**CHEAP, "escalate": False, "protected_watch": True})
+    a.model = "some/other-fallback"
+    with patch(_RW):
+        assert escalate_if_protected(a, [{"role": "tool", "content": PAPA_REO}]) == PROTECTED_SWITCHED
+    assert a.model == "claude-sonnet-5"
+
+
+def test_refusal_variants():
+    for t in ("Unfortunately, I can't help with that.", "I'm sorry, but I'm unable to do that.",
+              "Sorry — I can't do that."):
+        assert looks_like_refusal(t), t
+
+
+def test_blocked_agent_skips_compression():
+    from run_agent import AIAgent
+    a = _agent()
+    apply_routing_override(a, CHEAP)
+    a.switch_model = MagicMock(side_effect=RuntimeError("down"))
+    a._cached_system_prompt = "sys"
+    msgs = [{"role": "tool", "content": PAPA_REO}]
+    with patch("agent.conversation_compression.compress_context") as cc:
+        out = AIAgent._compress_context(a, msgs, "sys")
+    cc.assert_not_called()
+    assert out[0] is msgs
+
+
+def test_blocked_agent_skips_background_review():
+    from agent.routing_override import protected_on_routed_model
+    a = _agent()
+    apply_routing_override(a, CHEAP)
+    msgs = [{"role": "tool", "content": PAPA_REO}]
+    assert protected_on_routed_model(a, msgs) is True
+    import inspect
+    from agent import turn_finalizer
+    src = inspect.getsource(turn_finalizer)
+    assert "not protected_on_routed_model(agent, messages)" in src

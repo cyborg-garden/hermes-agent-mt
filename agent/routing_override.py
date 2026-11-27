@@ -356,13 +356,18 @@ _REFUSAL_PREFIXES = (
     "sorry, i can't", "sorry, but i can't", "i'm sorry, but i can't", "i'm sorry, i can't",
     "i'm sorry, but i cannot", "i apologize, but i can't", "i apologise, but i can't",
     "as an ai", "i don't have access", "i do not have access", "i'm not allowed",
+    "unfortunately, i can't", "unfortunately, i cannot", "unfortunately, i'm unable",
+    "i'm sorry, but i'm unable", "i'm sorry, i'm unable", "sorry, i'm unable",
+    "sorry, but i'm unable", "i'm afraid i can't", "i'm afraid i cannot",
 )
 
 
 def looks_like_refusal(text: Any) -> bool:
     if not isinstance(text, str):
         return False
-    t = text.strip().lower().replace("\u2019", "'")
+    t = " ".join(text.strip().lower().replace("\u2019", "'").split())
+    for dash in (" \u2014 ", "\u2014", " \u2013 ", " - "):
+        t = t.replace(dash, ", ")
     if not t or len(t) > _REFUSAL_MAX_CHARS:
         return False
     return t.startswith(_REFUSAL_PREFIXES)
@@ -508,30 +513,82 @@ PROTECTED_BLOCK_MESSAGE = (
 )
 
 
+def normalize_for_markers(text: Any) -> str:
+    """Lower-case, with every whitespace run (newlines, non-breaking spaces) as one space."""
+    return " ".join(str(text or "").lower().split())
+
+
+def _message_text(message: Any) -> str:
+    """A message's content plus the arguments of any tool calls it carries."""
+    if not isinstance(message, dict):
+        return ""
+    parts = [_content_text(message.get("content"))]
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+        args = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+        if args:
+            parts.append(args if isinstance(args, str) else _content_text(args))
+    return " ".join(p for p in parts if p)
+
+
+def carries_protected_text(messages: Any, extra_text: Any = "", markers: Any = None) -> bool:
+    """True when any message (content or tool-call arguments) or ``extra_text`` holds a marker."""
+    marks = [normalize_for_markers(m) for m in (markers or DEFAULT_PROTECTED_MARKERS)]
+    marks = [m for m in marks if m]
+    texts = [_message_text(m) for m in (messages or [])]
+    texts.append(_content_text(extra_text))
+    for t in texts:
+        if t:
+            norm = normalize_for_markers(t)
+            if any(mk in norm for mk in marks):
+                return True
+    return False
+
+
+def _primary_model_of(agent: Any) -> Optional[str]:
+    target = getattr(agent, "_routing_escalation_target", None)
+    if isinstance(target, dict) and target.get("model"):
+        return str(target["model"])
+    primary = getattr(agent, "_routing_primary_model", None)
+    return str(primary) if primary else None
+
+
+def protected_on_routed_model(agent: Any, messages: Any, extra_text: Any = "") -> bool:
+    """True when a routed agent holds protected text while not on its primary.
+
+    Side-effect free; post-turn work (background review, manual compression) uses it
+    to stay off the cheap model after a blocked turn. Never raises."""
+    try:
+        if getattr(agent, "_routing_protected_watch", False) is not True:
+            return False
+        primary = _primary_model_of(agent)
+        if primary and str(getattr(agent, "model", "") or "") == primary:
+            return False
+        markers = getattr(agent, "_routing_protected_markers", None)
+        return carries_protected_text(messages, extra_text, markers)
+    except Exception:
+        return True
+
+
 def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Optional[str]:
     """Run right before each API call of a cheap-routed turn or child.
 
-    If anything about to be sent (``messages`` plus ``extra_text``, e.g. plugin context)
-    carries a protected marker while the agent is still on the cheap model, move to the
-    primary first. Returns ``"switched"``, ``"blocked"`` (the primary could not be
-    reached: the caller must end the turn without calling any model), or None.
-    Armed by every cheap route, independent of ``escalate``. Never raises.
+    If anything about to be sent (``messages`` with their tool-call arguments, plus
+    ``extra_text``, e.g. plugin context or the system prompt) carries a protected
+    marker while the agent is anywhere but its primary (the cheap model, or a fallback
+    entry it reached after that), move to the primary first. Returns ``"switched"``,
+    ``"blocked"`` (the primary could not be reached: the caller must end the turn
+    without calling any model), or None. Armed by every cheap route, independent of
+    ``escalate``, and stays armed for the whole turn. Never raises.
     """
     try:
-        if getattr(agent, "_routing_protected_watch", False) is not True:
-            return None
-        cheap_model = getattr(agent, "_routing_cheap_model", None)
-        if cheap_model and str(getattr(agent, "model", "") or "") != str(cheap_model):
-            return None  # already off the cheap model
-        markers = getattr(agent, "_routing_protected_markers", None) or DEFAULT_PROTECTED_MARKERS
-        texts = [_content_text(m.get("content")) for m in (messages or []) if isinstance(m, dict)]
-        texts.append(_content_text(extra_text))
-        if not any(any(mk in t.lower() for mk in markers) for t in texts if t):
+        if not protected_on_routed_model(agent, messages, extra_text):
             return None
         agent._routing_escalate_pending = False
         target = getattr(agent, "_routing_escalation_target", None)
         if isinstance(target, dict) and target.get("model"):
             ok = _switch_to(agent, target)
+            ok = ok and str(getattr(agent, "model", "") or "") == str(target["model"])
             _log_escalation(agent, "protected_content", str(target["model"]), ok)
         else:
             # A cheap child: its fallback chain starts with the parent's primary. Accept the
@@ -541,7 +598,6 @@ def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Op
                 str(getattr(agent, "model", "") or "") == str(primary))
             _log_escalation(agent, "protected_content", str(primary or "?"), ok)
         if ok:
-            agent._routing_protected_watch = False
             return PROTECTED_SWITCHED
         logger.warning("intelligent_routing: protected content on a cheap route and the primary "
                        "is unreachable; ending the turn without a model call")

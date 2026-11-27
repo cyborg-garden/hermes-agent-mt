@@ -5991,6 +5991,13 @@ class AIAgent:
         auto-compress abort.  Auto-compress callers use the default
         ``force=False``.
         """
+        # Compression sends the transcript to the compressor's model, which on a
+        # cheap route is the cheap model: protected text moves the agent to its
+        # primary first, or compression is skipped (agent/routing_override.py).
+        from agent.routing_override import PROTECTED_BLOCKED, escalate_if_protected
+        if escalate_if_protected(self, messages, getattr(self, "_cached_system_prompt", "")) == PROTECTED_BLOCKED:
+            logger.warning("Skipping compression: protected text on a cheap route, primary unreachable")
+            return messages, getattr(self, "_cached_system_prompt", None) or system_message
         from agent.conversation_compression import compress_context
         result = compress_context(
             self, messages, system_message,

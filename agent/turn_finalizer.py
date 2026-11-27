@@ -508,7 +508,11 @@ def finalize_turn(
 
     # Background memory/skill review — runs AFTER the response is delivered
     # so it never competes with the user's task for model attention.
-    if final_response and not interrupted and (_should_review_memory or _should_review_skills):
+    # A routed turn that holds protected text off its primary (a blocked turn) must not
+    # hand that transcript to a review fork, which runs on agent.model.
+    from agent.routing_override import protected_on_routed_model
+    if (final_response and not interrupted and (_should_review_memory or _should_review_skills)
+            and not protected_on_routed_model(agent, messages)):
         try:
             agent._spawn_background_review(
                 messages_snapshot=list(messages),

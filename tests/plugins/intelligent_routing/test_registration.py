@@ -260,7 +260,7 @@ def test_user_directive_fable_routes_to_fable():
             model="claude-sonnet-5", platform="signal",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "claude-fable-5", "provider": "anthropic"}
+    assert result["route"] == {"model": "claude-fable-5", "provider": "anthropic", "protected_watch": True}
     assert "user-requested" in result["context"]
 
 
@@ -273,7 +273,7 @@ def test_user_directive_deepseek_routes_cheap():
             model="claude-sonnet-5", platform="cli",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter"}
+    assert result["route"] == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "protected_watch": True}
 
 
 def test_user_directive_opus_routes_to_opus():
@@ -298,7 +298,7 @@ def test_user_directive_group_prefix_plus_model():
             model="claude-sonnet-5", platform="signal",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "claude-fable-5", "provider": "anthropic"}
+    assert result["route"] == {"model": "claude-fable-5", "provider": "anthropic", "protected_watch": True}
 
 
 def test_user_directive_wins_over_mechanical_classifier():
@@ -350,7 +350,7 @@ def test_user_directive_kimi_routes_to_kimi_k3():
             model="z-ai/glm-5.2", platform="signal",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "moonshotai/kimi-k3", "provider": "openrouter"}
+    assert result["route"] == {"model": "moonshotai/kimi-k3", "provider": "openrouter", "protected_watch": True}
     assert "user-requested" in result["context"]
 
 
@@ -364,7 +364,7 @@ def test_user_directive_kimi_aliases_kimi3_and_k3():
             )
             assert isinstance(result, dict), phrase
             assert result["route"] == {
-                "model": "moonshotai/kimi-k3", "provider": "openrouter",
+                "model": "moonshotai/kimi-k3", "provider": "openrouter", "protected_watch": True,
             }, phrase
 
 
@@ -397,7 +397,7 @@ def test_user_directive_glm_routes_to_glm():
             model="claude-sonnet-5", platform="cli",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "z-ai/glm-5.2", "provider": "openrouter"}
+    assert result["route"] == {"model": "z-ai/glm-5.2", "provider": "openrouter", "protected_watch": True}
 
 
 def test_user_directive_group_prefix_plus_kimi():
@@ -409,4 +409,4 @@ def test_user_directive_group_prefix_plus_kimi():
             model="z-ai/glm-5.2", platform="signal",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "moonshotai/kimi-k3", "provider": "openrouter"}
+    assert result["route"] == {"model": "moonshotai/kimi-k3", "provider": "openrouter", "protected_watch": True}

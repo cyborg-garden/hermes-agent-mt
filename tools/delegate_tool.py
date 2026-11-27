@@ -2728,7 +2728,10 @@ def delegate_task(
     # Wrapped in try/finally so the global is always restored even if a
     # child build raises (otherwise _last_resolved_tool_names stays corrupted).
     children = []
-    task_routes = _task_routes(task_list, cfg, creds, parent_agent)
+    try:
+        task_routes = _task_routes(task_list, cfg, creds, parent_agent)
+    except ValueError as exc:
+        return tool_error(str(exc))
     try:
         for i, t in enumerate(task_list):
             # Per-task role beats top-level; normalise again so unknown
@@ -3189,8 +3192,39 @@ def delegate_task(
 _ROUTE_CRED_KEYS = ("model", "provider", "base_url", "api_key", "api_mode")
 
 
+def _primary_creds_for_routed_parent(creds: dict, parent_agent) -> dict:
+    """The default route for a parent that is itself on a cheap route.
+
+    A child with no pinned model inherits ``parent_agent.model``; on a cheap-routed turn
+    that is the cheap model, with no escalation or protected check on the child. Such a
+    child takes the parent's primary instead. Raises ValueError when that primary cannot
+    be named, so the spawn is refused rather than run cheap."""
+    if creds.get("model") or getattr(parent_agent, "_routing_protected_watch", False) is not True:
+        return creds
+    from agent.routing_override import _primary_model_of
+    primary = _primary_model_of(parent_agent)
+    if primary and str(getattr(parent_agent, "model", "") or "") == primary:
+        return creds  # the parent already runs on its primary
+    target = getattr(parent_agent, "_routing_escalation_target", None)
+    if isinstance(target, dict) and target.get("model"):
+        if all(target.get(k) for k in ("provider", "base_url", "api_key")):
+            return {**creds, **{k: target.get(k) or None for k in _ROUTE_CRED_KEYS}}
+        # An empty endpoint or key would make the child inherit the parent's (cheap) one.
+        if target.get("provider"):
+            return _resolve_delegation_credentials(
+                {k: target.get(k) for k in ("model", "provider")}, parent_agent)
+    chain = getattr(parent_agent, "_fallback_chain", None) or []
+    first = chain[0] if chain and isinstance(chain[0], dict) else {}
+    if primary and first.get("model") == primary and (first.get("provider") or first.get("base_url")):
+        return _resolve_delegation_credentials(
+            {k: first.get(k) for k in ("model", "provider", "base_url") if first.get(k)}, parent_agent)
+    raise ValueError("This turn runs on a cheap model and its primary model is not available, "
+                     "so subagents cannot be started. Do the work yourself in this turn.")
+
+
 def _task_routes(task_list: list, cfg: dict, creds: dict, parent_agent) -> list:
     """One ``(creds, route)`` pair per task; ``route`` is None on the default route."""
+    creds = _primary_creds_for_routed_parent(creds, parent_agent)
     default = [(creds, None)] * len(task_list)
     backend = str((cfg or {}).get("backend") or "").strip()
     from agent.delegation_provider import DEFAULT_BACKENDS, clean_route, get_provider

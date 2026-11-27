@@ -2,7 +2,7 @@
 
 A cheap-routed turn or child (``agent/routing_override.py``) must never send protected
 text (a Papa Reo transcript arriving in a tool result, a steer, plugin context or
-recalled memory) to the cheap model. The turn loop calls this after the steer drain and
+recalled memory, the system prompt) to the cheap model. The turn loop calls this after the steer drain and
 before it assembles the request, runs MoA advisors, compresses or calls the model. It
 moves the agent to its primary, or reports that the turn must end without any model
 call when the primary cannot be reached.
@@ -26,6 +26,10 @@ __all__ = ["PROTECTED_BLOCK_MESSAGE", "PROTECTED_BLOCKED", "PROTECTED_SWITCHED",
 
 def _extra_text(agent: Any, extras: tuple) -> list:
     texts = [e for e in extras if e]
+    with suppress(Exception):
+        # The cached system prompt carries memory, the user profile and context files.
+        if getattr(agent, "_cached_system_prompt", None):
+            texts.append(agent._cached_system_prompt)
     with suppress(Exception):
         if getattr(agent, "ephemeral_system_prompt", None):
             texts.append(agent.ephemeral_system_prompt)
