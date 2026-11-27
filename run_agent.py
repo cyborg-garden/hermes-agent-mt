@@ -6273,6 +6273,11 @@ class AIAgent:
         # replaces the value with the live runtime after fallback restoration.
         # Keep the scope local instead of storing ContextVar tokens on the agent,
         # which may be observed from another thread.
+        # The running protected-egress session (agent/protected_session.py) is set
+        # at turn start; it is scoped to the turn, so the caller's Context (a reused
+        # worker thread, a CLI main thread) gets its own value back afterwards.
+        from agent import protected_session as _protected_session
+        egress_token = _protected_session._SESSION.set(None)
         with scoped_runtime_main({}):
             try:
                 result = run_conversation(
@@ -6296,6 +6301,7 @@ class AIAgent:
             finally:
                 reset_accounting_context(acct_token)
                 reset_conversation_context(token)
+                _protected_session.reset(egress_token)
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """
