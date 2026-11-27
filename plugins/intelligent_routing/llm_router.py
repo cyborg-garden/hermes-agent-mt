@@ -96,28 +96,32 @@ def parse_reply(content: Any) -> Optional[tuple[str, float]]:
     return task_type, confidence
 
 
-def _default_completion(text: str, settings: dict) -> Any:
-    """One chat completion against the configured router model. Returns reply content."""
-    from agent.auxiliary_client import resolve_provider_client
+# The host-owned LLM facade (``ctx.llm``, agent/plugin_llm.py), bound at register time.
+# Its audit line records plugin, model and token count, never the text.
+_plugin_llm: Any = None
 
-    client, resolved_model = resolve_provider_client(settings["provider"], model=settings["model"])
-    if client is None:
-        raise RuntimeError("router provider has no client")
-    kwargs: dict[str, Any] = {
-        "model": resolved_model or settings["model"],
-        "messages": [
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-        "temperature": 0,
+
+def bind(llm: Any) -> None:
+    global _plugin_llm
+    _plugin_llm = llm
+
+
+def _default_completion(text: str, settings: dict) -> Any:
+    """One chat completion against the configured router model. Returns reply content.
+
+    Naming the router model needs ``plugins.entries.intelligent_routing.llm``
+    ``allow_provider_override`` / ``allow_model_override`` (or the model in
+    ``allowed_models``); without them the call is refused and the turn stays premium.
+    """
+    if _plugin_llm is None:
+        raise RuntimeError("plugin LLM access is not bound")
+    result = _plugin_llm.complete(
+        [{"role": "system", "content": ROUTER_SYSTEM_PROMPT}, {"role": "user", "content": text}],
+        provider=settings["provider"], model=settings["model"], temperature=0,
         # Room for a reasoning-mandatory model to think briefly before the JSON.
-        "max_tokens": 400,
-        "timeout": settings["timeout_s"],
-    }
-    if settings.get("extra_body"):
-        kwargs["extra_body"] = dict(settings["extra_body"])
-    response = client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content
+        max_tokens=400, timeout=settings["timeout_s"], purpose="task routing",
+    )
+    return getattr(result, "text", None)
 
 
 # Patched in tests; never set from config.

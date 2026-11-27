@@ -46,9 +46,13 @@ _DEFAULT_ROUTER_MAX_CHARS = 800
 
 # Text that marks content as protected (the Papa Reo transcript footer by default):
 # a turn carrying it never reaches the LLM router and never leaves the primary.
-# The list lives in core so the mid-turn check (agent/routing_override.py) uses the
-# same one. Extend per agent with routing.protected_markers.
-from agent.routing_override import DEFAULT_PROTECTED_MARKERS
+# The mid-turn check in core (agent/routing_override.py) keeps the same list; a test
+# holds the two equal. Extend per agent with routing.protected_markers.
+DEFAULT_PROTECTED_MARKERS: tuple[str, ...] = (
+    "transcribed by papa reo",
+    "kaitiakitanga license",
+    "kaitiakitanga licence",
+)
 
 # Provider-specific request-BODY params to send WITH a cheap-routed turn — e.g.
 # ollama ``{"options": {"num_ctx": 8192}}``, or an aggregator's ``provider``
@@ -182,7 +186,6 @@ def router_settings() -> dict[str, Any]:
     exclude = section.get("router_exclude_platforms") or []
     if isinstance(exclude, str):
         exclude = [exclude]
-    extra_body = section.get("router_extra_body")
     return {
         "model": str(section.get("router_model") or cheap_model).strip() or cheap_model,
         "provider": str(section.get("router_provider") or cheap_provider).strip() or cheap_provider,
@@ -191,7 +194,6 @@ def router_settings() -> dict[str, Any]:
         "max_chars": int(_float(section.get("router_max_chars"), _DEFAULT_ROUTER_MAX_CHARS, 100, 4000)),
         "on_interactive": _coerce_bool(section.get("router_on_interactive", False)),
         "exclude_platforms": frozenset(str(p).strip().lower() for p in exclude if str(p).strip()),
-        "extra_body": dict(extra_body) if isinstance(extra_body, dict) else {},
     }
 
 

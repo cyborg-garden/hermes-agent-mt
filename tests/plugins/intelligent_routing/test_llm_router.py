@@ -1,6 +1,7 @@
 """routing.mode: llm-router — called only when the heuristic cannot decide, least
 text, never logged, strict timeout, fail open to premium, skipped on protected content."""
 import logging
+import types
 import threading
 import time
 from unittest.mock import patch
@@ -21,7 +22,7 @@ def router_env():
     calls = []
     settings = {
         "model": "router-model", "provider": "openrouter", "timeout_s": 0.3, "min_confidence": 0.85,
-        "max_chars": 200, "on_interactive": False, "exclude_platforms": frozenset(), "extra_body": {},
+        "max_chars": 200, "on_interactive": False, "exclude_platforms": frozenset(),
     }
     reply = {"content": '{"type": "lookup", "confidence": 0.95}'}
 
@@ -151,3 +152,44 @@ def test_http_client_debug_logs_from_the_router_thread_are_dropped(router_env, c
         logging.getLogger("openai._base_client").debug("main-thread record stays")
     assert "LEAKMARK" not in caplog.text
     assert "main-thread record stays" in caplog.text
+
+
+def test_protected_marker_lists_in_plugin_and_core_match():
+    from agent.routing_override import DEFAULT_PROTECTED_MARKERS as core
+    from plugins.intelligent_routing.config import DEFAULT_PROTECTED_MARKERS as plugin
+    assert core == plugin
+
+
+_SETTINGS = {"model": "router/m", "provider": "openrouter", "timeout_s": 0.5, "min_confidence": 0.85,
+             "max_chars": 200, "on_interactive": False, "exclude_platforms": frozenset()}
+
+
+def test_default_call_goes_through_the_host_llm_facade():
+    from unittest.mock import MagicMock
+    llm = MagicMock()
+    llm.complete.return_value = types.SimpleNamespace(text='{"type": "lookup", "confidence": 0.9}')
+    with patch.object(llm_router, "_plugin_llm", llm):
+        result = llm_router.ask_router("list files", _SETTINGS)
+    assert (result.outcome, result.task_type) == ("ok", "lookup")
+    kwargs = llm.complete.call_args.kwargs
+    assert (kwargs["provider"], kwargs["model"], kwargs["temperature"]) == ("openrouter", "router/m", 0)
+    sent = llm.complete.call_args.args[0]
+    assert sent[1] == {"role": "user", "content": "list files"} and len(sent) == 2
+
+
+def test_unbound_or_refused_facade_fails_open():
+    from unittest.mock import MagicMock
+    with patch.object(llm_router, "_plugin_llm", None):
+        assert llm_router.ask_router("list files", _SETTINGS).outcome == "error"
+    llm = MagicMock()
+    llm.complete.side_effect = PermissionError("model override not allowed")
+    with patch.object(llm_router, "_plugin_llm", llm):
+        assert llm_router.ask_router("list files", _SETTINGS).outcome == "error"
+
+
+def test_register_binds_the_facade():
+    from unittest.mock import MagicMock
+    ctx = MagicMock()
+    with patch.object(llm_router, "_plugin_llm", None):
+        registration.register(ctx)
+        assert llm_router._plugin_llm is ctx.llm

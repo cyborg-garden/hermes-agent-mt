@@ -32,6 +32,6 @@
   },
   "deterministic": {
     "enabled": true,
-    "allow_substrings": ["127.0.0.1"]
+    "allow_substrings": []
   }
 }

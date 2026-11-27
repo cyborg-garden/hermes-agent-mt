@@ -455,6 +455,12 @@ def log_routing_decision(
 
 def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
+    # The LLM router (routing.mode: llm-router) calls through the host-owned facade.
+    llm = getattr(ctx, "llm", None)
+    if llm is not None:
+        from . import llm_router
+
+        llm_router.bind(llm)
     # Subagent routing: selected with delegation.backend: task-routing.
     register_delegation = getattr(ctx, "register_delegation_provider", None)
     if callable(register_delegation):

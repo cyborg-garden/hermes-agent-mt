@@ -99,6 +99,20 @@ routing:
   router_exclude_platforms: []
 ```
 
+The call goes through the host-owned plugin LLM facade (`ctx.llm`), whose audit line records the model and token count but never the text. Naming a router model needs the plugin's LLM trust settings:
+
+```yaml
+plugins:
+  entries:
+    intelligent_routing:
+      llm:
+        allow_provider_override: true
+        allow_model_override: true
+        allowed_models: ["deepseek/deepseek-v4-flash-0731"]
+```
+
+Without them the call is refused and the turn stays premium.
+
 ## Protected content
 
 The papareo_transcribe plugin does not mark turns as protected, so this plugin looks for the text itself. Any turn whose message or history contains the Papa Reo transcript footer ("transcribed by Papa Reo", "Kaitiakitanga License") stays on the primary and never reaches the LLM router. History counts because a cheap turn sends the whole conversation to the cheap provider. A subagent whose goal or context carries a marker stays on the primary.
