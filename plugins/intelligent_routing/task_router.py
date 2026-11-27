@@ -293,7 +293,7 @@ _ACTION_VERBS = frozenset({
     "send", "solve", "sort", "suggest", "tidy", "translate", "update", "wake", "work", "write",
     "advise", "assess", "evaluate", "recommend", "resolve", "repair", "tweak", "adjust", "message",
     "dm", "publish", "share", "forward", "warn", "alert", "escalate", "buy", "pay",
-    "synthesise", "synthesize", "conclude", "interpret", "infer", "judge", "argue", "weigh",
+    "synthesise", "synthesize", "conclude", "interpret", "infer", "argue", "weigh",
 })
 # "sort" is a cheap lead verb ("sort these by date") but a hard later step ("... and sort it
 # out"). Only the later-clause position reads it as an action.
