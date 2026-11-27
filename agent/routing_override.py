@@ -470,32 +470,20 @@ def try_activate_fallback(agent: Any, reason: Any = None) -> bool:
     a failing primary fails the turn with its own error instead of resending the
     protected text to another model. Routed or not; sessions without protected text
     walk the chain as before."""
-    if escalate_routed_turn(agent, reason):
-        return True
     from agent.chat_completion_helpers import try_activate_fallback as walk_fallback_chain
     if not session_holds_protected_text(agent):
-        return walk_fallback_chain(agent, reason)
+        return escalate_routed_turn(agent, reason) or walk_fallback_chain(agent, reason)
+    target = getattr(agent, "_routing_escalation_target", None)
+    if (isinstance(target, dict) and str(target.get("model") or "") == _primary_model_of(agent)
+            and escalate_routed_turn(agent, reason)):
+        return True
     return _walk_to_primary_only(agent, reason, walk_fallback_chain)
-
-
-def _configured_primary(agent: Any) -> Optional[str]:
-    """The model protected text may go to: the pre-turn route, else the configured primary."""
-    primary = _primary_model_of(agent)
-    if primary:
-        return primary
-    runtime = getattr(agent, "_primary_runtime", None)
-    if getattr(agent, "_routing_override_active", False) is True:
-        saved = getattr(agent, "_routing_override_saved_primary", None)
-        if isinstance(saved, dict) and saved.get("model"):
-            runtime = saved
-    model = str(runtime.get("model") or "").strip() if isinstance(runtime, dict) else ""
-    return model or None
 
 
 def _walk_to_primary_only(agent: Any, reason: Any, walk: Any) -> bool:
     """Walk the fallback chain, skipping every entry that is not the primary."""
     try:
-        primary = _configured_primary(agent)
+        primary = _primary_model_of(agent)
         if not primary or str(getattr(agent, "model", "") or "").strip() == primary:
             logger.warning("intelligent_routing: protected text in this session; not falling "
                            "back from the primary to another model")
@@ -542,6 +530,10 @@ def session_holds_protected_text(agent: Any) -> bool:
     """True when the agent's session (messages, this turn's plugin context and memory
     recall, system prompt) carries a protected marker. Fails closed. Never raises."""
     try:
+        # Set on a child by a parent holding protected text: the child may have been
+        # handed the body without the marker.
+        if getattr(agent, "_protected_session", False) is True:
+            return True
         extras = getattr(agent, "_turn_protected_extras", None) or ()
         markers = getattr(agent, "_routing_protected_markers", None)
         return carries_protected_text(getattr(agent, "_session_messages", None),
@@ -624,12 +616,81 @@ def carries_protected_text(messages: Any, extra_text: Any = "", markers: Any = N
     return False
 
 
+def _configured_primary_runtime(agent: Any) -> Optional[dict]:
+    """The configured primary's runtime. Never the model a turn started on: that can be
+    a fallback the agent stayed on after a rate-limit cooldown."""
+    if getattr(agent, "_routing_override_active", False) is True:
+        saved = getattr(agent, "_routing_override_saved_primary", None)
+        if isinstance(saved, dict) and saved.get("model"):
+            return saved
+    runtime = getattr(agent, "_primary_runtime", None)
+    if isinstance(runtime, dict) and runtime.get("model"):
+        return runtime
+    return None
+
+
 def _primary_model_of(agent: Any) -> Optional[str]:
+    """The only model protected text may go to: a cheap child's parent primary, else
+    the agent's configured primary."""
+    child_primary = getattr(agent, "_routing_primary_model", None)
+    if child_primary:
+        return str(child_primary)
+    runtime = _configured_primary_runtime(agent)
+    if runtime:
+        return str(runtime["model"]).strip() or None
     target = getattr(agent, "_routing_escalation_target", None)
     if isinstance(target, dict) and target.get("model"):
         return str(target["model"])
-    primary = getattr(agent, "_routing_primary_model", None)
-    return str(primary) if primary else None
+    return None
+
+
+def _force_restore_primary(agent: Any) -> bool:
+    """Put the agent back on its configured primary now, whatever the rate-limit
+    cooldown says. True iff it landed there. Never raises."""
+    primary = _primary_model_of(agent)
+    if not primary:
+        return False
+    saved_cooldown = getattr(agent, "_rate_limited_until", 0)
+    try:
+        agent._rate_limited_until = 0
+        if getattr(agent, "_routing_override_active", False) is not True:
+            agent._fallback_activated = True  # restore_primary_runtime rebuilds only then
+        agent._restore_primary_runtime()
+    except Exception:
+        logger.warning("intelligent_routing: could not restore the primary for protected text",
+                       exc_info=True)
+    finally:
+        agent._rate_limited_until = saved_cooldown
+    ok = str(getattr(agent, "model", "") or "") == primary
+    if ok:
+        try:
+            from agent.chat_completion_helpers import rewrite_prompt_model_identity
+
+            rewrite_prompt_model_identity(agent, agent.model, agent.provider)
+        except Exception:
+            logger.debug("intelligent_routing: could not rewrite model identity", exc_info=True)
+    _log_escalation(agent, "protected_content", primary, ok)
+    return ok
+
+
+def restore_primary_if_protected(agent: Any, messages: Any, extras: Any = ()) -> Optional[str]:
+    """An agent that is not on its configured primary (a fallback that outlived its turn,
+    a mid-turn fallback, a model directive) while its session holds protected text goes
+    back to the primary. ``"switched"``, ``"blocked"`` (the primary could not be
+    restored: send nothing) or None. Scans only when off the primary. Never raises."""
+    try:
+        primary = _primary_model_of(agent)
+        if not primary or str(getattr(agent, "model", "") or "") == primary:
+            return None
+        markers = getattr(agent, "_routing_protected_markers", None)
+        if getattr(agent, "_protected_session", False) is not True and not carries_protected_text(
+                messages, agent_extra_text(agent, tuple(extras or ())), markers):
+            return None
+        return PROTECTED_SWITCHED if _force_restore_primary(agent) else PROTECTED_BLOCKED
+    except Exception:
+        logger.warning("intelligent_routing: protected-content check failed; ending the turn",
+                       exc_info=True)
+        return PROTECTED_BLOCKED
 
 
 def protected_on_routed_model(agent: Any, messages: Any, extra_text: Any = "") -> bool:
@@ -665,7 +726,11 @@ def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Op
             return None
         agent._routing_escalate_pending = False
         target = getattr(agent, "_routing_escalation_target", None)
-        if isinstance(target, dict) and target.get("model"):
+        primary = _primary_model_of(agent)
+        if isinstance(target, dict) and target.get("model") and str(target["model"]) != primary:
+            # The turn started on a fallback, not the primary: go to the primary itself.
+            ok = _force_restore_primary(agent)
+        elif isinstance(target, dict) and target.get("model"):
             ok = _switch_to(agent, target)
             ok = ok and str(getattr(agent, "model", "") or "") == str(target["model"])
             _log_escalation(agent, "protected_content", str(target["model"]), ok)

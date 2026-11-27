@@ -2728,6 +2728,10 @@ def delegate_task(
     # Wrapped in try/finally so the global is always restored even if a
     # child build raises (otherwise _last_resolved_tool_names stays corrupted).
     children = []
+    # A parent holding protected text may hand a child the body without its marker:
+    # every child counts as protected, so none of its calls leave the primary.
+    from agent.routing_override import session_holds_protected_text
+    _parent_protected = session_holds_protected_text(parent_agent)
     try:
         task_routes = _task_routes(task_list, cfg, creds, parent_agent)
     except ValueError as exc:
@@ -2761,6 +2765,8 @@ def delegate_task(
                 **_route_build_kwargs(t_route),
             )
             _arm_routed_child(child, t_route, t_creds)
+            if _parent_protected:
+                child._protected_session = True
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
             children.append((i, t, child))

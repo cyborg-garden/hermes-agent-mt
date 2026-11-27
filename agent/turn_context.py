@@ -159,9 +159,22 @@ def build_turn_context(
 
     # Restore the primary runtime if the previous turn activated fallback.
     agent._restore_primary_runtime()
+    # A fallback kept by a rate-limit cooldown must not carry protected text (in the
+    # history or this message): back to the primary now, whatever the cooldown.
+    try:
+        from agent.routing_override import restore_primary_if_protected
+        restore_primary_if_protected(
+            agent, list(conversation_history or []) + [{"role": "user", "content": user_message}])
+    except Exception:
+        logger.debug("protected-content primary restore failed", exc_info=True)
 
     # Tell auxiliary_client what the live main provider/model are for this turn
     # after primary restoration has settled the runtime.
+    try:
+        from agent.auxiliary_client import set_protected_session
+        set_protected_session(getattr(agent, "_protected_session", False) is True)
+    except Exception:
+        pass
     try:
         from agent.auxiliary_client import set_runtime_main
         set_runtime_main(

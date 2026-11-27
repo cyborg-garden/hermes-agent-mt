@@ -285,3 +285,41 @@ def test_parent_without_protected_text_still_routes_children(cfg):
         routes = dt._task_routes([{"goal": "Summarise the context.", "context": _BODY}],
                                  {"backend": deleg.BACKEND_NAME}, creds, parent)
     assert routes[0][0].get("model") == "cheap/model"
+
+
+def _plain_parent(messages):
+    return types.SimpleNamespace(session_id="root", model=PRIMARY["model"], provider="openrouter",
+                                 tool_progress_callback=None, _delegate_spinner=None,
+                                 request_overrides={}, _delegate_depth=0,
+                                 _safe_print=lambda line: None, _fallback_chain=[],
+                                 _session_messages=messages)
+
+
+def _spawn_children(tmp_path, monkeypatch, parent, tasks, delegation):
+    from tools import delegate_tool as dt
+    children = []
+    monkeypatch.setattr(dt, "_build_child_agent", lambda **kw: children.append(
+        types.SimpleNamespace(tool_progress_callback=None, model=kw.get("model"))) or children[-1])
+    monkeypatch.setattr(dt, "_run_single_child", lambda task_index, goal, child=None, parent_agent=None, **kw: {
+        "task_index": task_index, "status": "completed", "summary": "ok", "api_calls": 1, "duration_seconds": 0})
+    _home(tmp_path, monkeypatch, delegation)
+    dt.delegate_task(tasks=tasks, parent_agent=parent)
+    return children
+
+
+@pytest.mark.parametrize("delegation", [{}, {"backend": "task-routing"}])
+def test_children_of_a_protected_parent_are_marked_protected(tmp_path, monkeypatch, delegation):
+    from agent.routing_override import session_holds_protected_text
+    parent = _plain_parent([{"role": "tool", "content": _BODY + _FOOTER}])
+    children = _spawn_children(tmp_path, monkeypatch, parent,
+                               [{"goal": "Summarise the context.", "context": _BODY}], delegation)
+    assert children and children[0]._protected_session is True
+    assert session_holds_protected_text(types.SimpleNamespace(
+        _protected_session=True, _session_messages=[{"role": "user", "content": _BODY}]))
+
+
+def test_children_of_an_unprotected_parent_are_not_marked(tmp_path, monkeypatch):
+    parent = _plain_parent([{"role": "tool", "content": _BODY}])
+    children = _spawn_children(tmp_path, monkeypatch, parent,
+                               [{"goal": "Summarise the context.", "context": _BODY}], {})
+    assert children and not getattr(children[0], "_protected_session", False)

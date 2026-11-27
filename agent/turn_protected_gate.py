@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from agent.routing_override import (
     PROTECTED_BLOCK_MESSAGE, PROTECTED_BLOCKED, PROTECTED_SWITCHED, agent_extra_text,
-    escalate_if_protected,
+    escalate_if_protected, restore_primary_if_protected,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,10 +33,13 @@ def protected_content_gate(agent: Any, messages: Any, *extras: Any) -> Optional[
     """``PROTECTED_SWITCHED``, ``PROTECTED_BLOCKED`` or None (nothing to do).
 
     ``extras`` is any other text about to be sent with ``messages`` (plugin context,
-    memory recall). Inert unless the turn runs on a cheap route. Never raises.
+    memory recall). Off the cheap route it only acts when the agent is not on its
+    configured primary. Never raises.
     """
     if getattr(agent, "_routing_protected_watch", False) is not True:
-        return None
+        # Not a cheap route, but maybe still on a fallback (one that outlived its
+        # turn, or a model directive): protected text goes back to the primary.
+        return restore_primary_if_protected(agent, messages, extras)
     return escalate_if_protected(agent, messages, _extra_text(agent, extras))
 
 
