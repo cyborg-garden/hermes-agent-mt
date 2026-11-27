@@ -83,6 +83,15 @@ def _load_config() -> dict[str, Any]:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def _full_config() -> dict[str, Any]:
+    """The whole config, or ``{}`` when it cannot be read (callers then see nothing configured)."""
+    try:
+        return _load_config()
+    except Exception:  # boundary: unreadable config must never break a turn or a spawn
+        logger.debug("intelligent_routing: could not load config", exc_info=True)
+        return {}
+
+
 def _routing_section() -> dict[str, Any]:
     try:
         cfg = _load_config()
@@ -204,10 +213,7 @@ def primary_route() -> dict[str, Any]:
     The escalation target for a cheap subagent: its fallback chain starts here.
     Empty dict when the config has no usable primary.
     """
-    try:
-        cfg = _load_config()
-    except Exception:
-        return {}
+    cfg = _full_config()
     model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
     if isinstance(model_cfg, str):
         return {"model": model_cfg} if model_cfg.strip() else {}
@@ -228,9 +234,6 @@ def primary_route() -> dict[str, Any]:
 
 def top_level_fallback_chain() -> list[dict[str, Any]]:
     """``fallback_providers`` from the profile config (entries that are mappings)."""
-    try:
-        cfg = _load_config()
-    except Exception:
-        return []
+    cfg = _full_config()
     chain = cfg.get("fallback_providers") if isinstance(cfg, dict) else None
     return [dict(e) for e in chain if isinstance(e, dict)] if isinstance(chain, list) else []

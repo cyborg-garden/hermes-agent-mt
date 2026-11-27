@@ -1,6 +1,7 @@
 """routing.mode: llm-router — called only when the heuristic cannot decide, least
 text, never logged, strict timeout, fail open to premium, skipped on protected content."""
 import logging
+import threading
 import time
 from unittest.mock import patch
 
@@ -11,8 +12,12 @@ from plugins.intelligent_routing import llm_router, registration
 CRON_UNDECIDED = "Nightly: go through the feeds folder."  # no premium signal, no cheap evidence
 
 
+_HANG = threading.Event()  # a router call that must outlive the timeout blocks on this
+
+
 @pytest.fixture
 def router_env():
+    _HANG.clear()
     calls = []
     settings = {
         "model": "router-model", "provider": "openrouter", "timeout_s": 0.3, "min_confidence": 0.85,
@@ -25,7 +30,7 @@ def router_env():
         if isinstance(reply["content"], Exception):
             raise reply["content"]
         if reply["content"] == "SLEEP":
-            time.sleep(2)
+            _HANG.wait(5)
         return reply["content"]
 
     with patch.object(registration, "is_intelligent_routing_enabled", return_value=True), \
@@ -33,6 +38,7 @@ def router_env():
             patch.object(registration, "router_settings", return_value=settings), \
             patch.object(llm_router, "_completion", fake):
         yield calls, settings, reply
+    _HANG.set()
 
 
 def _hook(message, **kw):

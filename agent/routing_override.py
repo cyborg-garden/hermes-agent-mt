@@ -297,6 +297,43 @@ def apply_routing_override(agent: Any, override: Optional[dict]) -> bool:
     return True
 
 
+def revert_routing_override(agent: Any) -> bool:
+    """Undo a routed turn at the top of the next one. True iff a routed turn was reverted.
+
+    Called by ``restore_primary_runtime`` before its fallback and cooldown gates, so a
+    routed turn always reverts. The caller then rebuilds the runtime from the restored
+    (premium) ``_primary_runtime``.
+
+    Request-body params have three states, not two: ``_UNTOUCHED`` means the routed turn
+    never wrote extra_body (the default) and must be left strictly alone, since popping
+    there destroyed the primary provider's own body params for the rest of the session;
+    ``_NOT_SET`` means the key did not exist before, so it is removed rather than left as
+    ``{}``; anything else is the pre-turn value to reinstate. It acts on the dict
+    ``apply_routing_override`` actually mutated, NOT a fresh read of
+    ``agent.request_overrides``: the gateway assigns a new per-turn overrides dict onto
+    the cached agent before this revert runs.
+    """
+    if not getattr(agent, "_routing_override_active", False):
+        return False
+    saved = getattr(agent, "_routing_override_saved_primary", None)
+    if isinstance(saved, dict):
+        agent._primary_runtime = saved
+    saved_eb = getattr(agent, "_routing_override_saved_extra_body", _UNTOUCHED)
+    overrides = getattr(agent, "_routing_override_overrides_ref", None)
+    if saved_eb is not _UNTOUCHED and isinstance(overrides, dict):
+        if saved_eb is _NOT_SET:
+            overrides.pop("extra_body", None)
+        else:
+            overrides["extra_body"] = saved_eb
+    # Clear the scoping state so this runs exactly once.
+    agent._routing_override_active = False
+    agent._routing_override_saved_primary = None
+    agent._routing_override_saved_extra_body = None
+    agent._routing_override_overrides_ref = None
+    clear_escalation_state(agent)
+    return True
+
+
 # ── Escalation ────────────────────────────────────────────────────────────────
 
 # Text that marks content as protected. The defaults are the footer the
@@ -356,9 +393,8 @@ def _switch_to(agent: Any, target: dict) -> bool:
     kwargs = {k: target[k] for k in ("api_key", "base_url", "api_mode") if target.get(k)}
     try:
         agent.switch_model(to_model, str(target.get("provider") or ""), **kwargs)
-    except Exception as exc:
-        logger.warning("intelligent_routing: escalation to %s failed (%s)", to_model,
-                       type(exc).__name__)
+    except Exception:  # boundary: a failed switch must leave the turn on its current route
+        logger.warning("intelligent_routing: escalation to %s failed", to_model, exc_info=True)
         return False
     # The cheap route's body params must not ride along to the primary: put the
     # pre-turn extra_body back now and leave nothing for next turn's revert.
@@ -404,14 +440,22 @@ def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
             _log_escalation(agent, trigger_name, to_model, False)
             return False
         _log_escalation(agent, trigger_name, to_model, True)
-        try:
-            agent._buffer_diagnostic_status(f"↻ Retrying on {to_model}")
-        except Exception:
-            pass
+        status = getattr(agent, "_buffer_diagnostic_status", None)
+        if callable(status):
+            status(f"↻ Retrying on {to_model}")
         return True
     except Exception:
         logger.debug("intelligent_routing: escalation failed", exc_info=True)
         return False
+
+
+def try_activate_fallback(agent: Any, reason: Any = None, reset_at: Any = None) -> bool:
+    """The agent's ``_try_activate_fallback``: a failing cheap-routed turn goes back to the
+    route it started on (the configured primary) before any fallback-chain entry."""
+    if escalate_routed_turn(agent, reason):
+        return True
+    from agent.chat_completion_helpers import try_activate_fallback as walk_fallback_chain
+    return walk_fallback_chain(agent, reason, reset_at)
 
 
 def clear_escalation_state(agent: Any) -> None:

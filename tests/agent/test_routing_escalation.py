@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 
 from agent import turn_empty_response as ter
 from agent.agent_runtime_helpers import restore_primary_runtime
-from agent.chat_completion_helpers import try_activate_fallback
 from agent.routing_override import (
     apply_routing_override,
+    try_activate_fallback,
     escalate_routed_turn,
     looks_like_refusal,
     routed_escalation_pending,
@@ -168,11 +168,11 @@ def test_refusal_on_routed_turn_is_retried_on_the_primary():
 
 def test_refusal_on_unrouted_turn_is_left_alone():
     """The check is reached and declines; later guards may trip on a bare MagicMock."""
-    import agent.routing_override as ro
+    import agent.turn_refusal_escalation as tre
     a = _text_agent(pending=False)
     seen = []
-    real = ro.routed_escalation_pending
-    with patch.object(ro, "routed_escalation_pending", side_effect=lambda ag: seen.append(ag) or real(ag)):
+    real = tre.routed_escalation_pending
+    with patch.object(tre, "routed_escalation_pending", side_effect=lambda ag: seen.append(ag) or real(ag)):
         try:
             _finish(a, "I'm sorry, but I can't help with that.")
         except Exception:
@@ -324,11 +324,41 @@ def test_content_filter_stall_on_a_cheap_turn_escalates_with_an_empty_chain():
     a._try_activate_fallback.assert_called_once()
 
 
-def test_turn_loop_runs_the_protected_check_before_each_call():
+def test_preflight_gate_runs_the_protected_check_first():
     import inspect
-    from agent import conversation_loop
-    src = inspect.getsource(conversation_loop)
-    i = src.index("escalate_if_protected(agent, s.messages, s._plugin_user_context)")
-    assert src.rfind("_run_phase(prepare_iteration", 0, i) != -1  # after any steer is appended
-    assert i < src.index("_run_phase(assemble_api_request", i)
-    assert "PROTECTED_BLOCK_MESSAGE" in src[i:src.index("_run_phase(assemble_api_request", i)]
+    from agent import turn_preflight_gate
+    src = inspect.getsource(turn_preflight_gate.run_preflight_gate)
+    i = src.index("protected_content_gate(agent, v, messages, _plugin_user_context)")
+    assert i < src.index("_ollama_context_limit_error(agent")
+
+
+def _gate_verdict():
+    return SimpleNamespace(api_call_count=4, active_system_prompt="sys", final_response=None,
+                           failed=False, _turn_exit_reason="unknown", action="fallthrough")
+
+
+def test_gate_switch_restarts_the_iteration_on_the_primary():
+    from agent.turn_protected_gate import protected_content_gate
+    a = _agent()
+    a.iteration_budget = MagicMock()
+    apply_routing_override(a, CHEAP)
+    v = _gate_verdict()
+    msgs = [{"role": "tool", "content": PAPA_REO}]
+    with patch(_RW), patch("agent.conversation_loop._sync_failover_system_message", return_value="sys2"):
+        out = protected_content_gate(a, v, msgs, "")
+    assert out.action == "continue" and out.api_call_count == 3 and out.active_system_prompt == "sys2"
+    assert a.model == "claude-sonnet-5"
+    assert protected_content_gate(a, _gate_verdict(), msgs, "") is None  # on the primary: go on
+
+
+def test_gate_block_ends_the_turn_without_a_call():
+    from agent.turn_protected_gate import protected_content_gate
+    a = _agent()
+    a.iteration_budget = MagicMock()
+    apply_routing_override(a, CHEAP)
+    a.switch_model = MagicMock(side_effect=RuntimeError("down"))
+    msgs = [{"role": "tool", "content": PAPA_REO}]
+    out = protected_content_gate(a, _gate_verdict(), msgs, "")
+    assert out.action == "break" and out.failed is True
+    assert out._turn_exit_reason == "protected_content_blocked"
+    assert msgs[-1]["role"] == "assistant" and "protected" in msgs[-1]["content"]

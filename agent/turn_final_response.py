@@ -16,6 +16,7 @@ from agent.reasoning_promotion import answer_in_reasoning_capability
 from agent.repetition_guard import STOP_PATH_MIN_CHARS, is_runaway_repetition
 from agent.stream_delivery import publish_held_final_row
 from agent.turn_failure_copy import stamp_failure
+from agent.turn_refusal_escalation import escalate_routed_refusal
 from agent.turn_empty_response import (
     housekeeping_reply_line, recover_empty_response, take_housekeeping_reply_line,
 )
@@ -192,23 +193,6 @@ def finish_text_response(
         api_call_count = _ev.api_call_count
         return _verdict(_ev.action, _ev.result)
 
-    # A cheap-routed turn that refuses is retried on the primary before the refusal
-    # is accepted as the answer (agent/routing_override.py). The refusal row is not
-    # appended: the retry re-sends the same request on the primary.
-    from agent.routing_override import looks_like_refusal, routed_escalation_pending
-    if (
-        routed_escalation_pending(agent)
-        and looks_like_refusal(agent._strip_think_blocks(final_response or ""))
-        and agent._try_activate_fallback()
-    ):
-        from agent.conversation_loop import _sync_failover_system_message
-        from agent.turn_context_compaction import _refund_api_call
-        active_system_prompt = _sync_failover_system_message(agent, api_messages, active_system_prompt)
-        _preflight_compression_blocked = False
-        api_call_count = _refund_api_call(agent, api_call_count)
-        final_response = None
-        return _verdict("continue")
-
     agent._empty_content_retries = 0
     agent._thinking_prefill_retries = 0
     # Surface the one-shot fallback switch notice before dropping the retry buffer so a
@@ -216,7 +200,7 @@ def finish_text_response(
     agent._emit_pending_fallback_notice()
     agent._clear_status_buffer()
 
-    if marker_verdict := _recover_marker_reply(
+    if marker_verdict := escalate_routed_refusal(agent, final_response, _verdict, api_messages) or _recover_marker_reply(
             agent, final_response, _verdict, truncated_parts=truncated_response_parts, promoted=_promoted):
         return marker_verdict
 

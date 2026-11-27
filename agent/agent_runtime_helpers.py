@@ -1400,47 +1400,10 @@ def restore_primary_runtime(agent) -> bool:
     # not be gated on _fallback_activated (the override never sets it) or on the
     # cooldown (that gate would leak the cheap model past its turn — see
     # audit Blocker 1). Falls through to the shared rebuild body below.
-    _override_revert = bool(getattr(agent, "_routing_override_active", False))
-    if _override_revert:
-        _saved = getattr(agent, "_routing_override_saved_primary", None)
-        if isinstance(_saved, dict):
-            agent._primary_runtime = _saved
-        # Revert any turn-scoped request-body params (e.g. {"think": false}
-        # applied for a local cheap tier). Three states, not two: _UNTOUCHED
-        # means the routed turn never wrote extra_body (the default, since
-        # routing.cheap_extra_body is empty unless configured) and must be left
-        # strictly alone — popping there destroyed the primary provider's own
-        # body params for the rest of the session. _NOT_SET means the key did
-        # not exist before the routed turn, so we remove it rather than leaving
-        # {} behind. Anything else is the pre-turn value to reinstate.
-        #
-        # Act on the dict apply_routing_override actually mutated, NOT on a
-        # fresh read of agent.request_overrides: the gateway assigns a new
-        # per-turn overrides dict onto the cached agent before this revert runs.
-        try:
-            from agent.routing_override import _NOT_SET, _UNTOUCHED
-
-            _saved_eb = getattr(
-                agent, "_routing_override_saved_extra_body", _UNTOUCHED
-            )
-            _overrides = getattr(agent, "_routing_override_overrides_ref", None)
-            if _saved_eb is not _UNTOUCHED and isinstance(_overrides, dict):
-                if _saved_eb is _NOT_SET:
-                    _overrides.pop("extra_body", None)
-                else:
-                    _overrides["extra_body"] = _saved_eb
-        except Exception:
-            pass
-
-        # Clear the scoping state so this runs exactly once.
-        agent._routing_override_active = False
-        agent._routing_override_saved_primary = None
-        agent._routing_override_saved_extra_body = None
-        agent._routing_override_overrides_ref = None
-        from agent.routing_override import clear_escalation_state
-        clear_escalation_state(agent)
-        # Do NOT return here — proceed to rebuild the runtime from the restored
-        # (premium) _primary_runtime via the shared body below.
+    # Then falls through to rebuild the runtime from the restored (premium) _primary_runtime
+    # via the shared body below. The revert itself lives in agent/routing_override.py.
+    from agent.routing_override import revert_routing_override
+    _override_revert = revert_routing_override(agent)
 
     if not _override_revert and not agent._fallback_activated:
         # Reset the index even without activation: a failed _try_activate_fallback() can strand

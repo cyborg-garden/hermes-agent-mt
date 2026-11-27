@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -156,12 +155,16 @@ def ask_router(text: str, settings: dict) -> RouterResult:
     def _work() -> None:
         try:
             box["content"] = _completion(payload, settings)
-        except Exception as exc:  # the router must never break a turn
+        # health: allow BLE001 -- fail-open boundary of the router call; the traceback is not logged because exception text can echo the routed message
+        except Exception as exc:
             box["error"] = type(exc).__name__
 
     _install_log_filter()
     started = time.monotonic()
-    worker = threading.Thread(target=_work, name=_WORKER_NAME, daemon=True)
+    # Keeps the caller's profile and secret scope (ContextVars do not cross a bare Thread),
+    # so the router resolves this profile's credentials.
+    from agent.memory_provider import spawn_context_thread
+    worker = spawn_context_thread(_work, name=_WORKER_NAME, daemon=True)
     worker.start()
     worker.join(settings["timeout_s"])
     latency_ms = int((time.monotonic() - started) * 1000)
