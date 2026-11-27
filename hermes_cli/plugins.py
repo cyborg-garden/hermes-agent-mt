@@ -2280,6 +2280,13 @@ def resolve_pre_tool_block(
     times out is fail-closed to a block; ``block`` blocks with its message;
     anything else proceeds.
     """
+    # Protected session (agent/protected_session.py): default-deny tool allowlist,
+    # enforced here because every dispatch site (registry, the agent-loop tools
+    # such as memory and delegate_task, concurrent and sequential) passes through.
+    from agent.protected_session import refuse_tool_if_protected
+    _protected_refusal = refuse_tool_if_protected(tool_name, args)
+    if _protected_refusal is not None:
+        return _protected_refusal
     details = _get_pre_tool_call_directive_details(
         tool_name, args, task_id=task_id, session_id=session_id,
         tool_call_id=tool_call_id, turn_id=turn_id,

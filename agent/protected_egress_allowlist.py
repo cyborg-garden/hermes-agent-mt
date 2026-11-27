@@ -42,7 +42,20 @@ ALLOWED_SCOPES = frozenset({
     "plugin:papareo_transcribe",
 })
 
-# Tools refused outright in a protected session: they send text out over channels
+# The only tools that run in a protected session (default deny). Each reads local
+# state or asks the person, and none persists text beyond the session or sends it
+# anywhere. Every other tool, including any added later, is refused, also the
+# agent-loop tools (memory, delegate_task) that bypass the registry.
+# transcribe_recording runs under its own restrictions (no URL, gateway-downloaded
+# recordings only, not from a child). tests/agent/test_protected_tool_allowlist.py
+# fails when this lists a tool that is not registered.
+PROTECTED_SESSION_TOOLS = frozenset({
+    "read_file", "search_files", "read_document", "clarify", "todo", "skill_view",
+    "skills_list", "session_search", "transcribe_recording",
+})
+
+# Tools refused outright in a protected session (kept for reference: the default-
+# deny list above already refuses them): they send text out over channels
 # the HTTP hooks cannot see (a browser over CDP, websockets) or exist to send it out.
 # Subprocess tools (terminal, execute_code) and every MCP
 # tool (stdio servers are subprocesses; streamable-HTTP servers post from a task

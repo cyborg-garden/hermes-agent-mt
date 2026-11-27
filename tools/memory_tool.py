@@ -1290,6 +1290,12 @@ def memory_tool(
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
 
+    # A protected session's text never reaches durable memory: a later,
+    # unprotected session would load it into its prompt (agent/protected_session.py).
+    from agent.protected_session import PROTECTED_EGRESS_MESSAGE, is_protected
+    if is_protected():
+        return tool_error(PROTECTED_EGRESS_MESSAGE, success=False)
+
     # Some strict providers fill optional schema fields with JSON null rather
     # than omitting them.  Treat ``target: null`` as omitted so memory writes
     # still use the documented default store instead of failing validation.

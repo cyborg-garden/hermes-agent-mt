@@ -123,8 +123,8 @@ def test_A1_send_document_reaches_signal_cli(loop, tmp_path):
 
 def test_A1_the_endpoint_comes_from_adapter_config_not_traffic(loop):
     _signal_adapter([])
-    assert ps.host_matches("host.docker.internal", ps.delivery_hosts())
-    assert not ps.host_matches("collector.example", ps.delivery_hosts())
+    assert ps.delivery_endpoint_allowed(SIGNAL_CLI + "/api/v1/rpc")
+    assert not ps.delivery_endpoint_allowed("https://collector.example/x")
 
 
 def test_A1_an_unconfigured_host_is_still_refused_on_the_delivery_hop(loop, protected):

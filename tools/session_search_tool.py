@@ -661,15 +661,40 @@ def session_search(*args: Any, **kwargs: Any) -> str:
     if not isinstance(data, dict):
         return out
 
+    profile = kwargs.get("profile")
+
     def _hidden(sid: Any) -> bool:
+        """Protected in the record the result came from: this profile's DB, a named
+        profile's DB, or whichever profile owns the id (a bare cross-profile id)."""
         if not isinstance(sid, str) or not sid:
             return False
+        sid = sid.partition("/")[2] or sid
         try:
-            return db.session_is_protected(sid) is True  # the record, not this process
+            if db.session_is_protected(sid) is True:
+                return True
+            if profile is not None and str(profile).strip():
+                try:
+                    pdb = _resolve_profile_db(profile)
+                except Exception:
+                    pdb = None  # unknown profile: the read itself reports it
+                if pdb is not None:
+                    try:
+                        if pdb.session_is_protected(sid) is True:
+                            return True
+                    finally:
+                        pdb.close()
+            located, _owner = _locate_session_db(sid)
+            if located is not None:
+                try:
+                    return located.session_is_protected(sid) is True
+                finally:
+                    located.close()
         except Exception:
             return True
+        return False
 
-    if _hidden(data.get("session_id")):
+    requested = kwargs.get("session_id") or (args[6] if len(args) > 6 else None)
+    if _hidden(data.get("session_id")) or _hidden(requested):
         return tool_error("That conversation holds protected text and can't be shown here.",
                           success=False)
     if isinstance(data.get("results"), list):

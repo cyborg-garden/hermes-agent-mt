@@ -389,10 +389,13 @@ def plugin_scope_name(callback: Any) -> str:
 
 
 def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
-    """The generic refusal for a tool that cannot run in a protected session, else None."""
-    from agent.protected_egress_allowlist import (
-        BLOCKED_TOOLS, BLOCKED_TOOL_PREFIXES, URL_ARGUMENT_TOOLS,
-    )
+    """The generic refusal for a tool in a protected session, else None.
+
+    Default deny: only the tools in ``PROTECTED_SESSION_TOOLS`` (read-only, local,
+    nothing persisted or sent) run, and the transcription tool under its own
+    restrictions. Anything else, including tools added later, is refused, unless
+    an operator allows ``tool:<name>`` in ``routing.protected_egress_allow``."""
+    from agent.protected_egress_allowlist import PROTECTED_SESSION_TOOLS, URL_ARGUMENT_TOOLS
 
     if not is_protected():
         return None
@@ -401,12 +404,10 @@ def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
         refusal = _refuse_transcriber_input(name, args if isinstance(args, dict) else {})
         if refusal is not None:
             return refusal
-    if _scope_allowed(f"tool:{name}"):
+    if name in PROTECTED_SESSION_TOOLS or _scope_allowed(f"tool:{name}"):
         return None
-    if name in BLOCKED_TOOLS or name.startswith(BLOCKED_TOOL_PREFIXES) or _is_mcp_tool(name):
-        logger.info("protected session: refused tool %s", name)
-        return PROTECTED_EGRESS_MESSAGE
-    return None
+    logger.info("protected session: refused tool %s", name)
+    return PROTECTED_EGRESS_MESSAGE
 
 
 def _refuse_transcriber_input(name: str, args: dict) -> Optional[str]:
@@ -776,7 +777,7 @@ def check_request(url: Any, body: Any = None, headers: Any = None, *, kind: str 
     loopback = bool(parts) and _is_loopback(parts[1])
     if loopback and (scope == DELIVERY_SCOPE or _loopback_allowed(scope)):
         return  # a local service this scope needs (signal-cli for delivery, a vault)
-    if scope == DELIVERY_SCOPE and parts and host_matches(parts[1], delivery_hosts()):
+    if scope == DELIVERY_SCOPE and delivery_endpoint_allowed(url):
         return  # handed to the gateway loop: only the platforms' own API hosts
     logger.warning("protected session: refused outbound %s request from %s", kind, scope)
     raise ProtectedEgressBlocked(scope)
@@ -955,7 +956,7 @@ _DELIVERY_LOOPS: "weakref.WeakSet" = None  # type: ignore[assignment]
 DELIVERY_SCOPE = "delivery"
 
 
-_ADAPTER_DELIVERY_HOSTS: set = set()
+_ADAPTER_DELIVERY_ENDPOINTS: set = set()  # (host, port): exact, no subdomains
 _ENDPOINT_CONFIG_KEYS = ("http_url", "homeserver", "homeserver_url", "url", "base_url",
                          "server_url", "api_url", "endpoint", "host_url")
 
@@ -973,8 +974,19 @@ def register_adapter_endpoints(config: Any) -> None:
     for v in values:
         if isinstance(v, str) and "://" in v:
             parts = _split(v)
-            if parts and parts[1]:
-                _ADAPTER_DELIVERY_HOSTS.add(parts[1])
+            if parts and parts[1] and parts[2]:
+                _ADAPTER_DELIVERY_ENDPOINTS.add((parts[1].rstrip("."), parts[2]))
+
+
+def delivery_endpoint_allowed(url: Any) -> bool:
+    """True for a fixed platform API host (or subdomain), or an adapter's own
+    configured endpoint: exactly that host and port."""
+    parts = _split(url)
+    if not parts or not parts[1]:
+        return False
+    if (parts[1].rstrip("."), parts[2]) in _ADAPTER_DELIVERY_ENDPOINTS:
+        return True
+    return host_matches(parts[1], delivery_hosts())
 
 
 def delivery_hosts() -> tuple:
@@ -992,7 +1004,7 @@ def delivery_hosts() -> tuple:
             extra = [str(h) for h in cfg]
     except Exception:
         pass
-    return tuple(DELIVERY_HOSTS) + tuple(sorted(_ADAPTER_DELIVERY_HOSTS)) + tuple(extra)
+    return tuple(DELIVERY_HOSTS) + tuple(extra)
 
 
 def _on_delivery_loop() -> bool:
