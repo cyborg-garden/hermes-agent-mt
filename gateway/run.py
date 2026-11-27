@@ -18843,7 +18843,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if _protected_flag_db is None or not hasattr(_protected_flag_db, "session_is_protected"):
             return False
         try:
-            _answer = _protected_flag_db.session_is_protected(session_id)
+            # AsyncSessionDB offloads the read; a plain stub answers directly.
+            _read = getattr(_protected_flag_db, "session_is_protected")
+            _answer = _read(session_id)
             if inspect.isawaitable(_answer):
                 _answer = await _answer
             return _answer is True
