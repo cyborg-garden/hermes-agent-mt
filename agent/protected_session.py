@@ -484,15 +484,18 @@ def skip_plugin_hook(scope: str) -> bool:
 
 
 @contextmanager
-def protected_chat(session_db: Any, session_id: Any) -> Iterator[None]:
+def protected_chat(session_db: Any = None, session_id: Any = None, *,
+                   protected: Optional[bool] = None) -> Iterator[None]:
     """Run a block (a gateway hook fired outside any turn) as a protected session when
-    the chat's session record says so: no model call and no scoped egress leaves."""
-    hit = False
-    try:
-        hit = bool(session_id) and session_db is not None and \
-            session_db.session_is_protected(session_id) is True
-    except Exception:
-        hit = True  # cannot tell: fail closed
+    the chat's session is protected (``protected``, or its record says so): no model
+    call and no scoped egress leaves."""
+    hit = bool(protected)
+    if protected is None:
+        try:
+            hit = bool(session_id) and session_db is not None and \
+                session_db.session_is_protected(session_id) is True
+        except Exception:
+            hit = True  # cannot tell: fail closed
     if not hit:
         yield
         return
@@ -511,9 +514,13 @@ def reset_for_new_session(agent: Any) -> None:
     if getattr(agent, "_protected_session", False) is True:
         # Work still queued for the old session (end-of-session memory extraction)
         # stays protected: the old id is remembered here and in the registry.
+        retired = getattr(agent, "_protected_retired_sids", None)
+        if not isinstance(retired, set):
+            retired = agent._protected_retired_sids = set()
         for sid in (getattr(agent, "_protected_persisted_sid", None), getattr(agent, "session_id", None)):
             if sid:
                 _PROTECTED_SIDS.add(sid)
+                retired.add(sid)
         agent._protected_was_protected = True
     agent._protected_session = False
     agent._protected_checked_sid = None

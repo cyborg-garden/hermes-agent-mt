@@ -490,8 +490,9 @@ class MemoryManager:
                 return True
             owner = getattr(self, "_protected_owner", None)
             agent = owner() if callable(owner) else None
-            if session_id and _ps.session_id_is_protected(
-                    session_id, getattr(agent, "_session_db", None)):
+            if session_id and (
+                    session_id in (getattr(agent, "_protected_retired_sids", None) or ())
+                    or _ps.session_id_is_protected(session_id, getattr(agent, "_session_db", None))):
                 return True
             return bool(messages) and _ps.text_has_marker(*messages, agent=agent)
         except Exception:

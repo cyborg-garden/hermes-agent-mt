@@ -9822,9 +9822,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _chat_sid = None
                 except Exception:
                     _chat_sid = None
-                _chat_db = getattr(self, "_session_db", None)
-                with _protected_chat(getattr(_chat_db, "_db", _chat_db) if _chat_sid else None,
-                                     _chat_sid):
+                with _protected_chat(protected=await self._session_is_protected(_chat_sid)):
                     _hook_results = _invoke_hook(
                         "pre_gateway_dispatch",
                         event=event,
@@ -18825,14 +18823,32 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         try:
             from agent import protected_session as _ps
             if isinstance(result, dict) and isinstance(result.get("final_response"), str):
-                _db = getattr(self, "_session_db", None)
-                _db = getattr(_db, "_db", _db)
-                if any(_ps.session_id_is_protected(_sid, _db)
-                       for _sid in {session_id, result.get("session_id")} if isinstance(_sid, str)):
-                    result["final_response"] = _ps.defang_images(result["final_response"])
+                for _sid in {session_id, result.get("session_id")}:
+                    if await self._session_is_protected(_sid):
+                        result["final_response"] = _ps.defang_images(result["final_response"])
+                        break
         except Exception:
             logger.debug("protected reply image check failed", exc_info=True)
         return result
+
+    async def _session_is_protected(self, session_id: Any) -> bool:
+        """Whether a session holds protected text (agent/protected_session.py): the
+        in-process registry, else its record, read off the loop. Fails closed."""
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        from agent import protected_session as _ps
+        if _ps.session_id_is_protected(session_id):
+            return True
+        _protected_flag_db = getattr(self, "_session_db", None)
+        if _protected_flag_db is None or not hasattr(_protected_flag_db, "session_is_protected"):
+            return False
+        try:
+            _answer = _protected_flag_db.session_is_protected(session_id)
+            if inspect.isawaitable(_answer):
+                _answer = await _answer
+            return _answer is True
+        except Exception:
+            return True
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
         """Resolve the profile name for an inbound source via configured routes.
