@@ -177,3 +177,16 @@ def test_aux_call_in_a_protected_session_without_the_marker_does_not_fall_back()
     finally:
         ac.reset_protected_session(token)
     assert sent.get("model") != FB
+
+
+def test_turn_start_log_records_message_length_not_text(caplog):
+    import logging
+
+    a = _agent()
+    secret = "kia ora, this sentence must never reach a log record"
+    with caplog.at_level(logging.DEBUG):
+        _run(a, lambda m, i: _reply("ok"), hook_results=[], message=secret)
+    turn = [r for r in caplog.records if r.getMessage().startswith("conversation turn:")]
+    assert turn, "turn-start log record missing"
+    assert all("kia ora" not in r.getMessage() for r in turn)
+    assert f"msg_len={len(secret)}" in turn[0].getMessage()
