@@ -6960,6 +6960,48 @@ def _obj_get(obj: Any, key: str, default: Any = None) -> Any:
     return value
 
 
+# True while the running turn belongs to a session marked protected (a child
+# spawned by a parent holding protected text): its requests may carry protected
+# text without the marker. Context-local, set at every turn start.
+_PROTECTED_SESSION_CONTEXT: contextvars.ContextVar = contextvars.ContextVar(
+    "hermes_aux_protected_session", default=False)
+
+
+def set_protected_session(protected: bool) -> contextvars.Token:
+    return _PROTECTED_SESSION_CONTEXT.set(bool(protected))
+
+
+def reset_protected_session(token: contextvars.Token) -> None:
+    try:
+        _PROTECTED_SESSION_CONTEXT.reset(token)
+    except (RuntimeError, ValueError):
+        pass
+
+
+def _protected_text_pin(messages: Any, main_runtime: Dict[str, Any], task: Any) -> Optional[Dict[str, Any]]:
+    """None when ``messages`` hold no protected text; otherwise the main runtime the
+    call is pinned to. Raises (sending nothing) when there is no main model to pin to."""
+    try:
+        from agent.routing_override import carries_protected_text
+
+        protected = _PROTECTED_SESSION_CONTEXT.get() is True or carries_protected_text(messages)
+    except Exception:
+        protected = True  # fail closed
+    if not protected:
+        return None
+    if not (main_runtime or {}).get("model") or not (main_runtime or {}).get("provider"):
+        raise _protected_unavailable(task)
+    logger.info("Auxiliary %s: protected text; pinned to the main model, no fallback",
+                task or "call")
+    return main_runtime
+
+
+def _protected_unavailable(task: Any) -> RuntimeError:
+    return RuntimeError(
+        f"Auxiliary {task or 'call'}: the request holds protected text and the main "
+        "model is unavailable; nothing was sent to another model.")
+
+
 def call_llm(
     task: str = None,
     *,
@@ -7019,6 +7061,13 @@ def call_llm(
     # concurrent /model switch produce a key for one runtime and a client for
     # another.
     main_runtime = _normalize_main_runtime(main_runtime)
+    # Protected text (a Papa Reo transcript) may only reach the main model: pin the
+    # call to it, whatever this task is configured to use, and never fall back.
+    _protected_pin = _protected_text_pin(messages, main_runtime, task)
+    if _protected_pin is not None:
+        provider, model = _protected_pin["provider"], _protected_pin["model"]
+        base_url, api_key = _protected_pin.get("base_url") or None, _protected_pin.get("api_key") or None
+        api_mode = _protected_pin.get("api_mode") or api_mode
     resolved_provider, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         task, provider, model, base_url, api_key)
     if api_mode:
@@ -7035,7 +7084,7 @@ def call_llm(
             async_mode=False,
             main_runtime=main_runtime,
         )
-        if client is None and resolved_provider != "auto" and not resolved_base_url:
+        if client is None and _protected_pin is None and resolved_provider != "auto" and not resolved_base_url:
             logger.warning(
                 "Vision provider %s unavailable, falling back to auto vision backends",
                 resolved_provider,
@@ -7068,6 +7117,8 @@ def call_llm(
             api_mode=resolved_api_mode,
             main_runtime=main_runtime,
         )
+        if client is None and _protected_pin is not None:
+            raise _protected_unavailable(task)
         if client is None:
             # When the user explicitly chose a non-OpenRouter provider but no
             # credentials were found, honor the task fallback_chain before
@@ -7475,6 +7526,8 @@ def call_llm(
         # connection failures are capacity problems, not request constraints.
         # See #26803: daily token quota (429 + "too many tokens per day") must
         # fall back just like a 402 credit error.
+        if _protected_pin is not None:
+            should_fallback = False  # protected text never leaves the main model
         is_auto = resolved_provider in {"auto", "", None}
         # Capacity errors bypass the explicit-provider gate: the provider
         # literally cannot serve this request regardless of user intent.
@@ -7672,8 +7725,16 @@ async def async_call_llm(
     # Keep every async phase on the same runtime identity, even if another
     # session switches models while this task is awaiting network I/O.
     main_runtime = _normalize_main_runtime(main_runtime)
+    # Protected text (a Papa Reo transcript) may only reach the main model: pin the
+    # call to it, whatever this task is configured to use, and never fall back.
+    _protected_pin = _protected_text_pin(messages, main_runtime, task)
+    if _protected_pin is not None:
+        provider, model = _protected_pin["provider"], _protected_pin["model"]
+        base_url, api_key = _protected_pin.get("base_url") or None, _protected_pin.get("api_key") or None
     resolved_provider, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         task, provider, model, base_url, api_key)
+    if _protected_pin is not None and _protected_pin.get("api_mode"):
+        resolved_api_mode = _protected_pin["api_mode"]
     effective_extra_body = _get_task_extra_body(task)
     effective_extra_body.update(extra_body or {})
 
@@ -7686,7 +7747,7 @@ async def async_call_llm(
             async_mode=True,
             main_runtime=main_runtime,
         )
-        if client is None and resolved_provider != "auto" and not resolved_base_url:
+        if client is None and _protected_pin is None and resolved_provider != "auto" and not resolved_base_url:
             logger.warning(
                 "Vision provider %s unavailable, falling back to auto vision backends",
                 resolved_provider,
@@ -7720,6 +7781,8 @@ async def async_call_llm(
             api_mode=resolved_api_mode,
             main_runtime=main_runtime,
         )
+        if client is None and _protected_pin is not None:
+            raise _protected_unavailable(task)
         if client is None:
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
@@ -8022,6 +8085,8 @@ async def async_call_llm(
         # See #26803: daily token quota must fall back like a 402 credit error.
         # Model-incompatibility 400s (route cannot run this model at all)
         # bypass the gate too — see the sync call_llm() path for rationale.
+        if _protected_pin is not None:
+            should_fallback = False  # protected text never leaves the main model
         is_auto = resolved_provider in {"auto", "", None}
         is_capacity_error = (
             _is_payment_error(first_err)

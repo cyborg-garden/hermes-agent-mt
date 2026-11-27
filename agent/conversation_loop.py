@@ -70,6 +70,12 @@ from agent.retry_utils import (
     zai_coding_overload_retry_ceiling,
 )
 from agent.trajectory import has_incomplete_scratchpad
+from agent.routing_override import routed_escalation_pending
+from agent.turn_protected_gate import (
+    PROTECTED_BLOCK_MESSAGE, PROTECTED_BLOCKED, PROTECTED_SWITCHED, protected_content_gate,
+    refund_iteration,
+)
+from agent.turn_refusal_escalation import escalate_routed_refusal
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from hermes_constants import PARTIAL_STREAM_STUB_ID
 from hermes_logging import set_session_context
@@ -711,6 +717,9 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+    # Read by the fallback guard (agent/routing_override.py): this turn's plugin
+    # context and memory recall travel with the messages, so they count too.
+    agent._turn_protected_extras = (_plugin_user_context, _ext_prefetch_cache)
 
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.
@@ -865,6 +874,26 @@ def run_conversation(
                 else:
                     existing = getattr(agent, "_pending_steer", None)
                     agent._pending_steer = (existing + "\n" + _pre_api_steer) if existing else _pre_api_steer
+
+        # ── Protected-content gate (cheap-routed turns only) ───────────
+        # Before anything below can send text anywhere (request assembly,
+        # MoA advisors, compression, the model call): protected text on a
+        # cheap route moves the turn to its primary, or ends it with no
+        # model call when the primary cannot be reached.
+        _protected = protected_content_gate(
+            agent, messages, _plugin_user_context, _ext_prefetch_cache
+        )
+        if _protected is not None:
+            api_call_count = refund_iteration(agent, api_call_count)
+            if _protected == PROTECTED_SWITCHED:
+                active_system_prompt = _sync_failover_system_message(
+                    agent, None, active_system_prompt
+                )
+                continue  # rebuild this iteration for the primary
+            final_response, failed = PROTECTED_BLOCK_MESSAGE, True
+            _turn_exit_reason = "protected_content_blocked"
+            messages.append({"role": "assistant", "content": final_response})
+            break
 
         # Prepare messages for API call
         # If we have an ephemeral system prompt, prepend it to the messages
@@ -1675,7 +1704,7 @@ def run_conversation(
                     # Eager fallback: empty/malformed responses are a common
                     # rate-limit symptom.  Switch to fallback immediately
                     # rather than retrying with extended backoff.
-                    if agent._fallback_index < len(agent._fallback_chain):
+                    if agent._has_pending_fallback():  # includes a cheap-routed turn's escalation
                         agent._buffer_status("⚠️ Empty/malformed response — switching to fallback...")
                     if agent._try_activate_fallback():
                         active_system_prompt = _sync_failover_system_message(
@@ -2071,7 +2100,7 @@ def run_conversation(
                         )
                         if (
                             _cf_terminated
-                            and agent._fallback_index < len(agent._fallback_chain)
+                            and agent._has_pending_fallback()  # includes a cheap-routed turn's escalation
                         ):
                             agent._vprint(
                                 f"{agent.log_prefix}🛡️  Content filter terminated "
@@ -3428,7 +3457,7 @@ def run_conversation(
                     is_rate_limited
                     or (_is_transport_failure and retry_count >= 2)
                 )
-                if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
+                if _should_fallback and agent._has_pending_fallback():  # includes a cheap-routed turn's escalation
                     # Don't eagerly fallback if credential pool rotation may
                     # still recover.  See _pool_may_recover_from_rate_limit
                     # for the single-credential-pool exception.  Fixes #11314.
@@ -3444,7 +3473,7 @@ def run_conversation(
                             agent._credential_pool,
                         )
                     )
-                    if not pool_may_recover:
+                    if not pool_may_recover or routed_escalation_pending(agent):  # a cheap turn never waits out a 429
                         if _is_upstream:
                             _upstream_name = (classified.error_context or {}).get(
                                 "upstream_provider", "aggregator"
@@ -3489,7 +3518,7 @@ def run_conversation(
                 if (
                     classified.is_auth
                     and not _retry.auth_failover_attempted
-                    and agent._fallback_index < len(agent._fallback_chain)
+                    and agent._has_pending_fallback()  # includes a cheap-routed turn's escalation
                 ):
                     _retry.auth_failover_attempted = True
                     agent._buffer_status(
@@ -4819,6 +4848,13 @@ def run_conversation(
                         f"executing {_n_valid} valid call(s)"
                     )
                 elif invalid_tool_calls:
+                    # A cheap-routed turn re-sends the same request on the
+                    # primary instead of coaching the cheap model.
+                    if routed_escalation_pending(agent) and agent._try_activate_fallback():
+                        active_system_prompt = _sync_failover_system_message(
+                            agent, api_messages, active_system_prompt)
+                        agent._invalid_tool_retries = 0
+                        continue
                     # Track retries for invalid tool calls
                     agent._invalid_tool_retries += 1
 
@@ -4893,6 +4929,13 @@ def run_conversation(
                         invalid_json_args.append((tc.function.name, str(e)))
                 
                 if invalid_json_args:
+                    # A cheap-routed turn re-sends the same request on the
+                    # primary instead of retrying (or giving up on) the cheap model.
+                    if routed_escalation_pending(agent) and agent._try_activate_fallback():
+                        active_system_prompt = _sync_failover_system_message(
+                            agent, api_messages, active_system_prompt)
+                        agent._invalid_json_retries = 0
+                        continue
                     # Check if the invalid JSON is due to truncation rather
                     # than a model formatting mistake.  Routers sometimes
                     # rewrite finish_reason from "length" to "tool_calls",
@@ -5204,6 +5247,20 @@ def run_conversation(
                         messages, tools=agent.tools or None
                     )
 
+                # A tool result may have just brought protected text in; the
+                # compressor would send it to the cheap model on a cheap turn.
+                _protected = protected_content_gate(
+                    agent, messages, _plugin_user_context, _ext_prefetch_cache
+                )
+                if _protected == PROTECTED_SWITCHED:
+                    active_system_prompt = _sync_failover_system_message(
+                        agent, None, active_system_prompt
+                    )
+                elif _protected == PROTECTED_BLOCKED:
+                    final_response, failed = PROTECTED_BLOCK_MESSAGE, True
+                    _turn_exit_reason = "protected_content_blocked"
+                    messages.append({"role": "assistant", "content": final_response})
+                    break
                 if agent.compression_enabled and _compressor.should_compress(_real_tokens):
                     agent._safe_print("  ⟳ compacting context…")
                     messages, active_system_prompt = agent._compress_context(
@@ -5405,6 +5462,20 @@ def run_conversation(
                         _has_structured
                         and agent._thinking_prefill_retries >= 2
                     )
+                    # A cheap-routed turn does not burn retries on the cheap
+                    # model: an empty reply escalates straight to the primary
+                    # (or, for a cheap child, to its fallback chain, which
+                    # starts with the parent's primary).
+                    if (
+                        _truly_empty
+                        and (not _has_structured or _prefill_exhausted)
+                        and routed_escalation_pending(agent)
+                        and agent._try_activate_fallback()
+                    ):
+                        active_system_prompt = _sync_failover_system_message(
+                            agent, api_messages, active_system_prompt)
+                        agent._empty_content_retries = 0
+                        continue
                     if _truly_empty and (not _has_structured or _prefill_exhausted) and agent._empty_content_retries < 3:
                         agent._empty_content_retries += 1
                         logger.warning(
@@ -5506,6 +5577,14 @@ def run_conversation(
                 # stays visible even when the fallback succeeds.
                 agent._emit_pending_fallback_notice()
                 agent._clear_status_buffer()
+
+                # A short refusal from a cheap-routed turn is retried on the
+                # primary; the refusal row is never appended.
+                if not truncated_response_parts and escalate_routed_refusal(agent, final_response):
+                    active_system_prompt = _sync_failover_system_message(
+                        agent, api_messages, active_system_prompt)
+                    final_response = None
+                    continue
 
                 from agent.agent_runtime_helpers import (
                     intent_ack_continuation_mode,

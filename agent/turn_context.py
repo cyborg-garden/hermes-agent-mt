@@ -159,9 +159,22 @@ def build_turn_context(
 
     # Restore the primary runtime if the previous turn activated fallback.
     agent._restore_primary_runtime()
+    # A fallback kept by a rate-limit cooldown must not carry protected text (in the
+    # history or this message): back to the primary now, whatever the cooldown.
+    try:
+        from agent.routing_override import restore_primary_if_protected
+        restore_primary_if_protected(
+            agent, list(conversation_history or []) + [{"role": "user", "content": user_message}])
+    except Exception:
+        logger.debug("protected-content primary restore failed", exc_info=True)
 
     # Tell auxiliary_client what the live main provider/model are for this turn
     # after primary restoration has settled the runtime.
+    try:
+        from agent.auxiliary_client import set_protected_session
+        set_protected_session(getattr(agent, "_protected_session", False) is True)
+    except Exception:
+        pass
     try:
         from agent.auxiliary_client import set_runtime_main
         set_runtime_main(
@@ -264,15 +277,13 @@ def build_turn_context(
     # NOTE: _turns_since_memory and _iters_since_skill are NOT reset here.
     agent.iteration_budget = IterationBudget(agent.max_iterations)
 
-    # Log conversation turn start for debugging/observability.
-    _preview_text = summarize_user_message_for_log(user_message)
-    _msg_preview = (_preview_text[:80] + "...") if len(_preview_text) > 80 else _preview_text
-    _msg_preview = _msg_preview.replace("\n", " ")
+    # Log conversation turn start for debugging/observability. The length only:
+    # message text (possibly protected transcript text) never goes to a log.
     logger.info(
-        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg=%r",
+        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg_len=%d",
         agent.session_id or "none", agent.model, agent.provider or "unknown",
         agent.platform or "unknown", len(conversation_history or []),
-        _msg_preview,
+        len(summarize_user_message_for_log(user_message)),
     )
 
     # Initialize conversation (copy to avoid mutating the caller's list).

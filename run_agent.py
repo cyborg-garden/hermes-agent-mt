@@ -5091,8 +5091,9 @@ class AIAgent:
         return interruptible_streaming_api_call(self, api_kwargs, on_first_delta=on_first_delta)
 
     def _try_activate_fallback(self, reason: "FailoverReason | None" = None) -> bool:
-        """Forwarder — see ``agent.chat_completion_helpers.try_activate_fallback``."""
-        from agent.chat_completion_helpers import try_activate_fallback
+        """Forwarder — see ``agent.routing_override.try_activate_fallback``: a cheap-routed turn
+        escalates to its primary first, then ``agent.chat_completion_helpers`` walks the chain."""
+        from agent.routing_override import try_activate_fallback
         return try_activate_fallback(self, reason)
 
     def _has_pending_fallback(self) -> bool:
@@ -5103,6 +5104,10 @@ class AIAgent:
         fallback chain configured).  Mirrors the early-return guard in
         ``try_activate_fallback`` (#35314, #17446).
         """
+        if getattr(self, "_routing_escalate_pending", False) is True and isinstance(
+            getattr(self, "_routing_escalation_target", None), dict
+        ):
+            return True  # a cheap-routed turn escalates to its primary first
         chain = getattr(self, "_fallback_chain", None) or []
         index = getattr(self, "_fallback_index", 0)
         return index < len(chain)
@@ -5986,6 +5991,13 @@ class AIAgent:
         auto-compress abort.  Auto-compress callers use the default
         ``force=False``.
         """
+        # Compression sends the transcript to the compressor's model, which on a
+        # cheap route is the cheap model: protected text moves the agent to its
+        # primary first, or compression is skipped (agent/routing_override.py).
+        from agent.routing_override import PROTECTED_BLOCKED, escalate_if_protected
+        if escalate_if_protected(self, messages, getattr(self, "_cached_system_prompt", "")) == PROTECTED_BLOCKED:
+            logger.warning("Skipping compression: protected text on a cheap route, primary unreachable")
+            return messages, getattr(self, "_cached_system_prompt", None) or system_message
         from agent.conversation_compression import compress_context
         result = compress_context(
             self, messages, system_message,

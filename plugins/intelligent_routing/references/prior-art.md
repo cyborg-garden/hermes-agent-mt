@@ -1,46 +1,27 @@
-# Prior art — model-task-router (PR #43534)
+# Prior art: model-task-router (PR #43534)
 
-This plugin is a light adaptation of prior community work; the contribution here
-is **the plugin + the interface extension**, not the classifier. This doc is a
-short citation, not a reproduction of the original data.
+This plugin adapts earlier community work.
+What is new here is the plugin form and the interface change. The classifier is not.
+This page is a short citation. The original data stays in the original PR.
 
 ## Source
 
-- **PR #43534** — *"feat(skills): add model-task-router — automatic task-to-model
-  routing backed by DeepSWE data"* (CLOSED on `NousResearch/hermes-agent`), by
-  **Sugumaran Balasubramaniyan** (https://github.com/Sugumaran-Balasubramaniyan),
-  MIT-licensed. It shipped as a *skill* (two markdown files) and routed by task
-  TYPE (code-gen / hard-architecture / orchestration / research / mechanical).
-- Maintainer **teknium1** closed it with a steer, not a rejection on merits:
-  *"If you do want it, please create a plugin. Happy to support adding to the
-  plugin interface to make this work as one."* — which is exactly what this
-  plugin + `agent/routing_override.py` implement.
+- **PR #43534**, *"feat(skills): add model-task-router — automatic task-to-model routing backed by DeepSWE data"*, on `NousResearch/hermes-agent`. Closed. By [Sugumaran Balasubramaniyan](https://github.com/Sugumaran-Balasubramaniyan), MIT-licensed.
+- It shipped as a skill (two markdown files) and routed by task type: code generation, hard architecture, orchestration, research, mechanical.
+- The maintainer, teknium1, closed it with this note: *"If you do want it, please create a plugin. Happy to support adding to the plugin interface to make this work as one."* This plugin and `agent/routing_override.py` follow that suggestion.
 
-## What we took (and what we did NOT)
+## What we kept and changed
 
-**Adopted:** the five task categories and the principle *route by task type, not
-brand loyalty; treat published benchmarks as directional*.
+**Kept:** the five task categories, and the principle of routing by task type with benchmarks treated as rough guides.
 
-**Adapted:** the tier mapping goes to our fleet's tiers (premium = Claude,
-cheap = OpenRouter `deepseek/deepseek-v3.2`, local floor = ollama), NOT #43534's
-non-fleet GPT-5.4/5.5 defaults.
+**Changed:** the tiers. Premium is Claude, cheap is OpenRouter `deepseek/deepseek-v4-flash-0731` (`deepseek-v3.2` was retired by OpenRouter on 2026-09-28), and the local floor is ollama. The PR's defaults were GPT-5.4 and GPT-5.5.
 
-## The one data point that is load-bearing for our v3.2 choice
+## The data behind the cheap-tier choice
 
-From #43534's DeepSWE reference (and the `datacurve-ai/deep-swe#21` correction
-thread — note the original author **retracted** the solve-rate analysis; only the
-cost correction remained valid):
+From the DeepSWE reference in #43534, and the correction thread in `datacurve-ai/deep-swe#21`. The original author withdrew the solve-rate analysis there; only the cost correction still stands.
 
-- DeepSeek V4-Pro's DeepSWE **coding** score was directionally low (~8%, heavily
-  caveated: no effort tuning, OpenRouter guardrail 404s, ~5–8% community range).
-  → So we do **not** route hard code-gen to DeepSeek at all (code-gen → premium).
-- DeepSeek V4-Pro is **competitive at CLI/tool orchestration** (Terminal-Bench
-  67.9% at $0.87/1M output). → So we route DeepSeek only where it's both
-  competitive AND cheap: mechanical / orchestration turns.
+- DeepSeek V4-Pro scored low on DeepSWE **coding**, about 8%. That number comes with caveats: no effort tuning, OpenRouter guardrail 404s, and a community range of about 5–8%. So hard code generation never goes to DeepSeek.
+- DeepSeek V4-Pro is **competitive at CLI and tool orchestration**: 67.9% on Terminal-Bench at $0.87 per million output tokens. So DeepSeek gets only the turns where it is both competitive and cheap: mechanical and orchestration work.
 
-That asymmetry — cheap-and-fine for orchestration, risky for code-gen — is the
-whole reason the cheap tier is `deepseek-v3.2` and the mapping keeps code-gen on
-Claude. Treat these numbers as directional; recalibrate from real fleet data
-(Phase 3 measurement) before trusting them further.
-
-Full data lives in the original PR; we deliberately do not re-host the table here.
+That gap is why the cheap tier gets only cheap-safe work and code generation stays on the primary.
+Treat the numbers as rough. Recalibrate from your own measurements before relying on them.

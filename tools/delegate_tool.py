@@ -1099,6 +1099,11 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    # Per-task route from a delegation backend (agent/delegation_provider.py):
+    # a fallback chain replacing the parent's, and a reasoning effort replacing
+    # delegation.reasoning_effort. None keeps today's behaviour.
+    override_fallback_chain: Optional[List[Dict[str, Any]]] = None,
+    override_reasoning_effort: Any = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1315,7 +1320,10 @@ def _build_child_agent(
         # Keep the raw value — ``str(x or "")`` would coerce a YAML boolean
         # False (``reasoning_effort: false``) to "" and inherit the parent
         # instead of disabling thinking for children.
-        delegation_effort = delegation_cfg.get("reasoning_effort")
+        delegation_effort = (
+            override_reasoning_effort if override_reasoning_effort is not None
+            else delegation_cfg.get("reasoning_effort")
+        )
         if delegation_effort or delegation_effort is False:
             from hermes_constants import parse_reasoning_effort
 
@@ -1335,6 +1343,8 @@ def _build_child_agent(
     # agent does.  _fallback_chain is a list accepted by AIAgent's
     # fallback_model parameter (which handles both list and dict forms).
     parent_fallback = getattr(parent_agent, "_fallback_chain", None) or None
+    if override_fallback_chain is not None:
+        parent_fallback = list(override_fallback_chain) or None
 
     # Inherit the parent's OpenRouter provider-preference filters by default
     # (so subagents routed to the same provider honour the same routing
@@ -2718,11 +2728,20 @@ def delegate_task(
     # Wrapped in try/finally so the global is always restored even if a
     # child build raises (otherwise _last_resolved_tool_names stays corrupted).
     children = []
+    # A parent holding protected text may hand a child the body without its marker:
+    # every child counts as protected, so none of its calls leave the primary.
+    from agent.routing_override import session_holds_protected_text
+    _parent_protected = session_holds_protected_text(parent_agent)
+    try:
+        task_routes = _task_routes(task_list, cfg, creds, parent_agent)
+    except ValueError as exc:
+        return tool_error(str(exc))
     try:
         for i, t in enumerate(task_list):
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
+            t_creds, t_route = task_routes[i]
             child = _build_child_agent(
                 task_index=i,
                 goal=t["goal"],
@@ -2730,20 +2749,24 @@ def delegate_task(
                 # Subagents always inherit the parent's toolsets; the model
                 # cannot choose or narrow them (no model-facing toolsets arg).
                 toolsets=None,
-                model=creds["model"],
+                model=t_creds["model"],
                 max_iterations=effective_max_iter,
                 task_count=n_tasks,
                 parent_agent=parent_agent,
-                override_provider=creds["provider"],
-                override_base_url=creds["base_url"],
-                override_api_key=creds["api_key"],
-                override_api_mode=creds["api_mode"],
-                override_request_overrides=creds.get("request_overrides"),
-                override_max_tokens=creds.get("max_output_tokens"),
-                override_acp_command=creds.get("command"),
-                override_acp_args=creds.get("args"),
+                override_provider=t_creds["provider"],
+                override_base_url=t_creds["base_url"],
+                override_api_key=t_creds["api_key"],
+                override_api_mode=t_creds["api_mode"],
+                override_request_overrides=t_creds.get("request_overrides"),
+                override_max_tokens=t_creds.get("max_output_tokens"),
+                override_acp_command=t_creds.get("command"),
+                override_acp_args=t_creds.get("args"),
                 role=effective_role,
+                **_route_build_kwargs(t_route),
             )
+            _arm_routed_child(child, t_route, t_creds)
+            if _parent_protected:
+                child._protected_session = True
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
             children.append((i, t, child))
@@ -3163,6 +3186,124 @@ def delegate_task(
 
     # ----- Synchronous path -----
     return json.dumps(_execute_and_aggregate(), ensure_ascii=False)
+
+
+
+# ── Per-task routes from a delegation backend ────────────────────────────────
+# ``delegation.backend`` names a registered DelegationProvider
+# (agent/delegation_provider.py). Unset or ``default``: every child takes the
+# ``delegation.*`` route exactly as before. Any failure (backend missing, route
+# refused or unresolvable) gives that task the default route, never a cheaper one.
+
+_ROUTE_CRED_KEYS = ("model", "provider", "base_url", "api_key", "api_mode")
+
+
+def _primary_creds_for_routed_parent(creds: dict, parent_agent) -> dict:
+    """The default route for a parent that is itself on a cheap route.
+
+    A child with no pinned model inherits ``parent_agent.model``; on a cheap-routed turn
+    that is the cheap model, with no escalation or protected check on the child. Such a
+    child takes the parent's primary instead. Raises ValueError when that primary cannot
+    be named, so the spawn is refused rather than run cheap."""
+    if creds.get("model") or getattr(parent_agent, "_routing_protected_watch", False) is not True:
+        return creds
+    from agent.routing_override import _primary_model_of
+    primary = _primary_model_of(parent_agent)
+    if primary and str(getattr(parent_agent, "model", "") or "") == primary:
+        return creds  # the parent already runs on its primary
+    target = getattr(parent_agent, "_routing_escalation_target", None)
+    if isinstance(target, dict) and target.get("model"):
+        if all(target.get(k) for k in ("provider", "base_url", "api_key")):
+            return {**creds, **{k: target.get(k) or None for k in _ROUTE_CRED_KEYS}}
+        # An empty endpoint or key would make the child inherit the parent's (cheap) one.
+        if target.get("provider"):
+            return _resolve_delegation_credentials(
+                {k: target.get(k) for k in ("model", "provider")}, parent_agent)
+    chain = getattr(parent_agent, "_fallback_chain", None) or []
+    first = chain[0] if chain and isinstance(chain[0], dict) else {}
+    if primary and first.get("model") == primary and (first.get("provider") or first.get("base_url")):
+        return _resolve_delegation_credentials(
+            {k: first.get(k) for k in ("model", "provider", "base_url") if first.get(k)}, parent_agent)
+    raise ValueError("This turn runs on a cheap model and its primary model is not available, "
+                     "so subagents cannot be started. Do the work yourself in this turn.")
+
+
+def _task_routes(task_list: list, cfg: dict, creds: dict, parent_agent) -> list:
+    """One ``(creds, route)`` pair per task; ``route`` is None on the default route."""
+    creds = _primary_creds_for_routed_parent(creds, parent_agent)
+    default = [(creds, None)] * len(task_list)
+    backend = str((cfg or {}).get("backend") or "").strip()
+    from agent.delegation_provider import DEFAULT_BACKENDS, clean_route, get_provider
+    if backend in DEFAULT_BACKENDS:
+        return default
+    try:
+        from hermes_cli.plugins import _ensure_plugins_discovered
+        _ensure_plugins_discovered()
+    except Exception:
+        logger.debug("delegation: plugin discovery failed", exc_info=True)
+    provider = get_provider(backend)
+    if provider is None:
+        logger.warning("delegation.backend %r is not registered; using the default route", backend)
+        return default
+    # A parent holding protected text can hand its body (without the marker) to a
+    # child, so the backend cannot judge from the task alone: every child stays on
+    # the default route.
+    from agent.routing_override import session_holds_protected_text
+    if session_holds_protected_text(parent_agent):
+        logger.info("delegation backend %s: parent session holds protected text; "
+                    "default route for every task", backend)
+        return default
+    out = []
+    for i, t in enumerate(task_list):
+        try:
+            route = clean_route(provider.route_task(
+                {"goal": t.get("goal"), "context": t.get("context"), "index": i}, dict(cfg)))
+        except Exception as exc:
+            logger.warning("delegation backend %s could not route task %d (%s); default route",
+                           backend, i, type(exc).__name__)
+            out.append((creds, None))
+            continue
+        if not route.get("model"):
+            out.append((creds, None))
+            continue
+        try:
+            route_cfg = {k: route.get(k) for k in _ROUTE_CRED_KEYS if route.get(k)}
+            out.append((_resolve_delegation_credentials(route_cfg, parent_agent), route))
+        except Exception as exc:
+            logger.warning("delegation backend %s: route for task %d did not resolve (%s); "
+                           "default route", backend, i, exc)
+            out.append((creds, None))
+    return out
+
+
+def _route_build_kwargs(route: Optional[dict]) -> dict:
+    if not route:
+        return {}
+    kwargs = {}
+    chain = route.get("fallback_providers")
+    if isinstance(chain, list):
+        kwargs["override_fallback_chain"] = [dict(e) for e in chain if isinstance(e, dict)]
+    if route.get("reasoning_effort") is not None:
+        kwargs["override_reasoning_effort"] = route["reasoning_effort"]
+    return kwargs
+
+
+def _arm_routed_child(child, route: Optional[dict], creds: dict) -> None:
+    """A cheap route (``escalate``/``protected_watch``) arms escalation and the protected
+    check on the child: an empty or refused reply, or protected text, moves it to its
+    fallback chain, whose first entry is the primary (agent/routing_override.py)."""
+    if not route:
+        return
+    if route.get("escalate") is True:
+        child._routing_escalate_pending = True
+    if route.get("escalate") is True or route.get("protected_watch") is True:
+        from agent.routing_override import _markers
+        chain = route.get("fallback_providers") or []
+        first = chain[0] if chain and isinstance(chain[0], dict) else {}
+        child._routing_protected_watch = True
+        child._routing_protected_markers = _markers(route.get("protected_markers"))
+        child._routing_cheap_model = creds.get("model") or route.get("model")
+        child._routing_primary_model = first.get("model")
 
 
 def _resolve_child_credential_pool(

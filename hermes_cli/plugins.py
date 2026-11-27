@@ -765,6 +765,30 @@ class PluginContext:
             self.manifest.name, provider.name,
         )
 
+    # -- delegation provider registration ------------------------------------
+
+    def register_delegation_provider(self, provider) -> None:
+        """Register a delegation backend.
+
+        ``provider`` must be an instance of
+        :class:`agent.delegation_provider.DelegationProvider`. ``provider.name``
+        is what ``delegation.backend`` in ``config.yaml`` matches against.
+        """
+        from agent.delegation_provider import DelegationProvider, register_provider
+
+        if not isinstance(provider, DelegationProvider):
+            logger.warning(
+                "Plugin '%s' tried to register a delegation provider that does "
+                "not inherit from DelegationProvider. Ignoring.",
+                self.manifest.name,
+            )
+            return
+        register_provider(provider)
+        logger.info(
+            "Plugin '%s' registered delegation provider: %s",
+            self.manifest.name, provider.name,
+        )
+
     # -- browser provider registration ---------------------------------------
 
     def register_browser_provider(self, provider) -> None:
