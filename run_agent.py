@@ -1241,7 +1241,7 @@ class AIAgent(
 
     _interruptible_api_call = _forward("agent.chat_completion_helpers", "interruptible_api_call")
     _interruptible_streaming_api_call = _forward("agent.chat_completion_helpers", "interruptible_streaming_api_call")
-    _try_activate_fallback = _forward("agent.chat_completion_helpers", "try_activate_fallback")
+    _try_activate_fallback = _forward("agent.routing_override", "try_activate_fallback")
 
     def _has_pending_fallback(self) -> bool:
         """Whether a fallback provider remains (mirrors ``try_activate_fallback``'s guard) — gates the
@@ -1249,6 +1249,10 @@ class AIAgent(
 
         See #17446.
         """
+        if getattr(self, "_routing_escalate_pending", False) is True and isinstance(
+            getattr(self, "_routing_escalation_target", None), dict
+        ):
+            return True  # a cheap-routed turn escalates to its primary first
         return getattr(self, "_fallback_index", 0) < len(getattr(self, "_fallback_chain", None) or [])
 
     _restore_primary_runtime = _forward("agent.agent_runtime_helpers", "restore_primary_runtime")

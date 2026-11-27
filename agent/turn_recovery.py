@@ -1919,7 +1919,7 @@ def route_classified_error(
         (is_rate_limited and _wrapped_output_cap_budget is None)
         or (_is_transport_failure and retry_count >= 2)
     ) and not (getattr(classified, "error_context", None) or {}).get("usage_window")  # never switch models on a plan limit
-    if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
+    if _should_fallback and agent._has_pending_fallback():  # includes a cheap-routed turn's escalation
         # No eager fallback while credential pool rotation may recover. Exception: an
         # upstream-aggregator 429 — the pool can't help, always fall back.
         # Fixes #11314.
@@ -1927,7 +1927,8 @@ def route_classified_error(
         pool_may_recover = (
             False if _is_upstream else _ra()._pool_may_recover_from_rate_limit(agent._credential_pool)
         )
-        if not pool_may_recover:
+        from agent.routing_override import routed_escalation_pending
+        if not pool_may_recover or routed_escalation_pending(agent):  # a cheap turn never waits out a 429
             agent._buffer_diagnostic_status(_eager_fallback_status(classified, _is_upstream, _is_transport_failure))
             reset_at = error_context.get("reset_at") if isinstance(error_context, dict) else None
             if agent._try_activate_fallback(reason=classified.reason, reset_at=reset_at):
@@ -1940,7 +1941,7 @@ def route_classified_error(
         classified.is_auth
         and classified.should_fallback
         and not _retry.auth_failover_attempted
-        and agent._fallback_index < len(agent._fallback_chain)
+        and agent._has_pending_fallback()  # includes a cheap-routed turn's escalation
     ):
         _retry.auth_failover_attempted = True
         agent._buffer_diagnostic_status(

@@ -59,11 +59,11 @@ def test_mode_llm_router_is_read():
         assert cfgmod.routing_mode() == "llm-router"
 
 
-def test_cheap_tier_default_is_deepseek_v32_openrouter():
-    """Default cheap target is deepseek/deepseek-v3.2 via openrouter (NOT v4)."""
+def test_cheap_tier_default_is_pinned_v4_flash_openrouter():
+    """Default cheap target is the pinned deepseek-v4-flash-0731 snapshot via openrouter."""
     with patch.object(cfgmod, "_load_config", return_value={"routing": {}}):
         model, provider = cfgmod.cheap_tier_target()
-    assert model == "deepseek/deepseek-v3.2"
+    assert model == "deepseek/deepseek-v4-flash-0731"
     assert provider == "openrouter"
 
 

@@ -16,6 +16,7 @@ from agent.reasoning_promotion import answer_in_reasoning_capability
 from agent.repetition_guard import STOP_PATH_MIN_CHARS, is_runaway_repetition
 from agent.stream_delivery import publish_held_final_row
 from agent.turn_failure_copy import stamp_failure
+from agent.turn_refusal_escalation import escalate_routed_refusal
 from agent.turn_empty_response import (
     housekeeping_reply_line, recover_empty_response, take_housekeeping_reply_line,
 )
@@ -199,7 +200,7 @@ def finish_text_response(
     agent._emit_pending_fallback_notice()
     agent._clear_status_buffer()
 
-    if marker_verdict := _recover_marker_reply(
+    if marker_verdict := escalate_routed_refusal(agent, final_response, _verdict, api_messages) or _recover_marker_reply(
             agent, final_response, _verdict, truncated_parts=truncated_response_parts, promoted=_promoted):
         return marker_verdict
 

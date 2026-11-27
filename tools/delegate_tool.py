@@ -499,6 +499,20 @@ def _build_children(
                 _close_child(built, "Failed to close child after a refused sibling")
             return [], str(exc)
         pin_child_service_tier(child, route.creds)
+        # A cheap route (``escalate: True``) arms escalation on the child: an empty or
+        # refused reply hops straight to its fallback chain (agent/routing_override.py).
+        _rc = route.routing_cfg if isinstance(route.routing_cfg, dict) else {}
+        if _rc.get("escalate") is True:
+            child._routing_escalate_pending = True
+        # Every cheap route watches for protected content, escalation on or off: such text
+        # moves the child to its primary (first fallback entry) or ends it.
+        if _rc.get("escalate") is True or _rc.get("protected_watch") is True:
+            from agent.routing_override import _markers
+            _chain = _rc.get("fallback_providers") or []
+            child._routing_protected_watch = True
+            child._routing_protected_markers = _markers(_rc.get("protected_markers"))
+            child._routing_cheap_model = route.creds.get("model")
+            child._routing_primary_model = (_chain[0] or {}).get("model") if _chain and isinstance(_chain[0], dict) else None
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema

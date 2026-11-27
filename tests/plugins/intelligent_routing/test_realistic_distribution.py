@@ -83,7 +83,7 @@ def test_premium_messages_never_cheap_routed(message):
 def test_confident_mechanical_messages_cheap_routed(message):
     route = _route_of(message)
     assert route is not None, f"expected cheap route for {message!r}"
-    assert route["model"] == "deepseek/deepseek-v3.2"
+    assert route["model"] == "deepseek/deepseek-v4-flash-0731"
 
 
 def test_background_cron_job_cheap_routed():

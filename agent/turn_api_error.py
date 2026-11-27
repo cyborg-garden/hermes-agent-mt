@@ -345,7 +345,11 @@ def settle_unrecovered_error(
         # the cascade. An UNCLASSIFIED local ValueError/TypeError keeps its historical fallback;
         # a recognised verdict that opts out wins even when the exception is a ValueError subclass.
         _unclassified_local = is_local_validation_error and classified.reason == FailoverReason.unknown
-        if classified.should_fallback or _unclassified_local or shrink_spent or reasoning_spent:
+        # A cheap-routed turn escalates even on a "deterministic" failure: the primary
+        # may well not repeat the cheap model's malformed tool-call JSON.
+        from agent.routing_override import routed_escalation_pending
+        if (classified.should_fallback or _unclassified_local or shrink_spent or reasoning_spent
+                or routed_escalation_pending(agent)):
             # Announce the fallback only when a chain exists, else "trying fallback..." lies
             # before a silent abort.
             if agent._has_pending_fallback():

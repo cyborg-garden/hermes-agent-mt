@@ -268,6 +268,16 @@ def recover_empty_response(
     # prefill exhaustion.
     _truly_empty = not agent._strip_think_blocks(final_response).strip()
     _empty_candidate = _truly_empty and (not _has_structured or agent._thinking_prefill_retries >= 2)
+    # A cheap-routed turn does not burn retries on the cheap model: an empty reply
+    # escalates straight to the primary (or, for a cheap child, to its fallback
+    # chain, which starts with the parent's primary). agent/routing_override.py.
+    from agent.routing_override import routed_escalation_pending
+    if _empty_candidate and routed_escalation_pending(agent) and agent._try_activate_fallback():
+        active_system_prompt = _sync_failover_system_message(agent, api_messages, active_system_prompt)
+        agent._empty_content_retries = 0
+        _preflight_compression_blocked = False
+        api_call_count = _refund_api_call(agent, api_call_count)
+        return _verdict("continue")
     action, interrupt_result, _deterministic_empty = _retry_empty(
         agent, response, finish_reason, _empty_candidate, messages=messages,
         conversation_history=conversation_history, api_call_count=api_call_count,

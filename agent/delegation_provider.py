@@ -27,6 +27,11 @@ Route vocabulary (:meth:`DelegationProvider.route_task` returns a dict with any 
   scope helpers a multiplexed gateway uses for a routed turn. A profile route ignores the other
   route keys; the profile's own config decides them.
 * ``label`` - short text shown with the child's progress and result (e.g. the option title).
+* ``escalate`` - ``True`` marks a cheap route: if the child's reply is empty or a refusal, core
+  moves it to the next ``fallback_providers`` entry at once instead of retrying the cheap model
+  (put the stronger model first in that list). API errors already walk the chain. Before each
+  call, a protected marker in new messages (default: the Papa Reo transcript footer, plus any
+  ``protected_markers`` strings on the route) moves it the same way.
 
 A backend's own settings live under ``delegation.backends.<backend name>`` (:meth:`DelegationProvider.settings`),
 never beside the core ``delegation`` keys.
@@ -50,7 +55,8 @@ RESERVED_TASK_PARAMETERS = frozenset({
 #: Keys a route may carry; anything else in a provider's answer is ignored.
 ROUTE_KEYS = frozenset({
     "model", "provider", "base_url", "api_key", "api_mode", "request_overrides",
-    "reasoning_effort", "service_tier", "fallback_providers", "profile", "label",
+    "reasoning_effort", "service_tier", "fallback_providers", "profile", "label", "escalate",
+    "protected_markers", "protected_watch",
 })
 
 

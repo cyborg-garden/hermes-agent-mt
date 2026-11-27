@@ -11,6 +11,7 @@ from contextlib import suppress
 from typing import Any
 
 from agent.message_metadata import append_message
+from agent.turn_protected_gate import protected_content_gate
 from agent.turn_context import _compression_warrants_another_preflight_pass
 from agent.turn_preflight import PreflightGateVerdict, run_preflight_compression
 
@@ -24,7 +25,7 @@ def run_preflight_gate(
     compression_attempts: Any, max_compression_attempts: Any, effective_task_id: Any,
     final_response: Any, failed: Any, _turn_exit_reason: Any, _compression_timeout_exhausted: Any,
     _preflight_compression_blocked: Any, _provider_overflow_recovery_pending: Any,
-    _last_preflight_pressure: Any,
+    _last_preflight_pressure: Any, _plugin_user_context: Any = "",
 ) -> PreflightGateVerdict:
     """Run the pre-API guard chain in the original order. ``_last_preflight_pressure`` is
     consumed here (set to None) and re-armed only by a compression pass, so a blocked
@@ -42,6 +43,8 @@ def run_preflight_gate(
         _provider_overflow_recovery_pending=_provider_overflow_recovery_pending,
         _last_preflight_pressure=None,
     )
+    if (_gated := protected_content_gate(agent, v, messages, _plugin_user_context)) is not None:
+        return _gated
 
     _runtime_context_error = _ollama_context_limit_error(agent, request_pressure_tokens)
     if _runtime_context_error:
