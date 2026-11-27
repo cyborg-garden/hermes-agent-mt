@@ -7480,6 +7480,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._gateway_loop = asyncio.get_running_loop()
         except RuntimeError:
             self._gateway_loop = None
+        # Work a tool thread hands to this loop is delivery to the person, not the
+        # tool's own egress (agent/protected_session.py).
+        try:
+            from agent.protected_session import register_delivery_loop
+            register_delivery_loop(self._gateway_loop)
+        except Exception:
+            logger.debug("could not register the delivery loop", exc_info=True)
         logger.info("Session storage: %s", self.config.sessions_dir)
 
         # Sanity-check that systemd's TimeoutStopSec covers our drain

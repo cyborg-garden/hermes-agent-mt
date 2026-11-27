@@ -407,3 +407,22 @@ def test_gemini_native_model_in_the_url(protected):
             ps.check_request("https://gen.example/v1beta/models/gemini-flash-y:generateContent", b"{}")
     finally:
         ps.reset(token)
+
+
+def test_work_handed_to_the_delivery_loop_leaves_the_tool_scope(protected):
+    """A clarify question or progress line a tool thread posts to the gateway loop is
+    delivery to the person: it runs without the tool's scope."""
+    loop = asyncio.new_event_loop()
+    ps.register_delivery_loop(loop)
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    try:
+        async def probe():
+            return ps._SCOPE.get(), ps.is_protected()
+        with ps.egress_scope("tool:clarify"):
+            scope, prot = asyncio.run_coroutine_threadsafe(probe(), loop).result(5)
+        assert scope is None and prot is True
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(5)
+        loop.close()

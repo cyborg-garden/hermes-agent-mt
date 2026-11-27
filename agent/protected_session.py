@@ -708,6 +708,39 @@ def _install_thread_propagation() -> None:
     threading.Thread.start = start
 
 
+# Event loops that deliver to the person (the gateway's loop). Work handed to one
+# from a tool thread (a progress line, a clarify question, an approval prompt) is
+# delivery, not the tool's own egress, so it leaves the tool's scope behind.
+_DELIVERY_LOOPS: "weakref.WeakSet" = None  # type: ignore[assignment]
+
+
+def register_delivery_loop(loop: Any) -> None:
+    """Mark ``loop`` as the person's delivery loop (called by the gateway)."""
+    global _DELIVERY_LOOPS
+    import weakref
+
+    if _DELIVERY_LOOPS is None:
+        _DELIVERY_LOOPS = weakref.WeakSet()
+    if loop is not None:
+        _DELIVERY_LOOPS.add(loop)
+
+
+def _install_delivery_hop() -> None:
+    import asyncio.base_events as base_events
+
+    orig = base_events.BaseEventLoop.call_soon_threadsafe
+
+    def call_soon_threadsafe(self, callback, *args, context=None):
+        if (context is None and _SCOPE.get() is not None and _DELIVERY_LOOPS is not None
+                and self in _DELIVERY_LOOPS):
+            context = contextvars.copy_context()
+            context.run(_SCOPE.set, None)
+        return orig(self, callback, *args, context=context)
+
+    call_soon_threadsafe.__wrapped__ = orig  # type: ignore[attr-defined]
+    base_events.BaseEventLoop.call_soon_threadsafe = call_soon_threadsafe
+
+
 def install() -> None:
     """Install every hook once per process. Idempotent; never raises."""
     global _INSTALLED
@@ -717,7 +750,7 @@ def install() -> None:
         if _INSTALLED:
             return
         for step in (_install_httpx, _install_requests, _install_urllib, _install_aiohttp,
-                     _install_botocore, _install_thread_propagation):
+                     _install_botocore, _install_thread_propagation, _install_delivery_hop):
             try:
                 step()
             except Exception:
