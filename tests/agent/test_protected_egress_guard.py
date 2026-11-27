@@ -98,7 +98,8 @@ def test_openai_request_off_the_primary_is_refused_before_sending(protected, bas
 
 
 def test_anthropic_request_off_the_primary_is_refused_before_sending(protected):
-    from anthropic import Anthropic, APIConnectionError
+    anthropic = pytest.importorskip("anthropic")
+    Anthropic, APIConnectionError = anthropic.Anthropic, anthropic.APIConnectionError
     sent = []
     client = Anthropic(api_key="k", base_url="https://api.anthropic.example", max_retries=0,
                        http_client=_mock_http(sent))
@@ -426,3 +427,23 @@ def test_work_handed_to_the_delivery_loop_leaves_the_tool_scope(protected):
         loop.call_soon_threadsafe(loop.stop)
         t.join(5)
         loop.close()
+
+
+def test_libraries_imported_after_the_guard_are_hooked():
+    """Installing the guard does not import httpx, requests, aiohttp or botocore; each is
+    hooked the moment it is first imported."""
+    import subprocess
+    import sys
+    code = (
+        "import sys\n"
+        "import agent.protected_session\n"
+        "heavy = [m for m in ('httpx', 'aiohttp', 'botocore.session') if m in sys.modules]\n"
+        "import httpx, requests, botocore.session\n"
+        "print(heavy, hasattr(httpx.Client.send, '__wrapped__'),\n"
+        "      hasattr(requests.Session.send, '__wrapped__'),\n"
+        "      getattr(botocore.session.Session.create_client, '_hermes_protected_egress', False))\n"
+    )
+    from pathlib import Path
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         cwd=Path(__file__).resolve().parents[2], timeout=60)
+    assert out.stdout.strip().endswith("True True True"), out.stdout + out.stderr

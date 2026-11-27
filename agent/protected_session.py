@@ -40,6 +40,7 @@ import contextvars
 import ipaddress
 import json
 import logging
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -649,11 +650,15 @@ def _botocore_before_send(request: Any = None, **_kw: Any) -> None:
 
 
 def _install_botocore() -> None:
-    try:
-        import botocore.session
-    except Exception:
+    session_mod = sys.modules.get("botocore.session")
+    if session_mod is None:
+        try:
+            import botocore.session as session_mod  # noqa: PLC0415
+        except Exception:
+            return
+    if getattr(session_mod.Session.create_client, "_hermes_protected_egress", False):
         return
-    orig = botocore.session.Session.create_client
+    orig = session_mod.Session.create_client
 
     def create_client(self, *args, **kwargs):
         client = orig(self, *args, **kwargs)
@@ -665,7 +670,8 @@ def _install_botocore() -> None:
         return client
 
     create_client.__wrapped__ = orig  # type: ignore[attr-defined]
-    botocore.session.Session.create_client = create_client
+    create_client._hermes_protected_egress = True  # type: ignore[attr-defined]
+    session_mod.Session.create_client = create_client
 
 
 def _install_thread_propagation() -> None:
@@ -741,22 +747,74 @@ def _install_delivery_hop() -> None:
     base_events.BaseEventLoop.call_soon_threadsafe = call_soon_threadsafe
 
 
+class _PatchOnImport:
+    """Meta-path finder that applies a hook right after its module first imports, so
+    installing the guard never pays for importing httpx, aiohttp or botocore."""
+
+    def __init__(self, hooks: dict) -> None:
+        self.hooks = hooks  # module name -> installer
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname not in self.hooks:
+            return None
+        import importlib.util
+
+        installer = self.hooks.pop(fullname)  # popped first: no re-entry while finding
+        spec = importlib.util.find_spec(fullname)
+        if fullname in sys.modules:
+            # Finding the spec imported the parent package, which imported this
+            # module already: hook it now and let the import system use it.
+            _safe(installer)
+            return None
+        if spec is None or spec.loader is None:
+            return spec
+        loader = spec.loader
+        orig_exec = loader.exec_module
+
+        def exec_module(module):
+            orig_exec(module)
+            try:
+                installer()
+            except Exception:
+                logger.warning("protected session: could not install %s", installer.__name__,
+                               exc_info=True)
+
+        try:
+            loader.exec_module = exec_module  # type: ignore[method-assign]
+        except Exception:
+            return None  # cannot hook the loader: the import proceeds unhooked
+        return spec
+
+
 def install() -> None:
-    """Install every hook once per process. Idempotent; never raises."""
+    """Install every hook once per process. Idempotent; never raises. Libraries not
+    imported yet are hooked the moment they are."""
     global _INSTALLED
     if _INSTALLED:
         return
     with _INSTALL_LOCK:
         if _INSTALLED:
             return
-        for step in (_install_httpx, _install_requests, _install_urllib, _install_aiohttp,
-                     _install_botocore, _install_thread_propagation, _install_delivery_hop):
-            try:
-                step()
-            except Exception:
-                logger.warning("protected session: could not install %s", step.__name__,
-                               exc_info=True)
+        lazy = {}
+        for module, step in (("httpx", _install_httpx), ("requests", _install_requests),
+                             ("aiohttp", _install_aiohttp),
+                             ("botocore.session", _install_botocore)):
+            if module in sys.modules:
+                _safe(step)
+            else:
+                lazy[module] = step
+        for step in (_install_urllib, _install_thread_propagation, _install_delivery_hop):
+            _safe(step)
+        if lazy:
+            sys.meta_path.insert(0, _PatchOnImport(lazy))
         _INSTALLED = True
+
+
+def _safe(step) -> None:
+    try:
+        step()
+    except Exception:
+        logger.warning("protected session: could not install %s", step.__name__, exc_info=True)
 
 
 install()
