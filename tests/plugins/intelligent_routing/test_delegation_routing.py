@@ -311,9 +311,14 @@ def _spawn_children(tmp_path, monkeypatch, parent, tasks, delegation):
 def test_children_of_a_protected_parent_are_marked_protected(tmp_path, monkeypatch, delegation):
     from agent.routing_override import session_holds_protected_text
     parent = _plain_parent([{"role": "tool", "content": _BODY + _FOOTER}])
+    parent._protected_primary = {"model": PRIMARY["model"], "provider": "openrouter",
+                                 "base_url": "http://127.0.0.1:9/v1", "api_key": "k"}
     children = _spawn_children(tmp_path, monkeypatch, parent,
                                [{"goal": "Summarise the context.", "context": _BODY}], delegation)
     assert children and children[0]._protected_session is True
+    # The child runs on the parent's configured primary and inherits it as its own.
+    assert children[0].model == PRIMARY["model"]
+    assert children[0]._protected_primary["model"] == PRIMARY["model"]
     assert session_holds_protected_text(types.SimpleNamespace(
         _protected_session=True, _session_messages=[{"role": "user", "content": _BODY}]))
 
@@ -323,3 +328,10 @@ def test_children_of_an_unprotected_parent_are_not_marked(tmp_path, monkeypatch)
     children = _spawn_children(tmp_path, monkeypatch, parent,
                                [{"goal": "Summarise the context.", "context": _BODY}], {})
     assert children and not getattr(children[0], "_protected_session", False)
+
+
+def test_protected_parent_without_a_named_primary_spawns_no_child(tmp_path, monkeypatch):
+    parent = _plain_parent([{"role": "tool", "content": _BODY + _FOOTER}])
+    children = _spawn_children(tmp_path, monkeypatch, parent,
+                               [{"goal": "Summarise the context.", "context": _BODY}], {})
+    assert children == []

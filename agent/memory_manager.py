@@ -460,6 +460,24 @@ class MemoryManager:
             len(provider.get_tool_schemas()),
         )
 
+    def _protected(self) -> bool:
+        """True when the owning session holds protected text (agent/protected_session.py)."""
+        try:
+            from agent.protected_session import is_protected
+
+            owner = getattr(self, "_protected_owner", None)
+            agent = owner() if callable(owner) else None
+            return is_protected() or (agent is not None and is_protected(agent))
+        except Exception:
+            return True
+
+    def _content_providers(self) -> List[MemoryProvider]:
+        """Providers that may receive conversation content. A protected session's
+        text never leaves for an external provider: only the local built-in one."""
+        if self._protected():
+            return [p for p in self._providers if p.name == "builtin"]
+        return list(self._providers)
+
     @property
     def providers(self) -> List[MemoryProvider]:
         """All registered providers in order."""
@@ -523,7 +541,7 @@ class MemoryManager:
         if not clean_query:
             return ""
         parts = []
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 result = self._prefetch_provider(provider, clean_query, session_id=session_id)
                 if result and result.strip():
@@ -592,7 +610,7 @@ class MemoryManager:
         wedged provider can never block the caller. See ``sync_all`` for
         the full rationale (agent stuck "running" minutes after a turn).
         """
-        providers = list(self._providers)
+        providers = self._content_providers()
         if not providers:
             return
 
@@ -651,7 +669,7 @@ class MemoryManager:
         before turn N+1; provider implementations don't need their own
         ordering guarantees.
         """
-        providers = list(self._providers)
+        providers = self._content_providers()
         if not providers:
             return
 
@@ -830,6 +848,9 @@ class MemoryManager:
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
+        if provider.name != "builtin" and self._protected():
+            from agent.protected_session import PROTECTED_EGRESS_MESSAGE
+            return tool_error(PROTECTED_EGRESS_MESSAGE)
         try:
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:
@@ -846,7 +867,7 @@ class MemoryManager:
 
         kwargs may include: remaining_tokens, model, platform, tool_count.
         """
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 provider.on_turn_start(turn_number, message, **kwargs)
             except Exception as e:
@@ -859,7 +880,7 @@ class MemoryManager:
         """Notify all providers of session end."""
         # Providers write to long-term memory, where chatter would become fact.
         messages = without_observed_chatter(messages)
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 provider.on_session_end(messages)
             except Exception as e:
@@ -952,7 +973,7 @@ class MemoryManager:
         # rewound=True explicitly; everyone else stays clean.
         if rewound:
             kwargs["rewound"] = True
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 provider.on_session_switch(
                     new_session_id,
@@ -975,7 +996,7 @@ class MemoryManager:
         # Providers write to long-term memory, where chatter would become fact.
         messages = without_observed_chatter(messages)
         parts = []
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 result = provider.on_pre_compress(messages)
                 if result and result.strip():
@@ -1024,7 +1045,7 @@ class MemoryManager:
 
         Skips the builtin provider itself (it's the source of the write).
         """
-        for provider in self._providers:
+        for provider in self._content_providers():
             if provider.name == "builtin":
                 continue
             try:
@@ -1127,7 +1148,7 @@ class MemoryManager:
     def on_delegation(self, task: str, result: str, *,
                       child_session_id: str = "", **kwargs) -> None:
         """Notify all providers that a subagent completed."""
-        for provider in self._providers:
+        for provider in self._content_providers():
             try:
                 provider.on_delegation(
                     task, result, child_session_id=child_session_id, **kwargs

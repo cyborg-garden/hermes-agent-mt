@@ -1936,9 +1936,13 @@ class PluginManager:
         kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
         callbacks = self._hooks.get(hook_name, [])
         results: List[Any] = []
+        # Each callback runs in its plugin's egress scope: in a protected session
+        # its outbound requests off the primary are refused (agent/protected_session.py).
+        from agent.protected_session import egress_scope, plugin_scope_name
         for cb in callbacks:
             try:
-                ret = cb(**kwargs)
+                with egress_scope(plugin_scope_name(cb)):
+                    ret = cb(**kwargs)
                 if ret is not None:
                     results.append(ret)
             except Exception as exc:
