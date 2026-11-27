@@ -199,7 +199,7 @@ def load_persisted(agent: Any) -> bool:
     if db is None or not hasattr(db, "session_is_protected"):
         return False
     try:
-        hit = bool(db.session_is_protected(sid))
+        hit = db.session_is_protected(sid) is True
     except Exception:
         logger.debug("protected session: could not read the flag", exc_info=True)
         return False
@@ -264,7 +264,7 @@ def skip_side_task(name: str, agent: Any = None, *texts: Any, session_db: Any = 
             hit = is_protected() or (bool(texts) and scan_running(*texts, source=name))
         if not hit and session_db is not None and session_id \
                 and hasattr(session_db, "session_is_protected"):
-            hit = bool(session_db.session_is_protected(session_id))
+            hit = session_db.session_is_protected(session_id) is True
     except Exception:
         hit = True
     if hit:
