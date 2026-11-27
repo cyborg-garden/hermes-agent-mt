@@ -700,6 +700,16 @@ agent:
   # Recommended: 20-30 for focused tasks, 50-100 for open exploration
   max_turns: 60
 
+  # Step-limit notices (subagents apply them to their own budget).
+  # step_limit_warning: tell the model once, at step_limit_warning_at of
+  #   max_turns, to finish the current piece and reply.
+  # step_limit_summary: when the steps run out, make one extra call with
+  #   tools disabled so the model can summarise. When false, or when that
+  #   reply is empty, a plain reply naming the last tool is sent instead.
+  # step_limit_warning: true
+  # step_limit_warning_at: 0.8
+  # step_limit_summary: true
+
   # Inactivity timeout for gateway agent runs (seconds, 0 = unlimited).
   # The agent can run indefinitely when actively calling tools or receiving
   # API responses.  Only fires after the agent has been idle for this duration.

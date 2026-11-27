@@ -629,3 +629,21 @@ class TestFinalizeOrphanedCompressionSessions:
 
         session = db.get_session("titled-ghost")
         assert session["end_reason"] == "orphaned_compression"
+
+
+def test_empty_budget_exhausted_turn_gets_plain_step_limit_reply():
+    from gateway.run import _normalize_empty_agent_response
+
+    result = {
+        "api_calls": 150,
+        "turn_exit_reason": "max_iterations_reached(150/150)",
+        "messages": [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "write_file", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ],
+    }
+    response = _normalize_empty_agent_response(result, "")
+    assert response == "I ran out of steps before finishing. Last thing I was doing: write_file."
+    assert "no response was generated" not in response

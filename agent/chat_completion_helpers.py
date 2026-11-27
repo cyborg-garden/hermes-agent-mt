@@ -1848,13 +1848,23 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     it: the work stopped because of a limit, and no more steps run until they
     reply. A background process it started may outlive that, so check first.
     """
-    summary = _request_iteration_summary(agent, messages, api_call_count)
+    if getattr(agent, "_step_limit_summary", True):
+        summary = _request_iteration_summary(agent, messages, api_call_count)
+    else:
+        summary = ""
 
     parts = [f"I stopped here because I hit my step limit ({agent.max_iterations} steps in one go)."]
     if summary:
         parts.append(summary)
     else:
-        parts.append("I also couldn't write a summary of what I did.")
+        last_tool = _last_tool_name(messages)
+        if last_tool:
+            parts.append(
+                "I ran out of steps before finishing and couldn't write a summary. "
+                f"Last thing I was doing: {last_tool}."
+            )
+        else:
+            parts.append("I also couldn't write a summary of what I did.")
     stated = _WORK_REMAINING_RE.findall(summary or "")
     finished = bool(stated) and stated[-1].strip(" .*_`").lower() in {"none", "nothing"}
     if not stated:
@@ -1876,6 +1886,19 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     else:
         messages.append({"role": "assistant", "content": reply})
     return reply
+
+
+def _last_tool_name(messages: list) -> str:
+    """Name of the last tool the turn called, or "" if none."""
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for call in reversed(msg.get("tool_calls") or []):
+            fn = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
+            name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+            if name:
+                return str(name)
+    return ""
 
 
 def _request_iteration_summary(agent, messages: list, api_call_count: int) -> str:

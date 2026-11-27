@@ -6759,12 +6759,14 @@ class TestSystemPromptStability:
         assert "Hermes Agent" in agent._cached_system_prompt
 
 class TestBudgetPressure:
-    """Budget exhaustion grace call system."""
+    """Step-limit wrap-up note and exhaustion summary."""
 
-    def test_grace_call_flags_initialized(self, agent):
-        """Agent should have budget grace call flags."""
-        assert agent._budget_exhausted_injected is False
-        assert agent._budget_grace_call is False
+    def test_step_limit_flags_initialized(self, agent):
+        """Both step-limit notices are on by default."""
+        assert agent._step_limit_warning is True
+        assert agent._step_limit_warning_at == 0.8
+        assert agent._step_limit_summary is True
+        assert agent._step_limit_warned is False
 
 
 class TestSafeWriter:

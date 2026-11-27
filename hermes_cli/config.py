@@ -1011,6 +1011,16 @@ DEFAULT_CONFIG = {
     "max_live_sessions": 16,
     "agent": {
         "max_turns": 90,
+        # Step-limit notices.  ``step_limit_warning`` appends one note for
+        # the model when ``step_limit_warning_at`` of max_turns is used,
+        # telling it to finish the current piece and reply.  When the
+        # budget runs out, ``step_limit_summary`` makes one extra call with
+        # tools disabled so the model can summarise; when false (or when
+        # that reply is empty) a plain reply is built from the turn instead.
+        # Subagents apply the same settings to their own delegation budget.
+        "step_limit_warning": True,
+        "step_limit_warning_at": 0.8,
+        "step_limit_summary": True,
         # Inactivity timeout for gateway agent execution (seconds).
         # The agent can run indefinitely as long as it's actively calling
         # tools or receiving API responses.  Only fires when the agent has

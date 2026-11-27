@@ -61,6 +61,11 @@ def finalize_turn(
         and not failed
         and str(_turn_exit_reason) in {"unknown", "budget_exhausted"}
     )
+    # Empty-response recovery paths leave ``final_response == ""`` and keep
+    # looping; if the model then resumes tool calls until the budget runs
+    # out, that stale blank must not count as an answer.
+    if isinstance(final_response, str) and not final_response.strip():
+        final_response = None
     continuation_budget_exhausted = (
         final_response is None
         and bool(_pending_verification_response)

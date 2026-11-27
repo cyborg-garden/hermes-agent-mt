@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs, urlunparse
 
 from agent.context_compressor import ContextCompressor
-from agent.iteration_budget import IterationBudget
+from agent.iteration_budget import DEFAULT_STEP_LIMIT_WARNING_AT, IterationBudget
 from agent.memory_manager import StreamingContextScrubber
 from agent.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
@@ -659,14 +659,21 @@ def init_agent(
     except Exception:
         pass
 
-    # Iteration budget: the LLM is only notified when it actually exhausts
-    # the iteration budget (api_call_count >= max_iterations).  At that
-    # point we inject ONE message, allow one final API call, and if the
-    # model doesn't produce a text response, force a user-message asking
-    # it to summarise.  No intermediate pressure warnings — they caused
-    # models to "give up" prematurely on complex tasks (#7915).
-    agent._budget_exhausted_injected = False
-    agent._budget_grace_call = False
+    # Iteration budget: two notices reach the model.
+    #   1. One wrap-up note per turn, appended to the newest tool result
+    #      once ``agent.step_limit_warning_at`` (default 0.8) of the budget
+    #      is used.  Off with ``agent.step_limit_warning: false``.  It fires
+    #      late on purpose: early pressure made models give up on complex
+    #      tasks (#7915).
+    #   2. At exhaustion the turn finalizer asks for a toolless summary
+    #      (``handle_max_iterations``; retried once if empty), and builds a plain reply from the
+    #      turn if that summary comes back empty.  Off with
+    #      ``agent.step_limit_summary: false`` (plain reply, no extra call).
+    # Both settings are read with the rest of the agent section below.
+    agent._step_limit_warning = True
+    agent._step_limit_warning_at = DEFAULT_STEP_LIMIT_WARNING_AT
+    agent._step_limit_summary = True
+    agent._step_limit_warned = False
 
     # Activity tracking — updated on each API call, tool execution, and
     # stream chunk.  Used by the gateway timeout handler to report what the
@@ -1556,6 +1563,16 @@ def init_agent(
     if not isinstance(_agent_section, dict):
         _agent_section = {}
     agent._tool_use_enforcement = _agent_section.get("tool_use_enforcement", "auto")
+
+    # Step-limit notices (see the iteration-budget block above).
+    agent._step_limit_warning = bool(_agent_section.get("step_limit_warning", True))
+    try:
+        agent._step_limit_warning_at = float(
+            _agent_section.get("step_limit_warning_at", DEFAULT_STEP_LIMIT_WARNING_AT)
+        )
+    except (TypeError, ValueError):
+        agent._step_limit_warning_at = DEFAULT_STEP_LIMIT_WARNING_AT
+    agent._step_limit_summary = bool(_agent_section.get("step_limit_summary", True))
 
     # Intent-ack continuation config: "auto" (default — codex_responses only,
     # the historical gate), true (all api_modes), false (never), or a list of
