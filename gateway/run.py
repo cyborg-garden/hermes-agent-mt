@@ -9818,9 +9818,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _chat_entry = self.session_store._entries.get(
                         self._session_key_for_source(event.source))
                     _chat_sid = getattr(_chat_entry, "session_id", None)
+                    if not isinstance(_chat_sid, str):
+                        _chat_sid = None
                 except Exception:
                     _chat_sid = None
-                with _protected_chat(getattr(self._session_db, "_db", self._session_db), _chat_sid):
+                _chat_db = getattr(self, "_session_db", None)
+                with _protected_chat(getattr(_chat_db, "_db", _chat_db) if _chat_sid else None,
+                                     _chat_sid):
                     _hook_results = _invoke_hook(
                         "pre_gateway_dispatch",
                         event=event,
