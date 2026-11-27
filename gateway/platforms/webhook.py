@@ -341,7 +341,7 @@ class WebhookAdapter(BasePlatformAdapter):
         deliver_type = delivery.get("deliver", "log")
 
         if deliver_type == "log":
-            logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
+            logger.info("[webhook] Response for %s (%d chars)", chat_id, len(content))
             return SendResult(success=True)
 
         if deliver_type == "github_comment":
@@ -1198,7 +1198,7 @@ class WebhookAdapter(BasePlatformAdapter):
         if deliver_type == "log":
             # Shouldn't reach here — startup validation rejects deliver_only
             # with deliver=log — but guard defensively.
-            logger.info("[webhook] direct-deliver log-only: %s", content[:200])
+            logger.info("[webhook] direct-deliver log-only (%d chars)", len(content))
             return SendResult(success=True)
 
         if deliver_type == "github_comment":

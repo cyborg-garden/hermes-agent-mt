@@ -5857,8 +5857,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event.text = _synth
                     _reply = await _approval_handler(event)
                     logger.info(
-                        "Approval response via plain text: session=%s verb=%s args=%r",
-                        session_key, _verb, _normalized_args,
+                        "Approval response via plain text: session=%s verb=%s args_len=%d",
+                        session_key, _verb, len(str(_normalized_args or "")),
                     )
                     _adapter = self._adapter_for_source(event.source)
                     if _adapter and _reply:
@@ -11782,13 +11782,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
-        _msg_preview = (event.text or "")[:80].replace("\n", " ")
         _reply_id = getattr(event, "reply_to_message_id", None)
-        _reply_txt = (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " ")
         logger.info(
-            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
+            "inbound message: platform=%s user=%s chat=%s msg_len=%d reply_to_id=%s reply_to_text_len=%d",
             _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
+            source.chat_id or "unknown", len(event.text or ""), _reply_id,
+            len(getattr(event, "reply_to_text", None) or ""),
         )
 
         # Get or create session
@@ -14224,10 +14223,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if self._is_duplicate_voice_transcript(guild_id, user_id, transcript):
             logger.info(
-                "Suppressing duplicate voice transcript for guild=%s user=%s: %s",
+                "Suppressing duplicate voice transcript for guild=%s user=%s (%d chars)",
                 guild_id,
                 user_id,
-                transcript[:100],
+                len(transcript),
             )
             return
 
@@ -19864,10 +19863,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             if prepared_message is None:
                 logger.debug(
-                    "status_callback suppressed for %s/%s: %s",
+                    "status_callback suppressed for %s/%s (%d chars)",
                     source.platform.value if source.platform else "unknown",
                     event_type,
-                    _redact_gateway_user_facing_secrets(str(message or ""))[:160],
+                    len(str(message or "")),
                 )
                 return
             _fut = safe_schedule_threadsafe(
@@ -21810,7 +21809,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     else:
                         pending = _pending_text or _build_media_placeholder(pending_event)
                     if pending:
-                        logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
+                        logger.debug("Processing queued message after agent completion (%d chars)", len(pending))
 
             # Leftover /steer: if a steer arrived after the last tool batch
             # (e.g. during the final API call), the agent couldn't inject it
@@ -21820,7 +21819,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _leftover_steer = result.get("pending_steer")
                 if _leftover_steer:
                     pending = _leftover_steer
-                    logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
+                    logger.debug("Delivering leftover /steer as next turn (%d chars)", len(pending))
 
             # Safety net: if the pending text is a slash command (e.g. "/stop",
             # "/new"), discard it — commands should never be passed to the agent
@@ -21854,7 +21853,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pending = None
 
             if pending_event or pending:
-                logger.debug("Processing pending message: '%s...'", pending[:40])
+                logger.debug("Processing pending message (%d chars)", len(pending))
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent

@@ -157,9 +157,9 @@ def _plan_tool_batch_segments(tool_calls, *, execution_cwd: Optional[Path] = Non
         except Exception:
             _raw = tool_call.function.arguments
             logging.debug(
-                "Could not parse args for %s — treating as sequential barrier; raw=%s",
+                "Could not parse args for %s — treating as sequential barrier; raw_len=%d",
                 tool_name,
-                _raw[:200] if isinstance(_raw, str) else repr(_raw)[:200],
+                len(_raw) if isinstance(_raw, str) else len(repr(_raw)),
             )
             _add_sequential(tool_call)
             continue

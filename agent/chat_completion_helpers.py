@@ -1163,7 +1163,7 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
             reasoning_text = combined or None
 
     if reasoning_text and agent.verbose_logging:
-        logging.debug(f"Captured reasoning ({len(reasoning_text)} chars): {reasoning_text}")
+        logging.debug("Captured reasoning (%d chars)", len(reasoning_text))
 
     if reasoning_text and agent.reasoning_callback:
         # Skip callback when streaming is active — reasoning was already

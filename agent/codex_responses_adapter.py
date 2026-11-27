@@ -1371,8 +1371,8 @@ def _normalize_codex_response(
         logger.warning(
             "Codex response contains leaked tool-call text in assistant content "
             "(no structured function_call items). Treating as incomplete so the "
-            "continuation path can re-elicit a proper tool call. Leaked snippet: %r",
-            final_text[:300],
+            "continuation path can re-elicit a proper tool call. text_len=%d",
+            len(final_text),
         )
         # Clear the text so downstream code doesn't surface the garbage as
         # a summary. The encrypted reasoning items (if any) are preserved

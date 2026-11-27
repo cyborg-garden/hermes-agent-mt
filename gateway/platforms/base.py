@@ -3456,10 +3456,10 @@ class BasePlatformAdapter(ABC):
                 await asyncio.sleep(human_delay)
             try:
                 logger.info(
-                    "[%s] Sending image: %s (alt=%s)",
+                    "[%s] Sending image: %s (alt_len=%d)",
                     self.name,
                     safe_url_for_log(image_url),
-                    alt_text[:30] if alt_text else "",
+                    len(alt_text or ""),
                 )
                 if image_url.startswith("file://"):
                     img_result = await self.send_image_file(

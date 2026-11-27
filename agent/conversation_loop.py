@@ -1951,16 +1951,11 @@ def run_conversation(
                         continue
 
                     agent._flush_status_buffer()
-                    _refusal_log = (
-                        _refusal_text[:500] + "..."
-                        if len(_refusal_text) > 500
-                        else _refusal_text
-                    )
                     logger.warning(
                         "%sModel declined to respond (finish_reason=content_filter). "
-                        "model=%s provider=%s refusal=%s",
+                        "model=%s provider=%s refusal_len=%d",
                         agent.log_prefix, agent.model, agent.provider,
-                        _refusal_log or "(no text)",
+                        len(_refusal_text or ""),
                     )
                     agent._emit_status(
                         "⚠️ The model declined to respond to this request (safety refusal)."
@@ -4806,8 +4801,8 @@ def run_conversation(
                 if agent.verbose_logging:
                     for tc in assistant_message.tool_calls:
                         raw_args = tc.function.arguments
-                        args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
-                        logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+                        args_len = len(raw_args) if isinstance(raw_args, str) else len(repr(raw_args))
+                        logging.debug("Tool call: %s id=%s args_len=%d", tc.function.name, getattr(tc, "id", None), args_len)
                 
                 # Validate tool call names - detect model hallucinations
                 # Repair mismatched tool names before validating
@@ -5542,11 +5537,10 @@ def run_conversation(
                     messages.append(assistant_msg)
 
                     if reasoning_text:
-                        reasoning_preview = reasoning_text[:500] + "..." if len(reasoning_text) > 500 else reasoning_text
                         logger.warning(
                             "Reasoning-only response (no visible content) "
                             "after exhausting retries and fallback. "
-                            "Reasoning: %s", reasoning_preview,
+                            "reasoning_len=%d", len(reasoning_text),
                         )
                         agent._emit_status(
                             "⚠️ Model produced reasoning but no visible "

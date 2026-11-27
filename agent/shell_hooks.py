@@ -587,8 +587,8 @@ def _parse_response(event: str, stdout: str) -> Optional[Dict[str, Any]]:
         data = json.loads(stdout)
     except json.JSONDecodeError:
         logger.warning(
-            "shell hook stdout was not valid JSON (event=%s): %s",
-            event, stdout[:200],
+            "shell hook stdout was not valid JSON (event=%s, %d chars)",
+            event, len(stdout),
         )
         return None
 
