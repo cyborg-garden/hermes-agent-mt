@@ -52,7 +52,7 @@ def test_mechanical_turn_injects_cheap_tier_reason():
         )
     assert result is not None
     ctx_text = result["context"] if isinstance(result, dict) else result
-    assert "routed: mechanical → cheap" in ctx_text
+    assert "routed: lookup → cheap" in ctx_text
     assert "Current model:" in ctx_text
 
 
@@ -144,7 +144,9 @@ def test_cheap_route_emits_route_override():
         )
     assert isinstance(result, dict)
     assert result.get("route") == {
-        "model": "deepseek/deepseek-v3.2", "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter",
+        "escalate": True,
+        "protected_watch": True,
     }
 
 
@@ -180,7 +182,7 @@ def test_route_override_honors_config_target():
         result = registration.on_pre_llm_call(
             user_message="grep for TODO", model="claude-sonnet-5", platform="cli",
         )
-    assert result["route"] == {"model": "qwen/qwen-2.5", "provider": "ollama"}
+    assert result["route"] == {"model": "qwen/qwen-2.5", "provider": "ollama", "escalate": True, "protected_watch": True}
 
 
 # ---- group [sender] attribution prefix (Signal/group classifier bug) ---------
@@ -204,7 +206,9 @@ def test_group_prefixed_mechanical_turn_routes_cheap():
         )
     assert isinstance(result, dict)
     assert result.get("route") == {
-        "model": "deepseek/deepseek-v3.2", "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter",
+        "escalate": True,
+        "protected_watch": True,
     }
 
 
@@ -269,7 +273,7 @@ def test_user_directive_deepseek_routes_cheap():
             model="claude-sonnet-5", platform="cli",
         )
     assert isinstance(result, dict)
-    assert result["route"] == {"model": "deepseek/deepseek-v3.2", "provider": "openrouter"}
+    assert result["route"] == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter"}
 
 
 def test_user_directive_opus_routes_to_opus():
@@ -326,13 +330,13 @@ def test_no_directive_falls_through_to_classifier():
             model="claude-sonnet-5", platform="cli",
         )
     assert isinstance(result, dict)
-    assert result.get("route") == {"model": "deepseek/deepseek-v3.2", "provider": "openrouter"}
+    assert result.get("route") == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True, "protected_watch": True}
 
 
 # ---- kimi / glm directives (three-tier fleet hierarchy) ----------------------
 #
 # Fleet cost restructure: PRIMARY = z-ai/glm-5.2 (chat default), CHEAP =
-# deepseek/deepseek-v3.2 (mechanical tier), ON-DEMAND PREMIUM =
+# deepseek/deepseek-v4-flash-0731 (mechanical tier), ON-DEMAND PREMIUM =
 # moonshotai/kimi-k3 ("use kimi" runs that turn on Kimi K3). Same directive
 # mechanism as fable/opus/deepseek — intercepted before the classifier.
 

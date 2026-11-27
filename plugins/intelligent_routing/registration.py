@@ -43,7 +43,19 @@ from .classifier import (
 from .config import (
     cheap_extra_body,
     cheap_tier_target,
+    escalation_enabled,
+    extra_protected_markers,
     is_intelligent_routing_enabled,
+    protected_markers,
+    router_settings,
+    routing_mode,
+)
+from .task_router import (
+    SCOPE_TURN,
+    TIER_PREMIUM,
+    RouteDecision,
+    TaskSignals,
+    classify_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,7 +77,7 @@ _USER_MODEL_MAP = {
     "opus": ("claude-opus-4-8", "anthropic"),
     "sonnet": ("claude-sonnet-4-6", "anthropic"),
     "haiku": ("claude-haiku-4-5-20251001", "anthropic"),
-    "deepseek": ("deepseek/deepseek-v3.2", "openrouter"),
+    "deepseek": ("deepseek/deepseek-v4-flash-0731", "openrouter"),
     "kimi": ("moonshotai/kimi-k3", "openrouter"),
     "kimi3": ("moonshotai/kimi-k3", "openrouter"),
     "k3": ("moonshotai/kimi-k3", "openrouter"),
@@ -136,6 +148,96 @@ def _signals_from_kwargs(**kwargs: Any) -> TurnSignals:
     )
 
 
+def _text_of(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(part.get("text") or "") for part in content if isinstance(part, dict)
+        )
+    return ""
+
+
+def _is_protected(message: str, history: Any, markers: tuple[str, ...]) -> bool:
+    """True when the turn or ANY earlier message carries a protected marker.
+
+    The history matters: a cheap-routed turn sends the whole conversation to the
+    cheap provider, so one protected message anywhere keeps the session on the primary.
+    """
+    if not markers:
+        return False
+    if any(m in message.lower() for m in markers):
+        return True
+    if isinstance(history, list):
+        for msg in history:
+            if isinstance(msg, dict):
+                text = _text_of(msg.get("content")).lower()
+                if text and any(m in text for m in markers):
+                    return True
+    return False
+
+
+def _has_attachments(raw_message: Any, history: Any) -> bool:
+    """Images or files on the current turn (a non-text part on the last user message)."""
+    if isinstance(raw_message, list):
+        return True
+    if isinstance(history, list):
+        for msg in reversed(history):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                content = msg.get("content")
+                return isinstance(content, list) and any(
+                    isinstance(p, dict) and p.get("type") not in (None, "text") for p in content
+                )
+    return False
+
+
+def decide_turn(**kwargs: Any) -> tuple[RouteDecision, dict]:
+    """The main-turn decision for modes ``heuristic`` and ``llm-router``.
+
+    Returns the decision plus metric fields (never message text).
+    """
+    raw = kwargs.get("user_message")
+    message = raw if isinstance(raw, str) else _text_of(raw)
+    platform = (kwargs.get("platform") or "")
+    platform = platform.strip().lower() if isinstance(platform, str) else ""
+    history = kwargs.get("conversation_history")
+    sig = TaskSignals(
+        instruction=message,
+        scope=SCOPE_TURN,
+        platform=platform,
+        is_background=platform in _NON_INTERACTIVE_PLATFORMS,
+        is_public_facing=bool(kwargs.get("is_public_facing", False)),
+        is_protected=_is_protected(message, history, protected_markers()),
+        has_attachments=_has_attachments(raw, history),
+    )
+    decision = classify_task(sig)
+    meta: dict = {"router": "heuristic"}
+    mode = kwargs.get("_mode") or routing_mode()
+    if mode != "llm-router" or decision.confident or decision.reason in ("empty", "too long to judge"):
+        return decision, meta
+
+    settings = router_settings()
+    if platform in settings["exclude_platforms"]:
+        meta["router_outcome"] = "skipped-platform"
+        return decision, meta
+    if not sig.is_background and not settings["on_interactive"]:
+        meta["router_outcome"] = "skipped-interactive"
+        return decision, meta
+
+    from . import llm_router
+    from .task_router import clean_instruction
+
+    result = llm_router.ask_router(clean_instruction(message), settings)
+    meta.update({
+        "router": "llm", "router_outcome": result.outcome,
+        "router_type": result.task_type or None, "router_latency_ms": result.latency_ms,
+    })
+    if result.allows_cheap(settings["min_confidence"]):
+        return RouteDecision("cheap", result.task_type, f"llm-router: {result.task_type}", True), meta
+    return RouteDecision(TIER_PREMIUM, result.task_type or decision.task_type,
+                         f"llm-router: {result.outcome}", False), meta
+
+
 def probe_route(message: str, **signals: Any) -> dict:
     """Probe the routing decision for a message in ISOLATION — no config, no hook.
 
@@ -143,10 +245,14 @@ def probe_route(message: str, **signals: Any) -> dict:
     or re-audit can feed a batch of representative messages and see exactly what
     each would route to, without mocking config or the pre_llm_call plumbing.
     ``signals`` accepts the same kwargs as the hook (e.g. ``platform="cron"``,
-    ``is_public_facing=True``).
+    ``is_public_facing=True``). Uses the heuristic task router (no LLM call);
+    ``mode="legacy"`` probes the old length-gated classifier.
     """
-    sig = _signals_from_kwargs(user_message=message, **signals)
-    return {"tier": decide_tier(sig), "classification": classify_turn(sig)}
+    if signals.pop("mode", None) == "legacy":
+        sig = _signals_from_kwargs(user_message=message, **signals)
+        return {"tier": decide_tier(sig), "classification": classify_turn(sig)}
+    decision, _ = decide_turn(user_message=message, _mode="heuristic", **signals)
+    return {"tier": decision.tier, "classification": decision.task_type, "reason": decision.reason}
 
 
 def _reason_line(model: Any, provider: Any, reason: str) -> str:
@@ -226,19 +332,24 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
             )
             return {"route": {"model": model, "provider": provider}, "context": line}
 
-        # ── Heuristic classifier (no explicit directive) ───────────────────────
-        sig = _signals_from_kwargs(**kwargs)
+        # Delegated children and review forks are routed once, where they are
+        # spawned (the task-routing delegation backend reads the goal AND the
+        # context). Re-routing them here from the goal alone could undo that.
+        if kwargs.get("parent_session_id"):
+            return None
 
-        # THE routing decision — deliberately SIMPLE (the classifier is not the
-        # contribution; the interface extension is). decide_tier() gates cheap on
-        # the CONSERVATIVE binary classifier: cheap ONLY on a confident MECHANICAL,
-        # else premium. No catch-all-to-cheap.
-        tier = decide_tier(sig)
-
-        # Reason line reflects the ACTUAL decider (the binary classification), so
-        # the label never disagrees with the tier.
-        classification = classify_turn(sig)  # mechanical | judgment | uncertain
-        reason = f"{classification} → {tier}"
+        mode = routing_mode()
+        extra_metrics: dict = {}
+        if mode == "legacy":
+            sig = _signals_from_kwargs(**kwargs)
+            tier = decide_tier(sig)
+            classification = classify_turn(sig)
+            task_type, why = classification, classification
+        else:
+            decision, extra_metrics = decide_turn(**{**kwargs, "_mode": mode})
+            tier, task_type, why = decision.tier, decision.task_type, decision.reason
+            extra_metrics["confident"] = decision.confident
+        reason = f"{task_type} → {tier}"
 
         line = _reason_line(kwargs.get("model"), kwargs.get("provider"), reason)
         result: dict = {"context": line}
@@ -254,12 +365,21 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
                 route = {"model": cheap_model, "provider": cheap_provider}
                 # Provider-specific body params for the cheap tier (e.g.
                 # {"options": {"num_ctx": N}} on a local ollama model). Omitted
-                # entirely when unset, so nothing changes for existing cloud
-                # tiers. Thinking control is NOT set here — see
+                # entirely when unset. Thinking control is NOT set here — see
                 # config.cheap_extra_body for why and what to use instead.
                 extra_body = cheap_extra_body()
                 if extra_body:
                     route["extra_body"] = extra_body
+                # Escalation: if the cheap turn errors, comes back empty or
+                # refuses, the runtime retries it on the primary this turn.
+                if escalation_enabled():
+                    route["escalate"] = True
+                # Protected content arriving mid-turn moves the turn to the primary, with
+                # or without escalation; configured markers ride along for that check.
+                route["protected_watch"] = True
+                extra_markers = extra_protected_markers()
+                if extra_markers:
+                    route["protected_markers"] = extra_markers
                 result["route"] = route
                 routed_model, routed_provider = cheap_model, cheap_provider
 
@@ -269,17 +389,22 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
             provider=routed_provider,
             reason=reason,
             primary_model=kwargs.get("model"),
+            task_type=task_type,
+            why=why,
+            mode=mode,
+            scope="turn",
+            **extra_metrics,
             **metric_dims,
         )
         return result
-    except Exception as exc:  # noqa: BLE001 — must never break the turn
+    except Exception as exc:
         logger.warning("intelligent_routing: pre_llm_call failed (inert): %s", exc)
         return None
 
 
 def log_routing_decision(
     *, tier, model, provider, reason, primary_model,
-    session_id=None, turn_id=None, platform=None, is_group=None,
+    session_id=None, turn_id=None, platform=None, is_group=None, **extra: Any,
 ) -> None:
     """Emit ONE machine-parseable decision record per classified turn.
 
@@ -290,6 +415,11 @@ def log_routing_decision(
     prerequisite: *"Routing decisions must be countable: parseable per-turn log
     line of tier, model, reason."* Absent it, coverage/cost/fail-open rates
     cannot be computed, which is why Stage 2 never had numbers to attach.
+
+    ``extra`` carries the task-routing fields (``task_type``, ``why``, ``mode``,
+    ``scope``, ``confident``, ``router``, ``router_outcome``, ``router_type``,
+    ``router_latency_ms``, ``task_index``). None of them is message text, and no
+    caller may pass text here.
 
     Never raises — metrics must not be able to break a turn.
     """
@@ -313,17 +443,30 @@ def log_routing_decision(
                     "turn_id": turn_id,
                     "platform": platform,
                     "is_group": is_group,
+                    **{k: v for k, v in extra.items() if v is not None},
                 },
                 default=str,
                 ensure_ascii=False,
             ),
         )
-    except Exception:  # noqa: BLE001 — instrumentation must never break the turn
+    except Exception:
         logger.debug("intelligent_routing: metric emit failed", exc_info=True)
 
 
 def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
+    # The LLM router (routing.mode: llm-router) calls through the host-owned facade.
+    llm = getattr(ctx, "llm", None)
+    if llm is not None:
+        from . import llm_router
+
+        llm_router.bind(llm)
+    # Subagent routing: selected with delegation.backend: task-routing.
+    register_delegation = getattr(ctx, "register_delegation_provider", None)
+    if callable(register_delegation):
+        from .delegation import TaskRoutingDelegationProvider
+
+        register_delegation(TaskRoutingDelegationProvider())
     logger.info(
         "intelligent_routing active: pre_llm_call classifier registered "
         "(per-agent toggle routing.intelligent gates behavior; default OFF)"

@@ -167,11 +167,9 @@ def test_hook_emits_extra_body_on_cheap_route():
     """Exercises the real hook body — guards the import of cheap_extra_body."""
     from plugins.intelligent_routing import registration as reg
     with patch.object(reg, "is_intelligent_routing_enabled", return_value=True), \
-         patch.object(reg, "decide_tier", return_value=reg.TIER_CHEAP), \
-         patch.object(reg, "classify_turn", return_value="mechanical"), \
          patch.object(reg, "cheap_tier_target", return_value=("qwen3.5:9b", "ollama")), \
          patch.object(reg, "cheap_extra_body", return_value={"think": False}):
-        out = reg.on_pre_llm_call(messages=[{"role": "user", "content": "list the files"}],
+        out = reg.on_pre_llm_call(user_message="list the files",
                                   model="z-ai/glm-5.3", provider="openrouter")
     assert out["route"]["model"] == "qwen3.5:9b"
     assert out["route"]["extra_body"] == {"think": False}
@@ -180,11 +178,9 @@ def test_hook_emits_extra_body_on_cheap_route():
 def test_hook_omits_extra_body_when_unset():
     from plugins.intelligent_routing import registration as reg
     with patch.object(reg, "is_intelligent_routing_enabled", return_value=True), \
-         patch.object(reg, "decide_tier", return_value=reg.TIER_CHEAP), \
-         patch.object(reg, "classify_turn", return_value="mechanical"), \
          patch.object(reg, "cheap_tier_target", return_value=("deepseek/x", "openrouter")), \
          patch.object(reg, "cheap_extra_body", return_value={}):
-        out = reg.on_pre_llm_call(messages=[{"role": "user", "content": "list the files"}],
+        out = reg.on_pre_llm_call(user_message="list the files",
                                   model="z-ai/glm-5.3", provider="openrouter")
     assert "extra_body" not in out["route"]
 

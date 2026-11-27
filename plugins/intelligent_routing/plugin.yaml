@@ -1,16 +1,15 @@
 name: intelligent_routing
-version: "0.1.0"
+version: "0.2.0"
 description: >-
-  Opt-in pre-turn cost routing. When enabled per-agent (routing.intelligent:
-  true in config.yaml, default OFF), a cheap local heuristic (Option A, no extra
-  LLM call) classifies each turn by task type and routes mechanical/orchestration
-  work to a cheap-metered tier (default deepseek/deepseek-v3.2 via OpenRouter),
-  keeping premium/uncertain/public-facing turns on the configured primary. Fails
-  open to premium on any uncertainty — never silently downgrades a judgment turn.
-  The plugin ACTUATES the swap via the routing-override interface extension
-  (agent/routing_override.py), turn-scoped and fail-safe. Reactive fallback
-  (try_activate_fallback / FailoverReason) is untouched — a different axis.
-  Built as the clean plugin form of upstream PR #43534 per teknium1's steer.
+  Opt-in cost routing by task type. When enabled per agent (routing.intelligent:
+  true, default OFF), each turn is classified by what it is: cheap-safe work
+  (lookups, formatting, summaries, board toggles) goes to routing.cheap_model
+  (default deepseek/deepseek-v4-flash-0731 via OpenRouter); code, design,
+  judgment, public writing, sensitive and side-effect work stays on the primary.
+  Also provides the task-routing delegation backend (delegation.backend:
+  task-routing) that routes each subagent the same way, escalation of failed,
+  empty or refused cheap turns back to the primary, and an optional
+  llm-router mode for turns the heuristic cannot decide.
 author: NimbleCo
 hooks:
   - pre_llm_call

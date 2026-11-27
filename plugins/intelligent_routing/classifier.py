@@ -1,4 +1,7 @@
-"""Pre-turn heuristic classifier (Option A) for intelligent routing.
+"""Legacy length-gated classifier, used only by ``routing.mode: legacy``.
+
+The live router is ``task_router.py``; the cheap model default lives in
+``config.py``. The model names below describe the original tier choice.
 
 Classifies an incoming turn using ONLY cheap, local signals available before the
 LLM call — zero extra API cost, zero added latency. When the signals don't add

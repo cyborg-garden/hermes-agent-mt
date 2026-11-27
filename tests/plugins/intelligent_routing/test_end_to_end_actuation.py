@@ -50,12 +50,12 @@ def test_mechanical_turn_swaps_to_cheap_end_to_end():
     results = _run_hook("grep for TODO in the repo")
 
     override = extract_routing_override(results)
-    assert override == {"model": "deepseek/deepseek-v3.2", "provider": "openrouter"}
+    assert override == {"model": "deepseek/deepseek-v4-flash-0731", "provider": "openrouter", "escalate": True, "protected_watch": True}
 
     swapped = apply_routing_override(agent, override)
     assert swapped is True
     # The agent is now on the cheap tier for THIS turn.
-    assert agent.model == "deepseek/deepseek-v3.2"
+    assert agent.model == "deepseek/deepseek-v4-flash-0731"
     assert agent.provider == "openrouter"
     # ...turn-scoped via a DEDICATED flag: _primary_runtime stays cheap (so
     # in-turn recovery stays on cheap), the premium snapshot is stashed for the
