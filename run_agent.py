@@ -744,6 +744,11 @@ class AIAgent:
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
 
+        # A new session starts unflagged; a protected one is re-read from its
+        # record (or its history rescanned) at the next turn start.
+        from agent.protected_session import reset_for_new_session
+        reset_for_new_session(self)
+
         # Copilot x-initiator: True for the first API call of a user turn,
         # False for tool-loop follow-ups (#3040).
         self._is_user_initiated_turn = False

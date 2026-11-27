@@ -628,6 +628,18 @@ def classify_api_error(
         defaults.update(overrides)
         return ClassifiedError(**defaults)
 
+    # ── 0. Protected-session egress refusal ─────────────────────────
+    # The guard refused the request before sending (agent/protected_session.py).
+    # Retrying or falling back sends the same protected text to the same refused
+    # destination: abort with the guard's generic message.
+    _exc, _seen = error, 0
+    while _exc is not None and _seen < 8:
+        if type(_exc).__name__ == "ProtectedEgressBlocked":
+            from agent.protected_session import PROTECTED_EGRESS_MESSAGE
+            return _result(FailoverReason.format_error, retryable=False,
+                           should_fallback=False, message=PROTECTED_EGRESS_MESSAGE)
+        _exc, _seen = (_exc.__cause__ or _exc.__context__), _seen + 1
+
     # ── 1. Provider-specific patterns (highest priority) ────────────
 
     # Provider content-policy / safety-filter block. The provider has made a

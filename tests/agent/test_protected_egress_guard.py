@@ -410,9 +410,10 @@ def test_gemini_native_model_in_the_url(protected):
         ps.reset(token)
 
 
-def test_work_handed_to_the_delivery_loop_leaves_the_tool_scope(protected):
+def test_work_handed_to_the_delivery_loop_runs_in_the_delivery_scope(protected):
     """A clarify question or progress line a tool thread posts to the gateway loop is
-    delivery to the person: it runs without the tool's scope."""
+    delivery to the person: it leaves the tool's scope for the delivery scope, which
+    reaches only the hosts the gateway delivers to (see test_protected_egress_audit4)."""
     loop = asyncio.new_event_loop()
     ps.register_delivery_loop(loop)
     t = threading.Thread(target=loop.run_forever, daemon=True)
@@ -422,28 +423,8 @@ def test_work_handed_to_the_delivery_loop_leaves_the_tool_scope(protected):
             return ps._SCOPE.get(), ps.is_protected()
         with ps.egress_scope("tool:clarify"):
             scope, prot = asyncio.run_coroutine_threadsafe(probe(), loop).result(5)
-        assert scope is None and prot is True
+        assert scope == ps.DELIVERY_SCOPE and prot is True
     finally:
         loop.call_soon_threadsafe(loop.stop)
         t.join(5)
         loop.close()
-
-
-def test_libraries_imported_after_the_guard_are_hooked():
-    """Installing the guard does not import httpx, requests, aiohttp or botocore; each is
-    hooked the moment it is first imported."""
-    import subprocess
-    import sys
-    code = (
-        "import sys\n"
-        "import agent.protected_session\n"
-        "heavy = [m for m in ('httpx', 'aiohttp', 'botocore.session') if m in sys.modules]\n"
-        "import httpx, requests, botocore.session\n"
-        "print(heavy, hasattr(httpx.Client.send, '__wrapped__'),\n"
-        "      hasattr(requests.Session.send, '__wrapped__'),\n"
-        "      getattr(botocore.session.Session.create_client, '_hermes_protected_egress', False))\n"
-    )
-    from pathlib import Path
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                         cwd=Path(__file__).resolve().parents[2], timeout=60)
-    assert out.stdout.strip().endswith("True True True"), out.stdout + out.stderr

@@ -44,11 +44,21 @@ ALLOWED_SCOPES = frozenset({
 
 # Tools refused outright in a protected session: they send text out over channels
 # the HTTP hooks cannot see (a browser over CDP, websockets) or exist to send it out.
+# Subprocess tools (terminal, execute_code) and every MCP
+# tool (stdio servers are subprocesses; streamable-HTTP servers post from a task
+# opened at connect time) are refused too: the hooks cannot see their traffic.
 BLOCKED_TOOLS = frozenset({
     "text_to_speech", "image_generate", "video_generate", "web_search", "web_extract",
-    "x_search",
+    "x_search", "terminal", "execute_code",
 })
-BLOCKED_TOOL_PREFIXES = ("browser_",)
+BLOCKED_TOOL_PREFIXES = ("browser_", "mcp_")
+
+# Plugins whose hooks export what they receive (traces, telemetry), usually from a
+# long-lived sender thread started before any session: in a protected session
+# their hook callbacks are not called at all. Matched against the plugin's module
+# slug (``observability__langfuse`` for plugins/observability/langfuse).
+EXPORTER_PLUGIN_PREFIXES = ("observability", "langfuse", "nemo_relay", "home_log_router",
+                            "telemetry", "sentry", "otel", "opentelemetry")
 
 CALL_SITES: dict = {
     "agent/account_usage.py": (4, "no_content"),

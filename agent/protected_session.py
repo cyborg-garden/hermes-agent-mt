@@ -377,10 +377,67 @@ def refuse_tool_if_protected(tool_name: str) -> Optional[str]:
     name = str(tool_name or "")
     if _scope_allowed(f"tool:{name}"):
         return None
-    if name in BLOCKED_TOOLS or name.startswith(BLOCKED_TOOL_PREFIXES):
+    if name in BLOCKED_TOOLS or name.startswith(BLOCKED_TOOL_PREFIXES) or _is_mcp_tool(name):
         logger.info("protected session: refused tool %s", name)
         return PROTECTED_EGRESS_MESSAGE
     return None
+
+
+def _is_mcp_tool(name: str) -> bool:
+    """MCP tools talk to their server over a subprocess or a connect-time stream the
+    HTTP hooks cannot see; recognised by their ``mcp-<server>`` toolset."""
+    try:
+        from tools.registry import registry
+
+        toolset = registry.get_toolset_for_tool(name) or ""
+    except Exception:
+        return True  # cannot tell: fail closed
+    return str(toolset).startswith("mcp-") or str(toolset) == "mcp"
+
+
+def skip_plugin_hook(scope: str) -> bool:
+    """True when a plugin's hook callback must not run: the running session is
+    protected and the plugin exports what it receives (observability, telemetry),
+    often from a long-lived sender thread the egress hooks never see."""
+    from agent.protected_egress_allowlist import EXPORTER_PLUGIN_PREFIXES
+
+    if not is_protected():
+        return False
+    name = str(scope or "").split(":", 1)[-1]
+    return name.startswith(EXPORTER_PLUGIN_PREFIXES)
+
+
+@contextmanager
+def protected_chat(session_db: Any, session_id: Any) -> Iterator[None]:
+    """Run a block (a gateway hook fired outside any turn) as a protected session when
+    the chat's session record says so: no model call and no scoped egress leaves."""
+    hit = False
+    try:
+        hit = bool(session_id) and session_db is not None and \
+            session_db.session_is_protected(session_id) is True
+    except Exception:
+        hit = True  # cannot tell: fail closed
+    if not hit:
+        yield
+        return
+    token = _SESSION.set(EgressSession(None, None, protected=True))
+    try:
+        yield
+    finally:
+        reset(token)
+
+
+def reset_for_new_session(agent: Any) -> None:
+    """A genuinely new session (CLI ``/new``, ``/resume`` to another one) starts
+    unflagged; the next turn re-reads the record and rescans the history."""
+    if agent is None:
+        return
+    agent._protected_session = False
+    agent._protected_checked_sid = None
+    agent._protected_persisted_sid = None
+    cfg = getattr(agent, "_session_init_model_config", None)
+    if isinstance(cfg, dict):
+        cfg.pop("_protected", None)
 
 
 # ── the egress check ─────────────────────────────────────────────────────────
@@ -507,6 +564,26 @@ def _looks_like_model_request(path: str, body: Optional[dict], headers: Any) -> 
     return "anthropic-version" in keys or "x-stainless-lang" in keys
 
 
+# Hosts a provider's SDK talks to when the primary is configured without an
+# endpoint. Any other provider must name its endpoint, or nothing goes out.
+_PROVIDER_HOST_SUFFIXES = {
+    "bedrock": (".amazonaws.com",),
+    "anthropic": ("api.anthropic.com",),
+    "openai": ("api.openai.com",),
+    "openrouter": ("openrouter.ai",),
+    "gemini": ("generativelanguage.googleapis.com",),
+    "google": ("generativelanguage.googleapis.com",),
+}
+
+
+def _provider_host_matches(primary: dict, parts: Any) -> bool:
+    if not parts or not parts[1]:
+        return False
+    suffixes = _PROVIDER_HOST_SUFFIXES.get(str(primary.get("provider") or "").strip().lower())
+    return bool(suffixes) and any(parts[1] == s.lstrip(".") or parts[1].endswith(s)
+                                  for s in suffixes)
+
+
 def _primary_bases(primary: dict) -> list:
     return [b for b in (primary.get("base_url"), primary.get("anthropic_base_url")) if b]
 
@@ -538,8 +615,9 @@ def check_request(url: Any, body: Any = None, headers: Any = None, *, kind: str 
     if _looks_like_model_request(path, data, headers):
         if primary.get("model") and on_primary_endpoint and _model_matches(primary, path, data):
             return
-        if primary.get("model") and not _primary_bases(primary) and _model_matches(primary, path, data):
-            return  # primary configured without an endpoint: the model is all we can match
+        if (primary.get("model") and not _primary_bases(primary)
+                and _provider_host_matches(primary, parts) and _model_matches(primary, path, data)):
+            return  # primary configured without an endpoint: its provider's own hosts only
         logger.warning("protected session: refused a %s model request off the primary", kind)
         raise ProtectedEgressBlocked("model")
     scope = _SCOPE.get()
@@ -547,6 +625,8 @@ def check_request(url: Any, body: Any = None, headers: Any = None, *, kind: str 
         return  # platform delivery, startup, sync: not tool or plugin egress
     if on_primary_endpoint or (parts and _is_loopback(parts[1])) or _scope_allowed(scope):
         return
+    if scope == DELIVERY_SCOPE and parts and parts[1] in _DELIVERY_HOSTS:
+        return  # handed to the gateway loop: only the hosts it delivers to anyway
     logger.warning("protected session: refused outbound %s request from %s", kind, scope)
     raise ProtectedEgressBlocked(scope)
 
@@ -578,6 +658,7 @@ def _install_httpx() -> None:
         return orig_send(self, request, *args, **kwargs)
 
     async def async_send(self, request, *args, **kwargs):
+        _note_delivery_host(request.url)
         if _SESSION.get() is not None:
             check_request(request.url, _httpx_body(request), request.headers, kind="httpx")
         return await orig_async_send(self, request, *args, **kwargs)
@@ -631,6 +712,7 @@ def _install_aiohttp() -> None:
     orig = aiohttp.ClientSession._request
 
     async def _request(self, method, str_or_url, *args, **kwargs):
+        _note_delivery_host(str_or_url)
         if _SESSION.get() is not None:
             body = kwargs.get("json")
             if body is None:
@@ -718,6 +800,28 @@ def _install_thread_propagation() -> None:
 # from a tool thread (a progress line, a clarify question, an approval prompt) is
 # delivery, not the tool's own egress, so it leaves the tool's scope behind.
 _DELIVERY_LOOPS: "weakref.WeakSet" = None  # type: ignore[assignment]
+# The scope such work runs in, and the hosts the delivery loop itself has sent to
+# outside any scope (the platforms' own APIs). Delivery-scoped requests may go to
+# those hosts only.
+DELIVERY_SCOPE = "delivery"
+_DELIVERY_HOSTS: set = set()
+
+
+def _note_delivery_host(url: Any) -> None:
+    """Learn a host the delivery loop sends to on its own (outside any scope)."""
+    if _DELIVERY_LOOPS is None or _SCOPE.get() is not None:
+        return
+    try:
+        import asyncio
+
+        loop = asyncio._get_running_loop()
+    except Exception:
+        return
+    if loop is None or loop not in _DELIVERY_LOOPS:
+        return
+    parts = _split(url)
+    if parts and parts[1] and len(_DELIVERY_HOSTS) < 4096:
+        _DELIVERY_HOSTS.add(parts[1])
 
 
 def register_delivery_loop(loop: Any) -> None:
@@ -740,7 +844,7 @@ def _install_delivery_hop() -> None:
         if (context is None and _SCOPE.get() is not None and _DELIVERY_LOOPS is not None
                 and self in _DELIVERY_LOOPS):
             context = contextvars.copy_context()
-            context.run(_SCOPE.set, None)
+            context.run(_SCOPE.set, DELIVERY_SCOPE)
         return orig(self, callback, *args, context=context)
 
     call_soon_threadsafe.__wrapped__ = orig  # type: ignore[attr-defined]

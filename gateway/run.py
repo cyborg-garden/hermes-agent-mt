@@ -9810,12 +9810,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not is_internal:
             try:
                 from hermes_cli.plugins import invoke_hook as _invoke_hook
-                _hook_results = _invoke_hook(
-                    "pre_gateway_dispatch",
-                    event=event,
-                    gateway=self,
-                    session_store=self.session_store,
-                )
+                from agent.protected_session import protected_chat as _protected_chat
+                # Fired outside any turn: a chat whose session is protected runs the
+                # hook as a protected session (agent/protected_session.py).
+                _chat_sid = None
+                try:
+                    _chat_entry = self.session_store._entries.get(
+                        self._session_key_for_source(event.source))
+                    _chat_sid = getattr(_chat_entry, "session_id", None)
+                except Exception:
+                    _chat_sid = None
+                with _protected_chat(getattr(self._session_db, "_db", self._session_db), _chat_sid):
+                    _hook_results = _invoke_hook(
+                        "pre_gateway_dispatch",
+                        event=event,
+                        gateway=self,
+                        session_store=self.session_store,
+                    )
             except Exception as _hook_exc:
                 logger.warning("pre_gateway_dispatch invocation failed: %s", _hook_exc)
                 _hook_results = []

@@ -1938,10 +1938,13 @@ class PluginManager:
         results: List[Any] = []
         # Each callback runs in its plugin's egress scope: in a protected session
         # its outbound requests off the primary are refused (agent/protected_session.py).
-        from agent.protected_session import egress_scope, plugin_scope_name
+        from agent.protected_session import egress_scope, plugin_scope_name, skip_plugin_hook
         for cb in callbacks:
             try:
-                with egress_scope(plugin_scope_name(cb)):
+                _scope = plugin_scope_name(cb)
+                if skip_plugin_hook(_scope):
+                    continue  # an exporter never receives a protected session's payload
+                with egress_scope(_scope):
                     ret = cb(**kwargs)
                 if ret is not None:
                     results.append(ret)
