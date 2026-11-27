@@ -1173,9 +1173,9 @@ def handle_function_call(
         from agent.protected_session import (
             egress_scope as _egress_scope,
             refuse_tool_if_protected as _refuse_tool_if_protected,
-            scan_running as _scan_running,
+            scan_tool_result as _scan_tool_result,
         )
-        _protected_refusal = _refuse_tool_if_protected(function_name)
+        _protected_refusal = _refuse_tool_if_protected(function_name, function_args)
         if _protected_refusal is not None:
             return json.dumps({"error": _protected_refusal}, ensure_ascii=False)
 
@@ -1304,7 +1304,7 @@ def handle_function_call(
                 )
             # A transcript arriving in a tool result marks the session before any
             # post-tool hook or the next request can see it.
-            _scan_running(result, source="tool_result")
+            _scan_tool_result(function_name, result)
         finally:
             if _approval_tokens is not None and reset_current_observability_context is not None:
                 try:

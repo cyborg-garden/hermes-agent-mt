@@ -49,9 +49,35 @@ ALLOWED_SCOPES = frozenset({
 # opened at connect time) are refused too: the hooks cannot see their traffic.
 BLOCKED_TOOLS = frozenset({
     "text_to_speech", "image_generate", "video_generate", "web_search", "web_extract",
-    "x_search", "terminal", "execute_code",
+    "x_search", "terminal", "execute_code", "send_message",
 })
 BLOCKED_TOOL_PREFIXES = ("browser_", "mcp_")
+
+# Allowed tools that take a URL the model chooses and fetch it in a subprocess:
+# in a protected session only a URL the person sent may be fetched. Tool name ->
+# argument name. A local attachment path is unaffected.
+URL_ARGUMENT_TOOLS = {"transcribe_recording": "url"}
+
+# Tools whose results carry Papa Reo text with no footer in some modes (the
+# transcribe tool's compliant mode returns ``engine: papareo`` plus ``text``).
+TRANSCRIPT_TOOLS = frozenset({"transcribe_recording"})
+
+# Scopes that may reach loopback in a protected session. Loopback is not safe by
+# default: signal-cli, local bridges and VPN proxies on 127.0.0.1 relay outward.
+LOOPBACK_SCOPES = frozenset({
+    "tool:transcribe_recording", "plugin:papareo_transcribe",
+})
+
+# The chat platforms' own API hosts (and subdomains). Work a tool hands to the
+# gateway loop may reach only these, loopback, and the primary. Self-hosted
+# platforms (Matrix, Mattermost, ...) add theirs with routing.protected_delivery_hosts.
+DELIVERY_HOSTS = (
+    "discord.com", "discordapp.com", "discord.gg", "discordapp.net", "discord.media",
+    "api.telegram.org", "slack.com", "slack-edge.com", "graph.facebook.com",
+    "graph.microsoft.com", "botframework.com", "api.line.me", "api-data.line.me",
+    "open.feishu.cn", "open.larksuite.com", "qyapi.weixin.qq.com", "api.weixin.qq.com",
+    "oapi.dingtalk.com", "api.dingtalk.com", "chat.googleapis.com", "api.twilio.com",
+)
 
 # Plugins whose hooks export what they receive (traces, telemetry), usually from a
 # long-lived sender thread started before any session: in a protected session

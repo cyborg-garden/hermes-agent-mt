@@ -186,14 +186,21 @@ def test_requests_from_a_tool_scope_is_refused(protected):
     assert sent == []
 
 
-def test_requests_outside_a_scope_loopback_and_allowed_scopes_go_through(protected):
+def test_requests_outside_a_scope_and_allowed_scopes_go_through(protected):
     sent = []
     _requests_post("https://chat.example/send", sent)                     # no scope
-    with ps.egress_scope("tool:some_tool"):
-        _requests_post("http://127.0.0.1:5000/local", sent)              # loopback
     with ps.egress_scope("tool:transcribe_recording"):
         _requests_post("https://asr.example/upload", sent)               # the source
+        _requests_post("http://127.0.0.1:5000/vault", sent)              # its local vault
     assert len(sent) == 3
+
+
+def test_loopback_is_refused_for_ordinary_tool_scopes(protected):
+    """signal-cli, local bridges and VPN proxies on loopback relay outward."""
+    sent = []
+    with ps.egress_scope("tool:some_tool"), pytest.raises(ps.ProtectedEgressBlocked):
+        _requests_post("http://127.0.0.1:8080/api/v1/rpc", sent)
+    assert sent == []
 
 
 def test_configured_allow_list_extends_allowed_scopes(protected):

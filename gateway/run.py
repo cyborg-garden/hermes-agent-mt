@@ -14430,6 +14430,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # send_multiple_images (Telegram sendPhoto recompresses to ~1280px).
             force_document_attachments = "[[as_document]]" in response
 
+            # A protected session never fetches an image URL the model wrote.
+            from agent import protected_session as _ps
+            if _ps.is_protected():
+                response = _ps.defang_images(response)
+
             from gateway.platforms.base import BasePlatformAdapter, should_send_media_as_audio
 
             media_files, cleaned = adapter.extract_media(response)
@@ -18814,7 +18819,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
         finally:
             _already_sent_media = self.__dict__.setdefault("_interim_media_sent", {}).pop(_media_key, None)
-        return _strip_already_sent_media(result, _already_sent_media)
+        result = _strip_already_sent_media(result, _already_sent_media)
+        # A protected session's reply never makes the gateway fetch an image URL
+        # the model wrote: image tags become plain alt text (agent/protected_session.py).
+        try:
+            from agent import protected_session as _ps
+            if isinstance(result, dict) and isinstance(result.get("final_response"), str):
+                _db = getattr(self, "_session_db", None)
+                _db = getattr(_db, "_db", _db)
+                if any(_ps.session_id_is_protected(_sid, _db)
+                       for _sid in {session_id, result.get("session_id")} if isinstance(_sid, str)):
+                    result["final_response"] = _ps.defang_images(result["final_response"])
+        except Exception:
+            logger.debug("protected reply image check failed", exc_info=True)
+        return result
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
         """Resolve the profile name for an inbound source via configured routes.

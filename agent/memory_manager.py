@@ -471,12 +471,31 @@ class MemoryManager:
         except Exception:
             return True
 
-    def _content_providers(self) -> List[MemoryProvider]:
+    def _content_providers(self, protected: Optional[bool] = None) -> List[MemoryProvider]:
         """Providers that may receive conversation content. A protected session's
-        text never leaves for an external provider: only the local built-in one."""
-        if self._protected():
+        text never leaves for an external provider: only the local built-in one.
+        ``protected`` is a state captured earlier (queued work for an old session)."""
+        if protected is True or (protected is None and self._protected()):
             return [p for p in self._providers if p.name == "builtin"]
         return list(self._providers)
+
+    def _protected_history(self, messages: Any, session_id: Any = "") -> bool:
+        """Whether a history (and the session it belonged to) is protected: the live
+        flag, the session's id in the protected registry or record, or a marker in
+        the messages themselves. Captured when work is queued, not when it runs."""
+        try:
+            from agent import protected_session as _ps
+
+            if self._protected():
+                return True
+            owner = getattr(self, "_protected_owner", None)
+            agent = owner() if callable(owner) else None
+            if session_id and _ps.session_id_is_protected(
+                    session_id, getattr(agent, "_session_db", None)):
+                return True
+            return bool(messages) and _ps.text_has_marker(*messages, agent=agent)
+        except Exception:
+            return True
 
     @property
     def providers(self) -> List[MemoryProvider]:
@@ -876,11 +895,14 @@ class MemoryManager:
                     provider.name, e,
                 )
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+    def on_session_end(self, messages: List[Dict[str, Any]], *,
+                       protected: Optional[bool] = None) -> None:
         """Notify all providers of session end."""
+        if protected is None:
+            protected = self._protected_history(messages)
         # Providers write to long-term memory, where chatter would become fact.
         messages = without_observed_chatter(messages)
-        for provider in self._content_providers():
+        for provider in self._content_providers(protected):
             try:
                 provider.on_session_end(messages)
             except Exception as e:
@@ -921,10 +943,13 @@ class MemoryManager:
         if not self._providers:
             return
         snapshot = list(messages or [])
+        # The old session's protection is decided now, with its history: by the
+        # time the worker runs, /new may already have cleared the live flag.
+        protected = self._protected_history(snapshot, parent_session_id)
 
         def _run() -> None:
             try:
-                self.on_session_end(snapshot)
+                self.on_session_end(snapshot, protected=protected)
             except Exception as e:  # pragma: no cover - on_session_end guards per-provider
                 logger.warning("Session-boundary extraction failed: %s", e)
             try:

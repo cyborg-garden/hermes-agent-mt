@@ -40,6 +40,7 @@ import contextvars
 import ipaddress
 import json
 import logging
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -171,6 +172,8 @@ def mark_protected(agent: Any, source: str = "scan") -> None:
     except Exception:
         pass
     sid = getattr(agent, "session_id", None)
+    if sid:
+        _PROTECTED_SIDS.add(sid)
     if not already or getattr(agent, "_protected_persisted_sid", None) != sid:
         _persist(agent, sid)
     if not already:
@@ -208,6 +211,7 @@ def load_persisted(agent: Any) -> bool:
     if hit:
         agent._protected_session = True
         agent._protected_persisted_sid = sid
+        _PROTECTED_SIDS.add(sid)
         logger.info("protected session: flag restored from the session record (session=%s)", sid)
     return hit
 
@@ -368,19 +372,91 @@ def plugin_scope_name(callback: Any) -> str:
     return f"plugin:{parts[0] if parts and parts[0] else 'unknown'}"
 
 
-def refuse_tool_if_protected(tool_name: str) -> Optional[str]:
+def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
     """The generic refusal for a tool that cannot run in a protected session, else None."""
-    from agent.protected_egress_allowlist import BLOCKED_TOOLS, BLOCKED_TOOL_PREFIXES
+    from agent.protected_egress_allowlist import (
+        BLOCKED_TOOLS, BLOCKED_TOOL_PREFIXES, URL_ARGUMENT_TOOLS,
+    )
 
     if not is_protected():
         return None
     name = str(tool_name or "")
+    if name in URL_ARGUMENT_TOOLS and isinstance(args, dict):
+        url = str(args.get(URL_ARGUMENT_TOOLS[name]) or "").strip()
+        if url and not _url_from_the_person(url):
+            # An allowed tool fetching a URL the model wrote (in a subprocess the
+            # hooks never see): only a link the person sent may be fetched.
+            logger.info("protected session: refused %s fetching a model-chosen URL", name)
+            return PROTECTED_EGRESS_MESSAGE
     if _scope_allowed(f"tool:{name}"):
         return None
     if name in BLOCKED_TOOLS or name.startswith(BLOCKED_TOOL_PREFIXES) or _is_mcp_tool(name):
         logger.info("protected session: refused tool %s", name)
         return PROTECTED_EGRESS_MESSAGE
     return None
+
+
+def _url_from_the_person(url: str) -> bool:
+    """True when ``url`` appears verbatim in a message the person sent (a user
+    message of the running session), not one the model or a tool produced."""
+    sess = _SESSION.get()
+    agent = sess.agent if sess is not None else None
+    if agent is None:
+        return False
+    try:
+        from agent.routing_override import _content_text
+
+        for m in getattr(agent, "_session_messages", None) or []:
+            if isinstance(m, dict) and m.get("role") == "user" and url in _content_text(m.get("content")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def scan_tool_result(tool_name: str, result: Any) -> None:
+    """Mark the running session from a tool's result: the marker scan, plus Papa
+    Reo text returned without its footer (the transcribe tool's compliant mode:
+    ``engine`` papareo with a ``text`` field), keyed on the tool and result shape."""
+    from agent.protected_egress_allowlist import TRANSCRIPT_TOOLS
+
+    scan_running(result, source="tool_result")
+    if str(tool_name or "") not in TRANSCRIPT_TOOLS:
+        return
+    try:
+        data = json.loads(result) if isinstance(result, str) else result
+    except (TypeError, ValueError):
+        return
+    if isinstance(data, dict) and str(data.get("engine") or "").lower() == "papareo" \
+            and isinstance(data.get("text"), str) and data["text"].strip():
+        sess = _SESSION.get()
+        if sess is not None:
+            sess.mark("transcript_result")
+
+
+def defang_images(text: Any) -> Any:
+    """Image tags in a reply become plain alt text, so nothing fetches a URL the
+    model wrote (the platform would download it, and preview the link)."""
+    if not isinstance(text, str) or ("![" not in text and "<img" not in text.lower()):
+        return text
+    text = re.sub(r"!\[([^\]]*)\]\((https?://[^\s)]+)\)",
+                  lambda m: f"[image: {m.group(1)}]" if m.group(1) else "[image]", text)
+    return re.sub(r"<img\s[^>]*>\s*(?:</img>)?", "[image]", text, flags=re.IGNORECASE)
+
+
+_PROTECTED_SIDS: set = set()
+
+
+def session_id_is_protected(session_id: Any, session_db: Any = None) -> bool:
+    """True when the session (by id) has been marked in this process or its record."""
+    if not session_id:
+        return False
+    if session_id in _PROTECTED_SIDS:
+        return True
+    try:
+        return session_db is not None and session_db.session_is_protected(session_id) is True
+    except Exception:
+        return True
 
 
 def _is_mcp_tool(name: str) -> bool:
@@ -432,6 +508,13 @@ def reset_for_new_session(agent: Any) -> None:
     unflagged; the next turn re-reads the record and rescans the history."""
     if agent is None:
         return
+    if getattr(agent, "_protected_session", False) is True:
+        # Work still queued for the old session (end-of-session memory extraction)
+        # stays protected: the old id is remembered here and in the registry.
+        for sid in (getattr(agent, "_protected_persisted_sid", None), getattr(agent, "session_id", None)):
+            if sid:
+                _PROTECTED_SIDS.add(sid)
+        agent._protected_was_protected = True
     agent._protected_session = False
     agent._protected_checked_sid = None
     agent._protected_persisted_sid = None
@@ -566,22 +649,35 @@ def _looks_like_model_request(path: str, body: Optional[dict], headers: Any) -> 
 
 # Hosts a provider's SDK talks to when the primary is configured without an
 # endpoint. Any other provider must name its endpoint, or nothing goes out.
-_PROVIDER_HOST_SUFFIXES = {
-    "bedrock": (".amazonaws.com",),
+_PROVIDER_HOSTS = {
     "anthropic": ("api.anthropic.com",),
     "openai": ("api.openai.com",),
     "openrouter": ("openrouter.ai",),
     "gemini": ("generativelanguage.googleapis.com",),
     "google": ("generativelanguage.googleapis.com",),
 }
+# Bedrock runtime's regional endpoints only, never any amazonaws.com host.
+_BEDROCK_RUNTIME_HOST = re.compile(r"^bedrock-runtime(?:-fips)?\.[a-z]{2}(?:-[a-z]+)+-\d\.amazonaws\.com$")
+
+
+def host_matches(host: str, allowed: Any) -> bool:
+    """``host`` is one of ``allowed`` or a proper subdomain of one (a dot boundary:
+    ``openrouter.ai`` never matches ``evilopenrouter.ai``)."""
+    h = str(host or "").lower().rstrip(".")
+    for a in allowed or ():
+        a = str(a or "").lower().strip().lstrip(".").rstrip(".")
+        if a and (h == a or h.endswith("." + a)):
+            return True
+    return False
 
 
 def _provider_host_matches(primary: dict, parts: Any) -> bool:
     if not parts or not parts[1]:
         return False
-    suffixes = _PROVIDER_HOST_SUFFIXES.get(str(primary.get("provider") or "").strip().lower())
-    return bool(suffixes) and any(parts[1] == s.lstrip(".") or parts[1].endswith(s)
-                                  for s in suffixes)
+    provider = str(primary.get("provider") or "").strip().lower()
+    if provider == "bedrock":
+        return bool(_BEDROCK_RUNTIME_HOST.match(parts[1]))
+    return host_matches(parts[1], _PROVIDER_HOSTS.get(provider, ()))
 
 
 def _primary_bases(primary: dict) -> list:
@@ -621,12 +717,19 @@ def check_request(url: Any, body: Any = None, headers: Any = None, *, kind: str 
         logger.warning("protected session: refused a %s model request off the primary", kind)
         raise ProtectedEgressBlocked("model")
     scope = _SCOPE.get()
+    if not scope and _on_delivery_loop():
+        # Unscoped work on the gateway loop in a protected session (an interim
+        # reply's media, a callback the agent thread scheduled): delivery rules.
+        scope = DELIVERY_SCOPE
     if not scope:
         return  # platform delivery, startup, sync: not tool or plugin egress
-    if on_primary_endpoint or (parts and _is_loopback(parts[1])) or _scope_allowed(scope):
+    if on_primary_endpoint or _scope_allowed(scope):
         return
-    if scope == DELIVERY_SCOPE and parts and parts[1] in _DELIVERY_HOSTS:
-        return  # handed to the gateway loop: only the hosts it delivers to anyway
+    loopback = bool(parts) and _is_loopback(parts[1])
+    if loopback and (scope == DELIVERY_SCOPE or _loopback_allowed(scope)):
+        return  # a local service this scope needs (signal-cli for delivery, a vault)
+    if scope == DELIVERY_SCOPE and parts and host_matches(parts[1], delivery_hosts()):
+        return  # handed to the gateway loop: only the platforms' own API hosts
     logger.warning("protected session: refused outbound %s request from %s", kind, scope)
     raise ProtectedEgressBlocked(scope)
 
@@ -658,7 +761,6 @@ def _install_httpx() -> None:
         return orig_send(self, request, *args, **kwargs)
 
     async def async_send(self, request, *args, **kwargs):
-        _note_delivery_host(request.url)
         if _SESSION.get() is not None:
             check_request(request.url, _httpx_body(request), request.headers, kind="httpx")
         return await orig_async_send(self, request, *args, **kwargs)
@@ -712,7 +814,6 @@ def _install_aiohttp() -> None:
     orig = aiohttp.ClientSession._request
 
     async def _request(self, method, str_or_url, *args, **kwargs):
-        _note_delivery_host(str_or_url)
         if _SESSION.get() is not None:
             body = kwargs.get("json")
             if body is None:
@@ -800,28 +901,46 @@ def _install_thread_propagation() -> None:
 # from a tool thread (a progress line, a clarify question, an approval prompt) is
 # delivery, not the tool's own egress, so it leaves the tool's scope behind.
 _DELIVERY_LOOPS: "weakref.WeakSet" = None  # type: ignore[assignment]
-# The scope such work runs in, and the hosts the delivery loop itself has sent to
-# outside any scope (the platforms' own APIs). Delivery-scoped requests may go to
-# those hosts only.
+# The scope such work runs in. It may reach only the platforms' own API hosts
+# (a fixed list in agent/protected_egress_allowlist.py, plus
+# ``routing.protected_delivery_hosts`` for self-hosted ones) and loopback.
 DELIVERY_SCOPE = "delivery"
-_DELIVERY_HOSTS: set = set()
 
 
-def _note_delivery_host(url: Any) -> None:
-    """Learn a host the delivery loop sends to on its own (outside any scope)."""
-    if _DELIVERY_LOOPS is None or _SCOPE.get() is not None:
-        return
+def delivery_hosts() -> tuple:
+    from agent.protected_egress_allowlist import DELIVERY_HOSTS
+
+    extra: list = []
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        routing = (load_config_readonly() or {}).get("routing") or {}
+        cfg = routing.get("protected_delivery_hosts") if isinstance(routing, dict) else None
+        if isinstance(cfg, str):
+            cfg = [cfg]
+        if isinstance(cfg, (list, tuple)):
+            extra = [str(h) for h in cfg]
+    except Exception:
+        pass
+    return tuple(DELIVERY_HOSTS) + tuple(extra)
+
+
+def _on_delivery_loop() -> bool:
+    if _DELIVERY_LOOPS is None:
+        return False
     try:
         import asyncio
 
         loop = asyncio._get_running_loop()
     except Exception:
-        return
-    if loop is None or loop not in _DELIVERY_LOOPS:
-        return
-    parts = _split(url)
-    if parts and parts[1] and len(_DELIVERY_HOSTS) < 4096:
-        _DELIVERY_HOSTS.add(parts[1])
+        return False
+    return loop is not None and loop in _DELIVERY_LOOPS
+
+
+def _loopback_allowed(scope: str) -> bool:
+    from agent.protected_egress_allowlist import LOOPBACK_SCOPES
+
+    return scope in LOOPBACK_SCOPES
 
 
 def register_delivery_loop(loop: Any) -> None:

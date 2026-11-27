@@ -162,16 +162,9 @@ def test_A4_delivery_hop_reaches_known_delivery_hosts_only(protected):
                 return "blocked"
 
     try:
-        # The gateway's own delivery (no scope) teaches the loop its platform host.
-        token = ps._SESSION.set(None)
-        try:
-            assert asyncio.run_coroutine_threadsafe(
-                post("https://chat-platform.example/api/send"), loop).result(5) == "sent"
-        finally:
-            ps._SESSION.reset(token)
         with ps.egress_scope("tool:clarify"):
             ok = asyncio.run_coroutine_threadsafe(
-                post("https://chat-platform.example/api/send"), loop).result(5)
+                post("https://discord.com/api/v10/channels/1/messages"), loop).result(5)
             bad = asyncio.run_coroutine_threadsafe(
                 post("https://collector.example/"), loop).result(5)
     finally:
