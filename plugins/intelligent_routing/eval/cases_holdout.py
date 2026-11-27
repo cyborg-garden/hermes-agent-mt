@@ -18,7 +18,7 @@ HOLDOUT_TURN: list[tuple[str, str, str, dict]] = [
     (TURN, C, "find the config file for the ops agent", {}),
     (TURN, C, "check if port 8787 is listening", {}),
     (TURN, C, "print the contents of notes/todo.md", {}),
-    (TURN, C, "extract the phone numbers from this: call 021 555 0101 or 09 555 0199", {}),
+    (TURN, C, "extract the phone numbers from the contact list I pasted above", {}),
     (TURN, C, "format this as a bullet list: eggs, flour, milk", {}),
     (TURN, C, "convert 3pm NZDT to UTC", {}),
     (TURN, C, "sort these by size: 3MB, 1GB, 20KB", {}),
