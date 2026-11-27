@@ -94,12 +94,10 @@ def test_1_model_chosen_url_is_refused_in_a_protected_session(protected):
     assert out == ps.PROTECTED_EGRESS_MESSAGE
 
 
-def test_1_a_url_the_person_sent_and_a_local_path_still_work(protected):
-    link = "https://share.example/voice-note.m4a"
-    protected._session_messages = [{"role": "user", "content": f"please transcribe {link}"}]
-    assert ps.refuse_tool_if_protected("transcribe_recording", {"url": link}) is None
-    assert ps.refuse_tool_if_protected("transcribe_recording",
-                                       {"path": "/cache/audio/note.ogg"}) is None
+def test_1_a_recording_the_gateway_downloaded_still_works(protected):
+    from gateway.platforms.base import get_audio_cache_dir
+    path = str(get_audio_cache_dir() / "note.ogg")
+    assert ps.refuse_tool_if_protected("transcribe_recording", {"path": path}) is None
 
 
 def test_1_a_url_only_in_a_tool_or_assistant_message_is_refused(protected):

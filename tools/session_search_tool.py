@@ -639,7 +639,49 @@ def _discover(
     }, ensure_ascii=False)
 
 
-def session_search(
+def session_search(*args: Any, **kwargs: Any) -> str:
+    """See :func:`_session_search`. From a session that is not protected, a
+    conversation recorded as protected (agent/protected_session.py) is never
+    returned: it is dropped from listings and refused when read directly."""
+    db = kwargs.get("db")
+    if db is None:
+        try:
+            from hermes_state import SessionDB
+            db = kwargs["db"] = SessionDB()
+        except Exception:
+            db = None
+    out = _session_search(*args, **kwargs)
+    try:
+        from agent.protected_session import is_protected
+        if is_protected() or db is None or not hasattr(db, "session_is_protected"):
+            return out
+        data = json.loads(out)
+    except Exception:
+        return out
+    if not isinstance(data, dict):
+        return out
+
+    def _hidden(sid: Any) -> bool:
+        if not isinstance(sid, str) or not sid:
+            return False
+        try:
+            return db.session_is_protected(sid) is True  # the record, not this process
+        except Exception:
+            return True
+
+    if _hidden(data.get("session_id")):
+        return tool_error("That conversation holds protected text and can't be shown here.",
+                          success=False)
+    if isinstance(data.get("results"), list):
+        kept = [r for r in data["results"]
+                if not (isinstance(r, dict) and _hidden(r.get("session_id")))]
+        if len(kept) != len(data["results"]):
+            data["results"] = kept
+            return json.dumps(data, ensure_ascii=False)
+    return out
+
+
+def _session_search(
     query: str = "",
     role_filter: str = None,
     limit: int = 3,

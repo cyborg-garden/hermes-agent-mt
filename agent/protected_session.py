@@ -172,8 +172,7 @@ def mark_protected(agent: Any, source: str = "scan") -> None:
     except Exception:
         pass
     sid = getattr(agent, "session_id", None)
-    if sid:
-        _PROTECTED_SIDS.add(sid)
+    _note_protected_sid(agent, sid)
     if not already or getattr(agent, "_protected_persisted_sid", None) != sid:
         _persist(agent, sid)
     if not already:
@@ -211,7 +210,7 @@ def load_persisted(agent: Any) -> bool:
     if hit:
         agent._protected_session = True
         agent._protected_persisted_sid = sid
-        _PROTECTED_SIDS.add(sid)
+        _note_protected_sid(agent, sid)
         logger.info("protected session: flag restored from the session record (session=%s)", sid)
     return hit
 
@@ -314,8 +313,25 @@ def inherit(child: Any, parent: Any) -> None:
 
 # ── the running session ──────────────────────────────────────────────────────
 
+def _note_protected_sid(agent: Any, sid: Any) -> None:
+    """Remember a session id the agent was protected under (in the registry and on
+    the agent), so work queued for it later stays protected after /new."""
+    if not sid:
+        return
+    _PROTECTED_SIDS.add(sid)
+    try:
+        sids = getattr(agent, "_protected_sids", None)
+        if not isinstance(sids, set):
+            sids = agent._protected_sids = set()
+        sids.add(sid)
+    except Exception:
+        pass
+
+
 def activate(agent: Any) -> contextvars.Token:
     """Make ``agent`` the running session in this context. Returns the reset token."""
+    if agent is not None and getattr(agent, "_protected_session", False) is True:
+        _note_protected_sid(agent, getattr(agent, "session_id", None))
     return _SESSION.set(EgressSession(agent, configured_primary(agent)))
 
 
@@ -381,13 +397,10 @@ def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
     if not is_protected():
         return None
     name = str(tool_name or "")
-    if name in URL_ARGUMENT_TOOLS and isinstance(args, dict):
-        url = str(args.get(URL_ARGUMENT_TOOLS[name]) or "").strip()
-        if url and not _url_from_the_person(url):
-            # An allowed tool fetching a URL the model wrote (in a subprocess the
-            # hooks never see): only a link the person sent may be fetched.
-            logger.info("protected session: refused %s fetching a model-chosen URL", name)
-            return PROTECTED_EGRESS_MESSAGE
+    if name in URL_ARGUMENT_TOOLS:
+        refusal = _refuse_transcriber_input(name, args if isinstance(args, dict) else {})
+        if refusal is not None:
+            return refusal
     if _scope_allowed(f"tool:{name}"):
         return None
     if name in BLOCKED_TOOLS or name.startswith(BLOCKED_TOOL_PREFIXES) or _is_mcp_tool(name):
@@ -396,22 +409,48 @@ def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
     return None
 
 
-def _url_from_the_person(url: str) -> bool:
-    """True when ``url`` appears verbatim in a message the person sent (a user
-    message of the running session), not one the model or a tool produced."""
+def _refuse_transcriber_input(name: str, args: dict) -> Optional[str]:
+    """In a protected session the transcription tool takes only a recording the
+    gateway itself downloaded: no URL (any text in history can be model-written:
+    a child's goal, a compression summary, a quoted bot reply), no other local
+    path, and no use from a delegated child."""
+    from agent.protected_egress_allowlist import URL_ARGUMENT_TOOLS
+
     sess = _SESSION.get()
     agent = sess.agent if sess is not None else None
-    if agent is None:
-        return False
-    try:
-        from agent.routing_override import _content_text
+    if agent is not None and (getattr(agent, "_delegate_depth", 0) or 0) > 0:
+        logger.info("protected session: refused %s in a delegated child", name)
+        return PROTECTED_EGRESS_MESSAGE
+    if str(args.get(URL_ARGUMENT_TOOLS[name]) or "").strip():
+        logger.info("protected session: refused %s fetching a URL", name)
+        return PROTECTED_EGRESS_MESSAGE
+    path = str(args.get("path") or "").strip()
+    if path and not _gateway_downloaded(path):
+        logger.info("protected session: refused %s on a path the gateway did not download", name)
+        return PROTECTED_EGRESS_MESSAGE
+    return None
 
-        for m in getattr(agent, "_session_messages", None) or []:
-            if isinstance(m, dict) and m.get("role") == "user" and url in _content_text(m.get("content")):
+
+def _gateway_downloaded(path: str) -> bool:
+    """True when ``path`` resolves inside the gateway's inbound attachment caches."""
+    import os
+
+    try:
+        from gateway.platforms import base as platform_base
+
+        roots = [platform_base.get_audio_cache_dir(), platform_base.get_document_cache_dir(),
+                 platform_base.get_video_cache_dir(), platform_base.get_image_cache_dir()]
+        real = os.path.realpath(path)
+        for root in roots:
+            r = os.path.realpath(str(root))
+            if real == r or real.startswith(r.rstrip(os.sep) + os.sep):
                 return True
     except Exception:
         return False
     return False
+
+
+LOCAL_TRANSCRIBE_ENGINES = frozenset({"local", "whisper"})
 
 
 def scan_tool_result(tool_name: str, result: Any) -> None:
@@ -427,8 +466,11 @@ def scan_tool_result(tool_name: str, result: Any) -> None:
         data = json.loads(result) if isinstance(result, str) else result
     except (TypeError, ValueError):
         return
-    if isinstance(data, dict) and str(data.get("engine") or "").lower() == "papareo" \
-            and isinstance(data.get("text"), str) and data["text"].strip():
+    # Any result carrying text, unless the engine is explicitly local: compliant
+    # mode returns Papa Reo text without its footer, also when the vault fails
+    # (engine "none").
+    if isinstance(data, dict) and isinstance(data.get("text"), str) and data["text"].strip() \
+            and str(data.get("engine") or "").strip().lower() not in LOCAL_TRANSCRIBE_ENGINES:
         sess = _SESSION.get()
         if sess is not None:
             sess.mark("transcript_result")
@@ -517,10 +559,9 @@ def reset_for_new_session(agent: Any) -> None:
         retired = getattr(agent, "_protected_retired_sids", None)
         if not isinstance(retired, set):
             retired = agent._protected_retired_sids = set()
-        for sid in (getattr(agent, "_protected_persisted_sid", None), getattr(agent, "session_id", None)):
-            if sid:
-                _PROTECTED_SIDS.add(sid)
-                retired.add(sid)
+        # The ids it was protected under, never the current session_id: by now
+        # that may already name the new session (/resume and /branch set it first).
+        retired |= set(getattr(agent, "_protected_sids", None) or ())
         agent._protected_was_protected = True
     agent._protected_session = False
     agent._protected_checked_sid = None
@@ -914,6 +955,28 @@ _DELIVERY_LOOPS: "weakref.WeakSet" = None  # type: ignore[assignment]
 DELIVERY_SCOPE = "delivery"
 
 
+_ADAPTER_DELIVERY_HOSTS: set = set()
+_ENDPOINT_CONFIG_KEYS = ("http_url", "homeserver", "homeserver_url", "url", "base_url",
+                         "server_url", "api_url", "endpoint", "host_url")
+
+
+def register_adapter_endpoints(config: Any) -> None:
+    """A chat adapter's own configured endpoint (Signal's signal-cli ``http_url``, a
+    Matrix homeserver, a Mattermost server) is a delivery host. Taken from adapter
+    configuration when the adapter is built, never from runtime traffic."""
+    try:
+        extra = getattr(config, "extra", None) or {}
+        values = [extra.get(k) for k in _ENDPOINT_CONFIG_KEYS]
+        values.append(getattr(config, "url", None))
+    except Exception:
+        return
+    for v in values:
+        if isinstance(v, str) and "://" in v:
+            parts = _split(v)
+            if parts and parts[1]:
+                _ADAPTER_DELIVERY_HOSTS.add(parts[1])
+
+
 def delivery_hosts() -> tuple:
     from agent.protected_egress_allowlist import DELIVERY_HOSTS
 
@@ -929,7 +992,7 @@ def delivery_hosts() -> tuple:
             extra = [str(h) for h in cfg]
     except Exception:
         pass
-    return tuple(DELIVERY_HOSTS) + tuple(extra)
+    return tuple(DELIVERY_HOSTS) + tuple(sorted(_ADAPTER_DELIVERY_HOSTS)) + tuple(extra)
 
 
 def _on_delivery_loop() -> bool:
