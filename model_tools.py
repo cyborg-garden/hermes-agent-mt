@@ -1080,6 +1080,12 @@ def handle_function_call(
         _ts_mod = None
 
     if _ts_mod is not None and _ts_mod.is_bridge_tool(function_name):
+        # Protected session: the bridge tools are not on the allowlist, so they
+        # are refused here, before the inline catalog read below.
+        from agent.protected_session import refuse_tool_if_protected as _refuse_bridge
+        _bridge_refusal = _refuse_bridge(function_name, function_args, task_id=task_id or "")
+        if _bridge_refusal is not None:
+            return json.dumps({"error": _bridge_refusal}, ensure_ascii=False)
         try:
             # Use skip_tool_search_assembly=True so we see the real catalog,
             # not the already-collapsed bridge-only list (the bridge would
@@ -1174,8 +1180,10 @@ def handle_function_call(
             egress_scope as _egress_scope,
             refuse_tool_if_protected as _refuse_tool_if_protected,
             scan_tool_result as _scan_tool_result,
+            tool_handler as _tool_handler,
         )
-        _protected_refusal = _refuse_tool_if_protected(function_name, function_args)
+        _protected_refusal = _refuse_tool_if_protected(function_name, function_args,
+                                                       task_id=task_id or "")
         if _protected_refusal is not None:
             return json.dumps({"error": _protected_refusal}, ensure_ascii=False)
 
@@ -1274,20 +1282,31 @@ def handle_function_call(
                 # the parent's tool set via the process-global.
                 sandbox_enabled = enabled_tools if enabled_tools is not None else _last_resolved_tool_names
                 def _dispatch(next_args: Dict[str, Any]) -> Any:
-                    return registry.dispatch(
-                        function_name, next_args,
-                        task_id=task_id,
-                        session_id=session_id,
-                        enabled_tools=sandbox_enabled,
-                    )
+                    _refusal = _refuse_tool_if_protected(function_name, next_args,
+                                                         task_id=task_id or "")
+                    if _refusal is not None:
+                        return json.dumps({"error": _refusal}, ensure_ascii=False)
+                    with _tool_handler(function_name):
+                        return registry.dispatch(
+                            function_name, next_args,
+                            task_id=task_id,
+                            session_id=session_id,
+                            enabled_tools=sandbox_enabled,
+                        )
             else:
                 def _dispatch(next_args: Dict[str, Any]) -> Any:
-                    return registry.dispatch(
-                        function_name, next_args,
-                        task_id=task_id,
-                        session_id=session_id,
-                        user_task=user_task,
-                    )
+                    # Middleware may have rewritten the arguments: check them again.
+                    _refusal = _refuse_tool_if_protected(function_name, next_args,
+                                                         task_id=task_id or "")
+                    if _refusal is not None:
+                        return json.dumps({"error": _refusal}, ensure_ascii=False)
+                    with _tool_handler(function_name):
+                        return registry.dispatch(
+                            function_name, next_args,
+                            task_id=task_id,
+                            session_id=session_id,
+                            user_task=user_task,
+                        )
             from hermes_cli.middleware import run_tool_execution_middleware
 
             with _egress_scope(f"tool:{function_name}"):

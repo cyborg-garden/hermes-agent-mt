@@ -11058,9 +11058,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 plugin_handler = get_plugin_command_handler(command.replace("_", "-"))
                 if plugin_handler:
                     user_args = event.get_command_args().strip()
-                    result = plugin_handler(user_args)
-                    if asyncio.iscoroutine(result):
-                        result = await result
+                    # Run outside any turn: a chat whose session is protected runs
+                    # the command as a protected session, so a tool it dispatches
+                    # meets the same allowlist (agent/protected_session.py).
+                    from agent.protected_session import protected_chat as _protected_chat
+                    _cmd_sid = None
+                    try:
+                        _cmd_entry = self.session_store._entries.get(
+                            self._session_key_for_source(event.source))
+                        _cmd_sid = getattr(_cmd_entry, "session_id", None)
+                        if not isinstance(_cmd_sid, str):
+                            _cmd_sid = None
+                    except Exception:
+                        _cmd_sid = None
+                    with _protected_chat(protected=await self._session_is_protected(_cmd_sid)):
+                        result = plugin_handler(user_args)
+                        if asyncio.iscoroutine(result):
+                            result = await result
                     return str(result) if result else None
             except Exception as e:
                 logger.warning("Plugin command dispatch failed: %s", e)
