@@ -237,7 +237,7 @@ class CompressionFacadeMixin:
             if _ps.is_protected(self) and protected_outcome(self, messages) == PROTECTED_BLOCKED:
                 logger.warning("Skipping compression: protected session and the primary is unreachable")
                 return messages, getattr(self, "_cached_system_prompt", None) or system_message
-            return self._compress_context_unguarded(messages, system_message, *args, **kwargs)
+            return CompressionFacadeMixin._compress_context_unguarded(self, messages, system_message, *args, **kwargs)
 
     def _compress_context_unguarded(
         self, messages: list, system_message: str, *, approx_tokens: int | None = None, task_id: str = "default",

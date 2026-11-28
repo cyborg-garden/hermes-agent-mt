@@ -472,6 +472,15 @@ class RuntimeSessionStore(RuntimeSessionCompressionMixin, RuntimeSessionLifecycl
         sid = self.scope['session_id']
         return [sid] if self.get_session_model_config_value(sid, key) is not None else []
 
+    def mark_session_protected(self, session_id):
+        # The sticky protected flag (agent/protected_session.py) on the worker's own row.
+        self.patch_session_model_config(session_id, {"_protected": True})
+
+    def session_is_protected(self, session_id, max_hops=64):
+        # A worker reads only its own row; another id is refused, which callers treat as protected.
+        self._session(session_id)
+        return self.get_session_model_config_value(session_id, "_protected") is True
+
     def update_system_prompt(self, session_id, system_prompt):
         self._session(session_id)
         self._apply('session.prompt', {'system_prompt': system_prompt})
