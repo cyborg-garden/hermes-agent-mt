@@ -343,6 +343,7 @@
     "plugins/platforms/discord/adapter.py agent.display.ToolPreview": 1,
     "plugins/platforms/discord/adapter.py agent.i18n.get_language": 1,
     "plugins/platforms/discord/adapter.py agent.i18n.t": 1,
+    "plugins/platforms/discord/adapter.py agent.protected_session.text_has_marker": 1,
     "plugins/platforms/discord/adapter.py agent.retry_utils.parse_retry_after_seconds": 1,
     "plugins/platforms/discord/adapter.py gateway.channel_directory.lookup_channel_type": 1,
     "plugins/platforms/discord/adapter.py gateway.pairing.PairingStore": 1,
