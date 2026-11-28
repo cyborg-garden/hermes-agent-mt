@@ -10,6 +10,7 @@ import copy
 import functools
 import logging
 import threading
+from typing import Any
 
 from agent.session_activity import ActivityProvenance
 
@@ -224,7 +225,21 @@ def _rebind_caller_session_context(agent) -> None:
 class CompressionFacadeMixin:
     """``_compress_context`` (see module docstring)."""
 
-    def _compress_context(
+    def _compress_context(self, messages: list, system_message: str, *args: Any, **kwargs: Any) -> tuple:
+        """Compression sends the transcript to a model. In a protected session that is the
+        configured primary only: the agent goes back to it first (a cheap route, a sticky
+        fallback), the summary call is pinned to it, and the egress hooks refuse anything
+        else. An unreachable primary skips compression. See ``_compress_context_unguarded``."""
+        from agent import protected_session as _ps
+        from agent.turn_protected_gate import PROTECTED_BLOCKED, protected_outcome
+        _ps.scan(self, messages, source="compression")
+        with _ps.session(self):
+            if _ps.is_protected(self) and protected_outcome(self, messages) == PROTECTED_BLOCKED:
+                logger.warning("Skipping compression: protected session and the primary is unreachable")
+                return messages, getattr(self, "_cached_system_prompt", None) or system_message
+            return self._compress_context_unguarded(messages, system_message, *args, **kwargs)
+
+    def _compress_context_unguarded(
         self, messages: list, system_message: str, *, approx_tokens: int | None = None, task_id: str = "default",
         focus_topic: str | None = None, force: bool = False, bypass_cooldown: bool = False,
         defer_context_engine_notification: bool = False, commit_fence=None, verbatim_tail: list | None = None,

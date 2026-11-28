@@ -141,6 +141,11 @@ class TurnFacadeMixin:
 
             # Keep the ContextVar scope local (agent tokens may be observed from another thread).
             # A host that owns this thread (Hermes Console) may cancel the turn cross-thread.
+            # The running protected-egress session (agent/protected_session.py) is set at
+            # turn start; it is scoped to the turn, so the caller's Context (a reused worker
+            # thread, a CLI main thread) gets its own value back afterwards.
+            from agent import protected_session as _protected_session
+            egress_token = _protected_session._SESSION.set(None)
             with bind_subagent_parent(self), scoped_runtime_main({}), track_in_interrupt_scope(self):
                 try:
                     if lease is not None:
@@ -157,6 +162,7 @@ class TurnFacadeMixin:
                         prelude=prelude,
                     )
                 finally:
+                    _protected_session.reset(egress_token)
                     # Post-loop relay/task finalization must not receive a late refresh interrupt;
                     # the interrupt clear itself waits for the thread join in the outer finally.
                     if lease is not None:

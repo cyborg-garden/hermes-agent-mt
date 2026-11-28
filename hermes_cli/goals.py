@@ -900,6 +900,7 @@ def judge_goal(
     background_processes: Optional[list[dict[str, Any]]] = None,
     contract: Optional[GoalContract] = None,
     active_delegations: int = 0,
+    session_id: Optional[str] = None,
 ) -> tuple[str, str, bool, Optional[dict[str, Any]], bool]:
     """Ask the auxiliary model whether the goal is satisfied.
 
@@ -911,6 +912,16 @@ def judge_goal(
         return "skipped", "empty goal", False, None, False
     if not last_response.strip():
         return "continue", "empty response (nothing to evaluate)", False, None, False
+    # The judge is a side model: never in a protected session.
+    try:
+        from agent.protected_session import skip_side_task
+
+        if skip_side_task("goal_judge", None, goal, last_response,
+                          session_db=_get_session_db() if session_id else None,
+                          session_id=session_id):
+            return "skipped", "protected session", False, None, False
+    except Exception:  # health: allow BLE001 -- fail closed: the goal judge is skipped
+        return "skipped", "protected session check failed", False, None, False
     if timeout is None:
         timeout = _goal_judge_timeout()   # the declared default is the config key, not the constant
 
@@ -1511,6 +1522,7 @@ class GoalManager:
         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
+            session_id=self.session_id,
         )
         state.last_verdict = verdict
         state.last_reason = reason

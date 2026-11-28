@@ -1044,6 +1044,13 @@ class GatewayStartupMixin:
             self._gateway_loop = asyncio.get_running_loop()
         except RuntimeError:
             self._gateway_loop = None
+        # Work a tool thread hands to this loop is delivery to the person, not the
+        # tool's own egress (agent/protected_session.py).
+        try:
+            from agent.protected_session import register_delivery_loop
+            register_delivery_loop(self._gateway_loop)
+        except Exception:
+            logger.debug("could not register the delivery loop", exc_info=True)
         if self._gateway_loop is not None:
             self._start_loop_liveness_guards(self._gateway_loop)
             # Loop live: the loop-liveness watchdog takes over from the startup watchdog. Disarm even

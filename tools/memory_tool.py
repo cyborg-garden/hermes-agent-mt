@@ -233,6 +233,11 @@ def memory_tool(action: str | None = None, target: str = "memory", content: str 
     aliases ``content``."""
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
+    # A protected session's text never reaches durable memory: a later,
+    # unprotected session would load it into its prompt (agent/protected_session.py).
+    from agent.protected_session import PROTECTED_EGRESS_MESSAGE, is_protected
+    if is_protected():
+        return tool_error(PROTECTED_EGRESS_MESSAGE, success=False)
     token = FAILURE_CLASS.set("other")
     try:
         outcome, result = _memory_tool(action, target, content, old_text, new_text, operations, store)

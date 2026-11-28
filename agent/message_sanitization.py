@@ -174,11 +174,6 @@ def _escape_invalid_chars_in_json_strings(raw: str) -> str:
     return "".join(out)
 
 
-# When a repair rewrites arguments to "{}", the WARNING log is the last surviving copy of
-# content that can hold real user data (a truncated write_file), so bound it generously.
-_FULL_ARGS_LOG_BOUND = 100_000
-
-
 def _loads_ok(text: str) -> bool:
     try:
         json.loads(text)
@@ -266,7 +261,7 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
         fixed = fixed[:-1]
 
     if _loads_ok(fixed):
-        logger.warning("Repaired malformed tool_call arguments for %s: %s → %s", tool_name, raw_stripped[:80], fixed[:80])
+        logger.warning("Repaired malformed tool_call arguments for %s: %d → %d chars", tool_name, len(raw_stripped), len(fixed))
         return fixed
 
     # Pass 5: escape control chars inside strings (strict=False alone fails when other
@@ -274,13 +269,13 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     escaped = _escape_invalid_chars_in_json_strings(fixed)
     if escaped != fixed and _loads_ok(escaped):
         logger.warning(
-            "Repaired control-char-laced tool_call arguments for %s: %s → %s", tool_name, raw_stripped[:80], escaped[:80],
+            "Repaired control-char-laced tool_call arguments for %s: %d → %d chars", tool_name, len(raw_stripped), len(escaped),
         )
         return escaped
 
     logger.warning(
-        "Unrepairable tool_call arguments for %s — replaced with empty object (was: %s)",
-        tool_name, raw_stripped[:_FULL_ARGS_LOG_BOUND],
+        "Unrepairable tool_call arguments for %s — replaced with empty object (was %d chars)",
+        tool_name, len(raw_stripped),
     )
     return "{}"
 

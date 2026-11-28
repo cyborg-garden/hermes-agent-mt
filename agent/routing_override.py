@@ -336,14 +336,14 @@ def revert_routing_override(agent: Any) -> bool:
 
 # ── Escalation ────────────────────────────────────────────────────────────────
 
-# Text that marks content as protected. The defaults are the footer the
-# papareo_transcribe plugin puts on every Papa Reo transcript (Kaitiakitanga
-# License): that text must never reach a model other than the configured primary.
-# A route may add more with ``protected_markers``.
+# Text that marks content as protected: the footer the papareo_transcribe plugin
+# writes into every Papa Reo transcript ("This text transcribed by Papa Reo API.
+# Please be sure to comply with ..."). Only text inside real transcript output
+# matches. The licence name alone does not: the plugin's own instructions and
+# skill name it on every run without carrying any transcript. A route or
+# ``routing.protected_markers`` may add more.
 DEFAULT_PROTECTED_MARKERS: tuple = (
-    "transcribed by papa reo",
-    "kaitiakitanga license",
-    "kaitiakitanga licence",
+    "transcribed by papa reo api",
 )
 
 # Short refusal openers. Matched only against a SHORT reply from a cheap-routed
@@ -356,13 +356,18 @@ _REFUSAL_PREFIXES = (
     "sorry, i can't", "sorry, but i can't", "i'm sorry, but i can't", "i'm sorry, i can't",
     "i'm sorry, but i cannot", "i apologize, but i can't", "i apologise, but i can't",
     "as an ai", "i don't have access", "i do not have access", "i'm not allowed",
+    "unfortunately, i can't", "unfortunately, i cannot", "unfortunately, i'm unable",
+    "i'm sorry, but i'm unable", "i'm sorry, i'm unable", "sorry, i'm unable",
+    "sorry, but i'm unable", "i'm afraid i can't", "i'm afraid i cannot",
 )
 
 
 def looks_like_refusal(text: Any) -> bool:
     if not isinstance(text, str):
         return False
-    t = text.strip().lower().replace("\u2019", "'")
+    t = " ".join(text.strip().lower().replace("\u2019", "'").split())
+    for dash in (" \u2014 ", "\u2014", " \u2013 ", " - "):
+        t = t.replace(dash, ", ")
     if not t or len(t) > _REFUSAL_MAX_CHARS:
         return False
     return t.startswith(_REFUSAL_PREFIXES)
@@ -440,22 +445,99 @@ def escalate_routed_turn(agent: Any, trigger: Any = None) -> bool:
             _log_escalation(agent, trigger_name, to_model, False)
             return False
         _log_escalation(agent, trigger_name, to_model, True)
-        status = getattr(agent, "_buffer_diagnostic_status", None)
-        if callable(status):
-            status(f"↻ Retrying on {to_model}")
-        return True
+        _status_line(agent, f"↻ Retrying on {to_model}")
+        return True  # the switch happened: a status-line failure must not undo that answer
     except Exception:
         logger.debug("intelligent_routing: escalation failed", exc_info=True)
         return False
 
 
+def _status_line(agent: Any, text: str) -> None:
+    """Best-effort user-visible status line. Never raises."""
+    try:
+        status = getattr(agent, "_buffer_diagnostic_status", None)
+        if callable(status):
+            status(text)
+    except Exception:  # boundary: a status line must never change the escalation outcome
+        logger.debug("intelligent_routing: escalation status line failed", exc_info=True)
+
+
 def try_activate_fallback(agent: Any, reason: Any = None, reset_at: Any = None) -> bool:
     """The agent's ``_try_activate_fallback``: a failing cheap-routed turn goes back to the
-    route it started on (the configured primary) before any fallback-chain entry."""
-    if escalate_routed_turn(agent, reason):
-        return True
+    route it started on (the configured primary) before any fallback-chain entry.
+
+    While the session holds protected text, the only hop allowed is onto the primary:
+    a failing primary fails the turn with its own error instead of resending the
+    protected text to another model. Routed or not; sessions without protected text
+    walk the chain as before."""
     from agent.chat_completion_helpers import try_activate_fallback as walk_fallback_chain
-    return walk_fallback_chain(agent, reason, reset_at)
+    if not session_holds_protected_text(agent):
+        return escalate_routed_turn(agent, reason) or walk_fallback_chain(agent, reason, reset_at)
+    target = getattr(agent, "_routing_escalation_target", None)
+    if (isinstance(target, dict) and str(target.get("model") or "") == _primary_model_of(agent)
+            and escalate_routed_turn(agent, reason)):
+        return True
+    return _walk_to_primary_only(agent, reason, walk_fallback_chain, reset_at)
+
+
+def _walk_to_primary_only(agent: Any, reason: Any, walk: Any, reset_at: Any = None) -> bool:
+    """Walk the fallback chain, skipping every entry that is not the primary."""
+    try:
+        primary = _primary_model_of(agent)
+        if not primary or str(getattr(agent, "model", "") or "").strip() == primary:
+            logger.warning("intelligent_routing: protected text in this session; not falling "
+                           "back from the primary to another model")
+            return False
+        chain = getattr(agent, "_fallback_chain", None) or []
+        while agent._fallback_index < len(chain):
+            entry = chain[agent._fallback_index]
+            if isinstance(entry, dict) and str(entry.get("model") or "").strip() == primary:
+                break
+            agent._fallback_index += 1
+        if agent._fallback_index >= len(chain):
+            return False
+        return bool(walk(agent, reason, reset_at)) and str(getattr(agent, "model", "") or "") == primary
+    except Exception:
+        logger.warning("intelligent_routing: protected fallback check failed; not falling back",
+                       exc_info=True)
+        return False
+
+
+def agent_extra_text(agent: Any, extras: Any = ()) -> list:
+    """Text sent alongside the messages: ``extras`` plus the system prompts and prefill."""
+    texts = [e for e in (extras or ()) if e]
+    try:
+        # The cached system prompt carries memory, the user profile and context files.
+        if getattr(agent, "_cached_system_prompt", None):
+            texts.append(agent._cached_system_prompt)
+    except Exception:  # health: allow BLE001, S110 -- a missing prompt attribute only means no extra text to scan
+        pass
+    try:
+        if getattr(agent, "ephemeral_system_prompt", None):
+            texts.append(agent.ephemeral_system_prompt)
+    except Exception:  # health: allow BLE001, S110 -- a missing prompt attribute only means no extra text to scan
+        pass
+    try:
+        for pfm in getattr(agent, "prefill_messages", None) or []:
+            if isinstance(pfm, dict):
+                texts.append(pfm.get("content"))
+    except Exception:  # health: allow BLE001, S110 -- a missing prompt attribute only means no extra text to scan
+        pass
+    return texts
+
+
+def session_holds_protected_text(agent: Any) -> bool:
+    """The session's sticky protected flag (``agent/protected_session.py``), after
+    scanning its messages, this turn's plugin context and memory recall and the system
+    prompt, which only ever sets it. Fails closed. Never raises."""
+    try:
+        from agent import protected_session
+
+        extras = getattr(agent, "_turn_protected_extras", None) or ()
+        return protected_session.scan(agent, getattr(agent, "_session_messages", None),
+                                      *tuple(extras))
+    except Exception:  # health: allow BLE001 -- fail closed: an error counts as protected (agent/protected_session.py)
+        return True
 
 
 def clear_escalation_state(agent: Any) -> None:
@@ -500,30 +582,173 @@ PROTECTED_BLOCK_MESSAGE = (
 )
 
 
+def normalize_for_markers(text: Any) -> str:
+    """Lower-case, with every whitespace run (newlines, non-breaking spaces) as one space."""
+    return " ".join(str(text or "").lower().split())
+
+
+def _message_text(message: Any) -> str:
+    """A message's content plus the arguments of any tool calls it carries."""
+    if not isinstance(message, dict):
+        return ""
+    parts = [_content_text(message.get("content"))]
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+        args = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+        if args:
+            parts.append(args if isinstance(args, str) else _content_text(args))
+    return " ".join(p for p in parts if p)
+
+
+def carries_protected_text(messages: Any, extra_text: Any = "", markers: Any = None) -> bool:
+    """True when any message (content or tool-call arguments) or ``extra_text`` holds a marker."""
+    try:
+        from agent.protected_session import configured_markers
+
+        base = configured_markers()
+    except Exception:  # health: allow BLE001 -- unreadable config falls back to the default markers
+        base = DEFAULT_PROTECTED_MARKERS
+    marks = [normalize_for_markers(m) for m in (tuple(base) + tuple(markers or ()))]
+    marks = [m for m in dict.fromkeys(marks) if m]
+    texts = [_message_text(m) for m in (messages or [])]
+    texts.append(_content_text(extra_text))
+    for t in texts:
+        if t:
+            norm = normalize_for_markers(t)
+            if any(mk in norm for mk in marks):
+                return True
+    return False
+
+
+def _configured_primary_runtime(agent: Any) -> Optional[dict]:
+    """The configured primary's runtime. Never the model a turn started on: that can be
+    a fallback the agent stayed on after a rate-limit cooldown."""
+    if getattr(agent, "_routing_override_active", False) is True:
+        saved = getattr(agent, "_routing_override_saved_primary", None)
+        if isinstance(saved, dict) and saved.get("model"):
+            return saved
+    runtime = getattr(agent, "_primary_runtime", None)
+    if isinstance(runtime, dict) and runtime.get("model"):
+        return runtime
+    return None
+
+
+def _primary_model_of(agent: Any) -> Optional[str]:
+    """The only model protected text may go to: a cheap child's parent primary, else
+    the agent's configured primary."""
+    child_primary = getattr(agent, "_routing_primary_model", None)
+    if child_primary:
+        return str(child_primary)
+    try:
+        from agent.protected_session import configured_primary
+
+        frozen = configured_primary(agent)
+        if frozen:
+            return str(frozen["model"]).strip() or None
+    except Exception:  # health: allow BLE001, S110 -- no frozen primary falls back to the configured primary runtime
+        pass
+    runtime = _configured_primary_runtime(agent)
+    if runtime:
+        return str(runtime["model"]).strip() or None
+    target = getattr(agent, "_routing_escalation_target", None)
+    if isinstance(target, dict) and target.get("model"):
+        return str(target["model"])
+    return None
+
+
+def _force_restore_primary(agent: Any) -> bool:
+    """Put the agent back on its configured primary now, whatever the rate-limit
+    cooldown says. True iff it landed there. Never raises."""
+    primary = _primary_model_of(agent)
+    if not primary:
+        return False
+    saved_cooldown = getattr(agent, "_rate_limited_until", 0)
+    try:
+        agent._rate_limited_until = 0
+        if getattr(agent, "_routing_override_active", False) is not True:
+            agent._fallback_activated = True  # restore_primary_runtime rebuilds only then
+        agent._restore_primary_runtime()
+    except Exception:
+        logger.warning("intelligent_routing: could not restore the primary for protected text",
+                       exc_info=True)
+    finally:
+        agent._rate_limited_until = saved_cooldown
+    ok = str(getattr(agent, "model", "") or "") == primary
+    if ok:
+        try:
+            from agent.chat_completion_helpers import rewrite_prompt_model_identity
+
+            rewrite_prompt_model_identity(agent, agent.model, agent.provider)
+        except Exception:
+            logger.debug("intelligent_routing: could not rewrite model identity", exc_info=True)
+    _log_escalation(agent, "protected_content", primary, ok)
+    return ok
+
+
+def restore_primary_if_protected(agent: Any, messages: Any, extras: Any = ()) -> Optional[str]:
+    """An agent that is not on its configured primary (a fallback that outlived its turn,
+    a mid-turn fallback, a model directive) while its session holds protected text goes
+    back to the primary. ``"switched"``, ``"blocked"`` (the primary could not be
+    restored: send nothing) or None. Scans only when off the primary. Never raises."""
+    try:
+        from agent import protected_session
+
+        if not protected_session.scan(agent, messages, *tuple(extras or ())):
+            return None
+        primary = _primary_model_of(agent)
+        if not primary:
+            return PROTECTED_BLOCKED
+        if str(getattr(agent, "model", "") or "") == primary:
+            return None
+        return PROTECTED_SWITCHED if _force_restore_primary(agent) else PROTECTED_BLOCKED
+    except Exception:
+        logger.warning("intelligent_routing: protected-content check failed; ending the turn",
+                       exc_info=True)
+        return PROTECTED_BLOCKED
+
+
+def protected_on_routed_model(agent: Any, messages: Any, extra_text: Any = "") -> bool:
+    """True when a routed agent holds protected text while not on its primary.
+
+    Side-effect free; post-turn work (background review, manual compression) uses it
+    to stay off the cheap model after a blocked turn. Never raises."""
+    try:
+        from agent import protected_session
+
+        protected = protected_session.scan(agent, messages, extra_text)
+        if getattr(agent, "_routing_protected_watch", False) is not True:
+            return False
+        primary = _primary_model_of(agent)
+        if primary and str(getattr(agent, "model", "") or "") == primary:
+            return False
+        return protected
+    except Exception:  # health: allow BLE001 -- fail closed: an error counts as protected (agent/protected_session.py)
+        return True
+
+
 def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Optional[str]:
     """Run right before each API call of a cheap-routed turn or child.
 
-    If anything about to be sent (``messages`` plus ``extra_text``, e.g. plugin context)
-    carries a protected marker while the agent is still on the cheap model, move to the
-    primary first. Returns ``"switched"``, ``"blocked"`` (the primary could not be
-    reached: the caller must end the turn without calling any model), or None.
-    Armed by every cheap route, independent of ``escalate``. Never raises.
+    If anything about to be sent (``messages`` with their tool-call arguments, plus
+    ``extra_text``, e.g. plugin context or the system prompt) carries a protected
+    marker while the agent is anywhere but its primary (the cheap model, or a fallback
+    entry it reached after that), move to the primary first. Returns ``"switched"``,
+    ``"blocked"`` (the primary could not be reached: the caller must end the turn
+    without calling any model), or None. Armed by every cheap route, independent of
+    ``escalate``, and stays armed for the whole turn. Never raises.
     """
     try:
-        if getattr(agent, "_routing_protected_watch", False) is not True:
-            return None
-        cheap_model = getattr(agent, "_routing_cheap_model", None)
-        if cheap_model and str(getattr(agent, "model", "") or "") != str(cheap_model):
-            return None  # already off the cheap model
-        markers = getattr(agent, "_routing_protected_markers", None) or DEFAULT_PROTECTED_MARKERS
-        texts = [_content_text(m.get("content")) for m in (messages or []) if isinstance(m, dict)]
-        texts.append(_content_text(extra_text))
-        if not any(any(mk in t.lower() for mk in markers) for t in texts if t):
+        if not protected_on_routed_model(agent, messages, extra_text):
             return None
         agent._routing_escalate_pending = False
         target = getattr(agent, "_routing_escalation_target", None)
-        if isinstance(target, dict) and target.get("model"):
+        primary = _primary_model_of(agent)
+        if isinstance(target, dict) and target.get("model") and str(target["model"]) != primary:
+            # The turn started on a fallback, not the primary: go to the primary itself.
+            ok = _force_restore_primary(agent)
+        elif isinstance(target, dict) and target.get("model"):
             ok = _switch_to(agent, target)
+            ok = ok and str(getattr(agent, "model", "") or "") == str(target["model"])
             _log_escalation(agent, "protected_content", str(target["model"]), ok)
         else:
             # A cheap child: its fallback chain starts with the parent's primary. Accept the
@@ -533,7 +758,6 @@ def escalate_if_protected(agent: Any, messages: Any, extra_text: Any = "") -> Op
                 str(getattr(agent, "model", "") or "") == str(primary))
             _log_escalation(agent, "protected_content", str(primary or "?"), ok)
         if ok:
-            agent._routing_protected_watch = False
             return PROTECTED_SWITCHED
         logger.warning("intelligent_routing: protected content on a cheap route and the primary "
                        "is unreachable; ending the turn without a model call")

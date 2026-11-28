@@ -1230,6 +1230,13 @@ def _dispatch_pre_tool_call_hooks(
 ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
     """Invoke ``pre_tool_call`` hooks once; return ``(block_message, modified_args)`` — the resolved
     block/approve message (``None`` to proceed) and merged ``modify`` args (``None`` if none)."""
+    # Protected session (agent/protected_session.py): default-deny tool allowlist,
+    # enforced here because every dispatch site (registry, the agent-loop tools such as
+    # memory and delegate_task, concurrent and sequential) passes through.
+    from agent.protected_session import refuse_tool_if_protected
+    _protected_refusal = refuse_tool_if_protected(tool_name, args)
+    if _protected_refusal is not None:
+        return (_protected_refusal, None)
     details = _get_pre_tool_call_directive_details(tool_name, args, **hook_kwargs)
     block_msg = _resolve_block_from_details(
         details, tool_name, **{k: hook_kwargs.get(k, "") for k in ("turn_id", "tool_call_id", "session_id")})

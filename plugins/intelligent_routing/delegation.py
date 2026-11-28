@@ -63,6 +63,11 @@ def _escalation_chain(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     return chain
 
 
+def _norm(text: Any) -> str:
+    """Lower-case, with every whitespace run as one space (core's marker matching)."""
+    return " ".join(str(text or "").lower().split())
+
+
 class TaskRoutingDelegationProvider(DelegationProvider):
     @property
     def name(self) -> str:
@@ -79,10 +84,10 @@ class TaskRoutingDelegationProvider(DelegationProvider):
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
         goal, context = str(task.get("goal") or ""), str(task.get("context") or "")
-        text = (goal + "\n" + context).lower()
+        text = _norm(goal + "\n" + context)
         decision = classify_task(TaskSignals(
             instruction=goal, context=context, scope=SCOPE_SUBAGENT,
-            is_protected=any(m in text for m in protected_markers()),
+            is_protected=any(_norm(m) in text for m in protected_markers()),
         ))
         cheap_model, cheap_provider = cheap_tier_target()
         route: dict[str, Any]

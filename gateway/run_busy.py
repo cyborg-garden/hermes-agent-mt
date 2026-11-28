@@ -225,7 +225,7 @@ class GatewayBusySessionMixin:
         if leftover_steer:
             if not pending and not pending_event:
                 pending = leftover_steer
-                logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
+                logger.debug("Delivering leftover /steer as next turn (%d chars)", len(pending))
             elif pending_event and adapter and session_key:
                 # User steered during the turn, but a background event or queued message arrived.
                 # Deliver the user's steer first and restore the pending event to the head of the queue.
@@ -697,8 +697,8 @@ class GatewayBusySessionMixin:
                     event.text = f"/{_verb} {_normalized_args}".rstrip()
                     _reply = await _approval_handler(event)
                     logger.info(
-                        "Approval response via plain text: session=%s verb=%s args=%r",
-                        session_key, _verb, _normalized_args,
+                        "Approval response via plain text: session=%s verb=%s args_len=%d",
+                        session_key, _verb, len(str(_normalized_args or "")),
                     )
                     _adapter = self._delivery_adapter_for(event.source)
                     if _adapter and _reply:

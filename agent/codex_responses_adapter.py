@@ -1311,7 +1311,7 @@ def _normalize_codex_response(
         logger.warning(
             "Codex response contains leaked tool-call text in assistant content (no structured function_call "
             "items). Treating as incomplete so the continuation path can re-elicit a proper tool call. "
-            "Leaked snippet: %r", final_text[:300],
+            "text_len=%d", len(final_text),
         )
         final_text = ""
     # xAI grok-4.x sometimes puts the final answer inside the reasoning item after a ``<response>`` delimiter; without

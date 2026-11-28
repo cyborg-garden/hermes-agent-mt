@@ -1733,6 +1733,9 @@ def _run_conversation_turn(
     # receives its return value, so tools.delegate_tool salvages a partial summary from
     # this list instead. Compression rebinds ``messages``; _compress_context re-publishes.
     agent._session_messages = _ctx.messages
+    # Read by the protected-text guards (agent/routing_override.py): this turn's plugin
+    # context and memory recall travel with the messages, so they count too.
+    agent._turn_protected_extras = (_ctx.plugin_user_context, _ctx.ext_prefetch_cache)
 
     # Per-turn agent state (the gateway caches agents across turns, so none of this may
     # leak into the next message): interim-commentary dedup spans the whole turn but not

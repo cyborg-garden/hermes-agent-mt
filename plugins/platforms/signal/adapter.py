@@ -340,7 +340,7 @@ class SignalAdapter(BasePlatformAdapter):
             try:
                 await self._handle_envelope(json.loads(data_str))
             except json.JSONDecodeError:
-                logger.debug("Signal SSE: invalid JSON: %s", data_str[:100])
+                logger.debug("Signal SSE: invalid JSON (%d chars)", len(data_str))
             except Exception:
                 logger.exception("Signal SSE: error handling event")
 
@@ -619,7 +619,7 @@ class SignalAdapter(BasePlatformAdapter):
             reply_to_is_own_message=self._quote_references_own_message(reply_to_id, reply_to_author),
             channel_prompt=self._group_observe_channel_prompt() if is_group else None,
         )
-        logger.debug("Signal: message from %s in %s: %s", redact_phone(sender), chat_id[:20], (text or "")[:50])
+        logger.debug("Signal: message from %s in %s (%d chars)", redact_phone(sender), chat_id[:20], len(text or ""))
         if not is_group:
             await self._maybe_reresolve_allowlist(sender, sender_uuid)
         await self.handle_message(event)

@@ -74,8 +74,8 @@ def run_tool_round(
     if agent.verbose_logging:
         for tc in assistant_message.tool_calls:
             raw_args = tc.function.arguments
-            args_preview = raw_args[:200] if isinstance(raw_args, str) else repr(raw_args)[:200]
-            logging.debug("Tool call: %s with args: %s...", tc.function.name, args_preview)
+            args_len = len(raw_args) if isinstance(raw_args, str) else len(repr(raw_args))
+            logging.debug("Tool call: %s id=%s args_len=%d", tc.function.name, getattr(tc, "id", None), args_len)
 
     _tvv = validate_tool_calls(
         agent, assistant_message, finish_reason, messages=messages,

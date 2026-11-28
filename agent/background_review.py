@@ -1273,6 +1273,12 @@ def _run_review_in_thread(
     if review_run is not None and review_run.cancel_requested.is_set():
         finish_background_review_run(agent, review_run)
         return
+    # A protected session's text never goes to a review fork (a side model).
+    from agent.protected_session import skip_side_task
+    if skip_side_task("background_review", agent, *(messages_snapshot or [])):
+        if review_run is not None:
+            finish_background_review_run(agent, review_run)
+        return
     _set_thread_approval_callback(_bg_review_auto_deny)
     # A client that can't carry Hermes tool calls back would spawn a fork that cannot write
     # anything. Checked BEFORE the thread-scoped silence so the warning is not swallowed; cheap

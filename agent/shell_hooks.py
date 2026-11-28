@@ -693,7 +693,7 @@ def _parse_response(event: str, stdout: str) -> Optional[dict[str, Any]]:
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
-        logger.warning("shell hook stdout was not valid JSON (event=%s): %s", event, stdout[:200])
+        logger.warning("shell hook stdout was not valid JSON (event=%s, %d chars)", event, len(stdout))
         return None
     return _RESPONSE_PARSERS.get(event, _parse_context)(data) if isinstance(data, dict) else None
 

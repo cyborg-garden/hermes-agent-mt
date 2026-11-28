@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from hermes_cli.timeouts import get_provider_request_timeout
 from agent.message_sanitization import (
-    _FULL_ARGS_LOG_BOUND, coalesce_tool_call_id, coerce_tool_name, tool_call_id_variants, tool_result_id_variants
+    coalesce_tool_call_id, coerce_tool_name, tool_call_id_variants, tool_result_id_variants
 )
 from agent.message_metadata import (
     TOOL_CALL_UIDS, merge_tool_call_uids, per_occurrence_tool_call_uids, record_absorbed_message)
@@ -133,7 +133,8 @@ def _trajectory_tool_call_turn(msg: dict[str, Any]) -> str:
         try:
             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
-            logger.warning("Unexpected invalid JSON in trajectory conversion: %s", raw_args[:100])
+            logger.warning("Unexpected invalid JSON in trajectory conversion: tool=%s args_len=%d",
+                           tool_call["function"].get("name"), len(str(raw_args)))
             arguments = {}
         tool_call_json = {"name": tool_call["function"]["name"], "arguments": arguments}
         content += f"<tool_call>\n{json.dumps(tool_call_json, ensure_ascii=False)}\n</tool_call>\n"
@@ -281,13 +282,13 @@ def sanitize_tool_call_arguments(
             # format) and insert a duplicate stub that itself becomes an orphan (#58168).
             tool_call_id = _ra().AIAgent._get_tool_call_id_static(tool_call) or None
             function_name = function.get("name", "?")
-            # Log the FULL (bounded) argument string: we are about to overwrite the only copy, which
-            # may hold real user content from a truncated write_file/patch.
+            # The length only: arguments are conversation content (possibly protected
+            # transcript text), which never goes to a log.
             log.warning(
                 "Corrupted tool_call arguments repaired before request "
                 "(session=%s, message_index=%s, tool_call_id=%s, function=%s, "
-                "original_arguments=%r)", session_id or "-", message_index, tool_call_id or "-",
-                function_name, arguments[:_FULL_ARGS_LOG_BOUND],
+                "args_len=%d)", session_id or "-", message_index, tool_call_id or "-",
+                function_name, len(arguments),
             )
             function["arguments"] = "{}"
             # The persisted row for a stamped dict still holds the corrupted args; pop the
@@ -3718,8 +3719,7 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
         return
     messages.append(steer_user_row(steer_text))
     _ra().logger.info(
-        "Delivered /steer to agent after tool batch (%d chars) as new user message: %s", len(steer_text),
-        steer_text[:120] + ("..." if len(steer_text) > 120 else ""),
+        "Delivered /steer to agent after tool batch (%d chars) as new user message", len(steer_text),
     )
 
 

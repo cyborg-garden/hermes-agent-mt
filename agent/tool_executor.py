@@ -1098,7 +1098,8 @@ def _commit_tool_result(
                 function_name, function_args, function_result, failed=is_error, tool_call_id=tool_call_id,
             )
         if is_error:
-            logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, error_preview(function_result))
+            logger.warning("Tool %s returned error (%.2fs, %d chars)", function_name, tool_duration,
+                           len(str(function_result)))
         elif success_log_chars is not None:
             logger.info("tool %s completed (%.2fs, %d chars)", function_name, tool_duration, success_log_chars)
         if not blocked:
@@ -1111,7 +1112,7 @@ def _commit_tool_result(
         if agent.verbose_logging:
             logging.debug("Tool %s completed in %.2fs", function_name, tool_duration)
             _log_result = verbose_text(function_result)
-            logging.debug("Tool result (%d chars): %s", len(_log_result), _log_result)
+            logging.debug("Tool result (%d chars)", len(_log_result))
 
     agent._current_tool = None
     _status_suffix = " (error)" if is_error else ""
@@ -1382,7 +1383,7 @@ class _ConcurrentBatch:
             ref.emit_post(agent, result, duration_ms=int(duration * 1000))
         is_error, _ = _detect_tool_failure(ref.name, result)
         if is_error:
-            logger.info("tool %s failed (%.2fs): %s", ref.name, duration, str(result)[:200])
+            logger.info("tool %s failed (%.2fs, %d chars)", ref.name, duration, len(str(result)))
         else:
             result_chars = len(result) if isinstance(result, str) else len(str(result))
             logger.info(

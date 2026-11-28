@@ -486,6 +486,11 @@ def generate_title(
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return None
+    # Never title a protected session: the title model is a side model, and the
+    # transcript footer sits past the truncation below, so check the full text.
+    from agent.protected_session import skip_side_task
+    if skip_side_task("title_generation", None, user_message, title_preview):
+        return None
     try:
         if runtime_validator is not None and not runtime_validator():
             logger.debug("Title generation skipped: runtime validator returned False")
@@ -656,6 +661,10 @@ def auto_title_session(
     try:
         if not session_db or not session_id or _has_upgraded_title(session_db, session_id):
             return
+        from agent.protected_session import skip_side_task
+        if skip_side_task("title_generation", None, user_message, title_preview,
+                          session_db=session_db, session_id=session_id):
+            return
         # This thread starts AFTER the turn's ambient context was reset; republish it so the call carries
         # the same Portal ``conversation=`` tag (root-of-lineage) and bills usage to this session.
         from agent.aux_accounting import set_accounting_context
@@ -749,6 +758,10 @@ def maybe_auto_title(
     Returns the upgrade thread: already started, or — when ``title_upgrade_must_wait_for_turn`` — left
     UNSTARTED for the caller to hand to ``start_title_upgrade`` once the turn's model request settled."""
     if not session_db or not session_id or not user_message:
+        return None
+    from agent.protected_session import skip_side_task
+    if skip_side_task("title_generation", None, user_message, title_preview,
+                      *(conversation_history or []), session_db=session_db, session_id=session_id):
         return None
     # History may be pre- or post-message. Past the opening turn, skip once the session holds an
     # ``llm``/``user`` name: count alone left a machinery-opened session nameless, and a ``derived``

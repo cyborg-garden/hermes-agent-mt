@@ -158,21 +158,37 @@ def _text_of(content: Any) -> str:
     return ""
 
 
+def _norm(text: Any) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _tool_call_text(msg: dict) -> str:
+    parts = []
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+        args = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+        if args:
+            parts.append(args if isinstance(args, str) else json.dumps(args, default=str))
+    return " ".join(parts)
+
+
 def _is_protected(message: str, history: Any, markers: tuple[str, ...]) -> bool:
     """True when the turn or ANY earlier message carries a protected marker.
 
     The history matters: a cheap-routed turn sends the whole conversation to the
     cheap provider, so one protected message anywhere keeps the session on the primary.
+    Tool-call arguments count, and whitespace runs are matched as one space.
     """
-    if not markers:
+    marks = [_norm(m) for m in markers or () if _norm(m)]
+    if not marks:
         return False
-    if any(m in message.lower() for m in markers):
+    if any(m in _norm(message) for m in marks):
         return True
     if isinstance(history, list):
         for msg in history:
             if isinstance(msg, dict):
-                text = _text_of(msg.get("content")).lower()
-                if text and any(m in text for m in markers):
+                text = _norm(_text_of(msg.get("content")) + " " + _tool_call_text(msg))
+                if text and any(m in text for m in marks):
                     return True
     return False
 
@@ -330,7 +346,10 @@ def on_pre_llm_call(**kwargs: Any) -> Optional[dict]:
                 tier=TIER_DIRECTIVE, model=model, provider=provider, reason=reason,
                 primary_model=kwargs.get("model"), **metric_dims,
             )
-            return {"route": {"model": model, "provider": provider}, "context": line}
+            # The directive picks the model, not what it may see: protected text
+            # still moves the turn back to the configured primary (core's gate).
+            return {"route": {"model": model, "provider": provider, "protected_watch": True},
+                    "context": line}
 
         # Delegated children and review forks are routed once, where they are
         # spawned (the task-routing delegation backend reads the goal AND the
