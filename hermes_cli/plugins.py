@@ -37,6 +37,7 @@ import asyncio
 import importlib.metadata
 import importlib.util
 import inspect
+import json
 import logging
 import os
 import sys
@@ -609,7 +610,23 @@ class PluginContext:
             if agent is not None:
                 kwargs["parent_agent"] = agent
 
-        return registry.dispatch(tool_name, args, **kwargs)
+        # Protected session (agent/protected_session.py): the same default-deny
+        # allowlist as a model's tool call, and the tool runs in its own egress
+        # scope. The one exception is a hand-off an allowed tool makes from
+        # inside its own handler (PLUGIN_DISPATCH_EXCEPTIONS), which keeps the
+        # caller's scope.
+        from agent.protected_session import egress_scope, refuse_plugin_dispatch, tool_handler
+
+        refusal, keep_scope = refuse_plugin_dispatch(
+            tool_name, args, agent=kwargs.get("parent_agent"),
+            task_id=kwargs.get("task_id") or "",
+        )
+        if refusal is not None:
+            return json.dumps({"error": refusal}, ensure_ascii=False)
+        if keep_scope:
+            return registry.dispatch(tool_name, args, **kwargs)
+        with egress_scope(f"tool:{tool_name}"), tool_handler(tool_name):
+            return registry.dispatch(tool_name, args, **kwargs)
 
     # -- context engine registration -----------------------------------------
 
@@ -2284,7 +2301,7 @@ def resolve_pre_tool_block(
     # enforced here because every dispatch site (registry, the agent-loop tools
     # such as memory and delegate_task, concurrent and sequential) passes through.
     from agent.protected_session import refuse_tool_if_protected
-    _protected_refusal = refuse_tool_if_protected(tool_name, args)
+    _protected_refusal = refuse_tool_if_protected(tool_name, args, task_id=task_id)
     if _protected_refusal is not None:
         return _protected_refusal
     details = _get_pre_tool_call_directive_details(

@@ -628,6 +628,22 @@ def run_codex_app_server_turn(
     Called from run_conversation() when agent.api_mode == "codex_app_server".
     Returns the same dict shape as the chat_completions path.
     """
+    # Protected session (agent/protected_session.py): the codex subprocess runs
+    # the turn outside every egress and tool check, so a session holding
+    # protected text never reaches it. No subprocess is spawned or reused.
+    from agent.protected_session import refuse_codex_app_server_turn
+
+    _protected_refusal = refuse_codex_app_server_turn(agent, messages)
+    if _protected_refusal is not None:
+        return {
+            "final_response": _protected_refusal,
+            "messages": messages,
+            "api_calls": 0,
+            "completed": False,
+            "partial": True,
+            "error": "protected_session_codex_app_server",
+        }
+
     from agent.transports.codex_app_server_session import (
         CodexAppServerSession,
         _ServerRequestRouting,
