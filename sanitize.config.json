@@ -32,6 +32,30 @@
   },
   "deterministic": {
     "enabled": true,
-    "allow_substrings": []
+    "$comment_allow": "Exact values only (the gate matches the whole detected value, never a substring). Each one cannot be anyone's real data. Loopback/unspecified/cloud-metadata addresses: 127.0.0.1, 0.0.0.0, 169.254.169.254. Package version strings that look like dotted quads (pyproject.toml, uv.lock): 1.2.1.0 ... 13.1.1.3. i@izs.me: the glob maintainer's address inside npm's published deprecation notice in pnpm-lock.yaml, upstream package metadata, not a contributor. NANP 555 fiction numbers in agent/moa_loop.py docs: (555) 123-4567, 555-123-4567, 555.123.4567, +1 555-123-4567, +14155551234. +10000000000 / +10000000001: invalid NANP (area code cannot start with 0) used as test fixtures. http://user:pass@host``: a docstring placeholder in gateway/platforms/base.py. ipv4_scope stays 'all' and allow_fiction_phones stays off on purpose: both would excuse whole classes (private LAN addresses, every 555 number). No IPv6 entry (::1): the gate has no IPv6 detector.",
+    "allow_substrings": [
+      "127.0.0.1",
+      "0.0.0.0",
+      "169.254.169.254",
+      "1.2.1.0",
+      "1.15.1.6",
+      "1.27.2.3",
+      "9.24.0.43",
+      "10.4.0.35",
+      "12.0.0.61",
+      "12.0.4.66",
+      "12.6.3.3",
+      "13.0.3.0",
+      "13.1.1.3",
+      "i@izs.me",
+      "(555) 123-4567",
+      "555-123-4567",
+      "555.123.4567",
+      "+1 555-123-4567",
+      "+14155551234",
+      "+10000000000",
+      "+10000000001",
+      "http://user:pass@host``"
+    ]
   }
 }
