@@ -219,6 +219,10 @@ describe('chatMessagesEquivalent', () => {
     expect(chatMessagesEquivalent(messageA, messageB)).toBe(false)
   })
 
+  it('returns false when only the observed flag differs', () => {
+    expect(chatMessagesEquivalent(msg('1', 'user', 'Hello'), msg('1', 'user', 'Hello', { observed: true }))).toBe(false)
+  })
+
   it('returns false when message IDs differ', () => {
     expect(chatMessagesEquivalent(msg('msg-1', 'user', 'Hello'), msg('msg-2', 'user', 'Hello'))).toBe(false)
   })

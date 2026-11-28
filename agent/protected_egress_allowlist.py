@@ -54,6 +54,23 @@ PROTECTED_SESSION_TOOLS = frozenset({
     "skills_list", "session_search", "transcribe_recording",
 })
 
+# Allowed tools that run on the terminal backend (tools/file_tools.py). On a
+# backend that is not this machine (ssh, modal, daytona, singularity, a remote
+# Docker daemon) they would read the session's files off-box, so in a protected
+# session they run only when every backend in play is one of
+# ``ON_BOX_FILE_BACKENDS``. Anything unrecognised is refused.
+FILE_BACKEND_TOOLS = frozenset({"read_file", "search_files"})
+ON_BOX_FILE_BACKENDS = frozenset({"local", "docker"})
+
+# Tools a plugin may dispatch (``ctx.dispatch_tool``) in a protected session
+# although they are not in ``PROTECTED_SESSION_TOOLS``, keyed by the egress scope
+# the call must be made from. The transcription tool hands its transcript to the
+# vault from inside its own handler; the model cannot call the vault tool, and
+# neither can a plugin from anywhere else (a hook, a slash command).
+PLUGIN_DISPATCH_EXCEPTIONS = {
+    "tool:transcribe_recording": frozenset({"ovenmitt_vault_send"}),
+}
+
 # Tools refused outright in a protected session (kept for reference: the default-
 # deny list above already refuses them): they send text out over channels
 # the HTTP hooks cannot see (a browser over CDP, websockets) or exist to send it out.

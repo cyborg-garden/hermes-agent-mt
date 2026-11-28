@@ -96,6 +96,10 @@ _SESSION: contextvars.ContextVar = contextvars.ContextVar(
     "hermes_protected_egress_session", default=None)
 _SCOPE: contextvars.ContextVar = contextvars.ContextVar(
     "hermes_protected_egress_scope", default=None)
+# The tool whose own handler is running (set around the handler only, not around
+# tool middleware or hooks). The plugin-dispatch exception needs it.
+_HANDLER: contextvars.ContextVar = contextvars.ContextVar(
+    "hermes_protected_tool_handler", default=None)
 
 
 # ── markers ──────────────────────────────────────────────────────────────────
@@ -378,6 +382,19 @@ def egress_scope(name: str) -> Iterator[None]:
             pass
 
 
+@contextmanager
+def tool_handler(name: str) -> Iterator[None]:
+    """Mark a block as tool ``name``'s own handler (inside its middleware)."""
+    token = _HANDLER.set(str(name))
+    try:
+        yield
+    finally:
+        try:
+            _HANDLER.reset(token)
+        except (RuntimeError, ValueError):
+            pass
+
+
 def plugin_scope_name(callback: Any) -> str:
     """``plugin:<name>`` for a hook callback, from the module it was defined in."""
     module = str(getattr(callback, "__module__", "") or "")
@@ -388,26 +405,152 @@ def plugin_scope_name(callback: Any) -> str:
     return f"plugin:{parts[0] if parts and parts[0] else 'unknown'}"
 
 
-def refuse_tool_if_protected(tool_name: str, args: Any = None) -> Optional[str]:
+def refuse_tool_if_protected(tool_name: str, args: Any = None, *, task_id: Any = "",
+                             agent: Any = None) -> Optional[str]:
     """The generic refusal for a tool in a protected session, else None.
 
     Default deny: only the tools in ``PROTECTED_SESSION_TOOLS`` (read-only, local,
     nothing persisted or sent) run, and the transcription tool under its own
     restrictions. Anything else, including tools added later, is refused, unless
-    an operator allows ``tool:<name>`` in ``routing.protected_egress_allow``."""
-    from agent.protected_egress_allowlist import PROTECTED_SESSION_TOOLS, URL_ARGUMENT_TOOLS
+    an operator allows ``tool:<name>`` in ``routing.protected_egress_allow``.
+    The file tools in ``FILE_BACKEND_TOOLS`` run only on a terminal backend on
+    this machine, whatever the operator allows.
 
-    if not is_protected():
+    ``agent`` counts too when given (a plugin dispatching for a protected agent
+    outside its turn); ``task_id`` picks the terminal environment."""
+    from agent.protected_egress_allowlist import (
+        FILE_BACKEND_TOOLS, PROTECTED_SESSION_TOOLS, URL_ARGUMENT_TOOLS,
+    )
+
+    if not (is_protected() or (agent is not None and is_protected(agent))):
         return None
     name = str(tool_name or "")
     if name in URL_ARGUMENT_TOOLS:
         refusal = _refuse_transcriber_input(name, args if isinstance(args, dict) else {})
         if refusal is not None:
             return refusal
+    if name in FILE_BACKEND_TOOLS and not _file_backend_on_box(task_id):
+        logger.info("protected session: refused %s on an off-box terminal backend", name)
+        return PROTECTED_EGRESS_MESSAGE
     if name in PROTECTED_SESSION_TOOLS or _scope_allowed(f"tool:{name}"):
         return None
     logger.info("protected session: refused tool %s", name)
     return PROTECTED_EGRESS_MESSAGE
+
+
+_ON_BOX_ENV_CLASSES = {"LocalEnvironment": "local", "DockerEnvironment": "docker"}
+
+
+def _local_docker_endpoint(host: str) -> bool:
+    host = str(host or "").strip().lower()
+    return host.startswith(("unix://", "npipe://"))
+
+
+def _docker_daemon_on_box() -> bool:
+    """True when the Docker CLI talks to a daemon on this machine: ``DOCKER_HOST``
+    when set, else the selected context (``DOCKER_CONTEXT`` or ``currentContext``
+    in the Docker config), whose endpoint must be a local socket. Fails closed."""
+    import hashlib
+    import os
+
+    host = str(os.environ.get("DOCKER_HOST") or "").strip()
+    if host:
+        return _local_docker_endpoint(host)
+    try:
+        config_dir = os.environ.get("DOCKER_CONFIG") or os.path.join(
+            os.path.expanduser("~"), ".docker")
+        name = str(os.environ.get("DOCKER_CONTEXT") or "").strip()
+        if not name:
+            config_path = os.path.join(config_dir, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, encoding="utf-8") as fh:
+                    name = str((json.load(fh) or {}).get("currentContext") or "").strip()
+        if not name or name == "default":
+            return True
+        meta_path = os.path.join(config_dir, "contexts", "meta",
+                                 hashlib.sha256(name.encode("utf-8")).hexdigest(), "meta.json")
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh) or {}
+        return _local_docker_endpoint(
+            ((meta.get("Endpoints") or {}).get("docker") or {}).get("Host"))
+    except Exception:
+        logger.debug("protected session: docker context unreadable; treating it as off-box",
+                     exc_info=True)
+        return False
+
+
+def _file_backend_on_box(task_id: Any = "") -> bool:
+    """True when the file tools would read this machine's files for ``task_id``:
+    the configured backend and any live environment for the task are local or a
+    local Docker daemon. Fails closed."""
+    from agent.protected_egress_allowlist import ON_BOX_FILE_BACKENDS
+
+    try:
+        from tools import terminal_tool as tt
+
+        kinds = {str(tt._get_env_config().get("env_type") or "local").strip().lower()}
+        raw = str(task_id or "default")
+        keys = {raw, "default", tt._resolve_container_task_id(raw)}
+        with tt._env_lock:
+            envs = [tt._active_environments.get(k) for k in keys]
+        for env in envs:
+            if env is not None:
+                kinds.add(_ON_BOX_ENV_CLASSES.get(type(env).__name__, "unknown"))
+        if not kinds <= ON_BOX_FILE_BACKENDS:
+            return False
+        return "docker" not in kinds or _docker_daemon_on_box()
+    except Exception:
+        logger.debug("protected session: terminal backend unknown; refusing file tools",
+                     exc_info=True)
+        return False
+
+
+def refuse_plugin_dispatch(tool_name: str, args: Any = None, *, agent: Any = None,
+                           task_id: Any = "") -> tuple:
+    """The allowlist check for ``PluginContext.dispatch_tool``.
+
+    Returns ``(refusal, keep_scope)``: ``refusal`` is the message or None, and
+    ``keep_scope`` is True for the one exception in ``PLUGIN_DISPATCH_EXCEPTIONS``
+    (a tool the plugin hands its result to from inside an allowed tool's own
+    handler: the scope is that tool's, and so is the running handler, so tool
+    middleware and hooks around it do not qualify), which then runs in the
+    caller's scope rather than its own."""
+    from agent.protected_egress_allowlist import PLUGIN_DISPATCH_EXCEPTIONS
+
+    if not (is_protected() or (agent is not None and is_protected(agent))):
+        return None, False
+    name = str(tool_name or "")
+    scope = _SCOPE.get() or ""
+    if (name in PLUGIN_DISPATCH_EXCEPTIONS.get(scope, ())
+            and scope == f"tool:{_HANDLER.get() or ''}"):
+        logger.info("protected session: plugin dispatched %s from its allowed scope", name)
+        return None, True
+    return refuse_tool_if_protected(name, args, task_id=task_id, agent=agent), False
+
+
+PROTECTED_CODEX_RUNTIME_MESSAGE = (
+    "Blocked: this session holds protected text, and the codex app-server runtime "
+    "runs outside the checks that keep it on this agent's primary model. Nothing "
+    "was sent. Switch back with `/codex-runtime auto` to continue this chat."
+)
+
+
+def refuse_codex_app_server_turn(agent: Any, messages: Any = None) -> Optional[str]:
+    """Refuse a codex app-server turn for a protected session, else None.
+
+    That runtime hands the whole turn (model calls, shell, file and web tools) to
+    a codex subprocess, where none of the hooks here apply. A protected session
+    therefore never reaches it: the turn ends with no model call. This turn's
+    messages, plugin context and memory recall (``agent._turn_protected_extras``)
+    are scanned first, as the normal loop's gate would."""
+    try:
+        extras = tuple(getattr(agent, "_turn_protected_extras", None) or ())
+    except Exception:
+        extras = ()
+    if scan(agent, messages, *extras, source="codex_app_server") or is_protected(agent):
+        logger.info("protected session: refused a codex app-server turn")
+        return PROTECTED_CODEX_RUNTIME_MESSAGE
+    return None
 
 
 def _refuse_transcriber_input(name: str, args: dict) -> Optional[str]:
@@ -911,14 +1054,15 @@ def _install_thread_propagation() -> None:
     orig_start = threading.Thread.start
 
     def submit(self, fn, /, *args, **kwargs):
-        sess, scope = _SESSION.get(), _SCOPE.get()
+        sess, scope, handler = _SESSION.get(), _SCOPE.get(), _HANDLER.get()
 
         def run(*a, **k):
-            t1, t2 = _SESSION.set(sess), _SCOPE.set(scope)
+            t1, t2, t3 = _SESSION.set(sess), _SCOPE.set(scope), _HANDLER.set(handler)
             try:
                 return fn(*a, **k)
             finally:
                 try:
+                    _HANDLER.reset(t3)
                     _SCOPE.reset(t2)
                     _SESSION.reset(t1)
                 except (RuntimeError, ValueError):
@@ -929,12 +1073,13 @@ def _install_thread_propagation() -> None:
     def start(self):
         sess = _SESSION.get()
         if sess is not None:
-            scope = _SCOPE.get()
+            scope, handler = _SCOPE.get(), _HANDLER.get()
             inner = self.run
 
             def run():
                 _SESSION.set(sess)
                 _SCOPE.set(scope)
+                _HANDLER.set(handler)
                 return inner()
 
             self.run = run
