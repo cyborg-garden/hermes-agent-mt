@@ -158,6 +158,7 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
             await asyncio.to_thread(owner.wait, 60)
             before['stopped'] = {r['request_id']: (r['status'], r['outcome']) for r in admissions()}
             before['compacted'] = transcript(before['child'])
+            before['root'] = transcript(sid)
             peer.release.set()
         assert all(executed(name) == 0 for name in FOLLOWERS), [r['text'] for r in peer.requests]
 
@@ -194,11 +195,17 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
         order = [r['text'] for r in peer.requests if r['model'] == 'original' and r['text'] in FOLLOWERS]
         assert order == list(FOLLOWERS), order
         assert executed(compacting['text'][:12]) == before['compacting_requests'], 'compacted turn replayed'
+        # Which turns the summary absorbs depends on where the token estimate first crosses the
+        # threshold, and that estimate includes the system prompt (its date line and tmp paths), so
+        # derive the compacted middle from the committed transcripts instead of naming a turn.
+        kept = {content for _, _, content in before['compacted']}
+        compacted_away = [content for _, _, content in before['root'] if content not in kept]
+        assert compacted_away, 'compression summarized nothing'
         for name in FOLLOWERS:
             wire = next(r['wire'] for r in peer.requests if r['text'] == name)
             # protect_first_n keeps PRESSURE_0 verbatim; the compacted middle is only inside the summary.
             turns = [str(m.get('content', '')) for m in json.loads(wire)]
-            assert 'SUMMARY_RETAINED_FACTS' in wire and not any(t.startswith('PRESSURE_1 ') for t in turns), name
+            assert 'SUMMARY_RETAINED_FACTS' in wire and not any(t in compacted_away for t in turns), name
         settled = admissions()
         assert {r['target_session_id'] for r in settled} == {sid}
         assert [r['request_id'] for r in settled][-3:] == list(FOLLOWERS)
