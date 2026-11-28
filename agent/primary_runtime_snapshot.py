@@ -44,6 +44,10 @@ def _snapshot_primary_runtime(agent):
             "anthropic_base_url": agent._anthropic_base_url,
             "is_anthropic_oauth": agent._is_anthropic_oauth,
         })
+    # The configured primary, frozen: the only destination a protected session's text may
+    # reach (agent/protected_session.py). Never updated from the live runtime afterwards.
+    from agent.protected_session import init_agent_protection
+    init_agent_protection(agent)
 
 
 def _build_primary_runtime_snapshot(agent, api_mode) -> dict[str, Any]:

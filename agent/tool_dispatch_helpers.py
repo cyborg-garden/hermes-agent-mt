@@ -190,8 +190,8 @@ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, lis
     except Exception:
         _raw = tool_call.function.arguments
         logging.debug(
-            "Could not parse args for %s — treating as sequential barrier; raw=%s",
-            tool_name, _raw[:200] if isinstance(_raw, str) else repr(_raw)[:200],
+            "Could not parse args for %s — treating as sequential barrier; raw_len=%d",
+            tool_name, len(_raw) if isinstance(_raw, str) else len(repr(_raw)),
         )
         return None
     if not isinstance(function_args, dict):

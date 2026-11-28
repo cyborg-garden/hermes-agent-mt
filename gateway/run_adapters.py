@@ -1759,6 +1759,9 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         adapter = self._instantiate_adapter(platform, config)
         if adapter is not None:
             adapter.gateway_runner = self
+            # Its own configured endpoint is a delivery host in protected sessions (from config, not traffic).
+            from agent.protected_session import register_adapter_endpoints
+            register_adapter_endpoints(config)
         return adapter
 
     async def _create_adapter_off_loop_deps(self, platform: Platform, config: Any) -> Optional[BasePlatformAdapter]:

@@ -963,6 +963,15 @@ def handle_function_call(
         if function_name in _AGENT_LOOP_TOOLS:
             return tool_error(f"{function_name} must be handled by the agent loop")
 
+        # Protected session (agent/protected_session.py): tools outside the allowlist
+        # are refused, and every other tool runs in an egress scope where outbound
+        # requests off the primary are refused before they are sent.
+        from agent.protected_session import egress_scope, refuse_tool_if_protected, scan_tool_result
+        _protected_refusal = refuse_tool_if_protected(function_name, function_args)
+        if _protected_refusal is not None:
+            return _emit(tool_error(_protected_refusal), status="blocked", error_type="protected_session",
+                         error_message=_protected_refusal)
+
         function_args, blocked = _pre_dispatch_guards(function_name, function_args, skip_pre_tool_call_hook, ids, trace)
         if blocked is not None:
             result, error_type, error_message = blocked
@@ -978,8 +987,13 @@ def handle_function_call(
 
         # duration_ms (monotonic) is exposed to post_tool_call / transform_tool_result.
         start = time.monotonic()
-        result = _execute_tool(function_name, function_args, original_args, ids, user_task=user_task,
-                               enabled_tools=enabled_tools, skip_tool_execution_middleware=skip_tool_execution_middleware)
+        with egress_scope(f"tool:{function_name}"):
+            result = _execute_tool(function_name, function_args, original_args, ids, user_task=user_task,
+                                   enabled_tools=enabled_tools,
+                                   skip_tool_execution_middleware=skip_tool_execution_middleware)
+        # A transcript arriving in a tool result marks the session before any
+        # post-tool hook or the next request can see it.
+        scan_tool_result(function_name, result)
         duration_ms = _elapsed_ms(start)
         _emit(result, duration_ms=duration_ms)
         return _apply_transform_tool_result_hook(function_name, function_args, result, duration_ms, ids)

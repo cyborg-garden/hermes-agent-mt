@@ -753,7 +753,7 @@ def _parse_sse_line(line: str) -> Any:
     try:
         payload = json.loads(data)
     except json.JSONDecodeError:
-        logger.debug("Non-JSON Gemini SSE line: %s", data[:200])
+        logger.debug("Non-JSON Gemini SSE line (%d chars)", len(data))
         return None
     return payload if isinstance(payload, dict) else None
 

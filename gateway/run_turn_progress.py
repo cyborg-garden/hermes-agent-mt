@@ -1064,7 +1064,7 @@ class GatewayTurnProgressMixin:
             logger.debug("Failed to attach session title callback", exc_info=True)
 
     def _status_callback_sync(self, event_type: str, message: str) -> None:
-        from gateway.run import _prepare_gateway_status_message, _redact_gateway_user_facing_secrets, _send_or_update_status_coro
+        from gateway.run import _prepare_gateway_status_message, _send_or_update_status_coro
         from gateway.run_status_filter import status_chat_type
         from gateway.warning_notifications import is_warning_status, render_notification
         ctx = self._ctx
@@ -1079,9 +1079,9 @@ class GatewayTurnProgressMixin:
         prepared = _prepare_gateway_status_message(ctx.source.platform, event_type, message, status_chat_type(ctx.source))
         if prepared is None:
             logger.debug(
-                "status_callback suppressed for %s/%s: %s",
+                "status_callback suppressed for %s/%s (%d chars)",
                 ctx.source.platform.value if ctx.source.platform else "unknown", event_type,
-                _redact_gateway_user_facing_secrets(str(message or ""))[:160],
+                len(str(message or "")),
             )
             return
         # Session keys identify lanes; generations distinguish turns in each lane.

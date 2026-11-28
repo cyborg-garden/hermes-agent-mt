@@ -39,7 +39,11 @@ class AssembledRequest:
 
 def _append_moa_context(agent: Any, api_messages: Any, moa_config: Any, original_user_message: Any) -> None:
     """Run the MoA reference models and append their aggregated context to the last user
-    message (as a trailing text part on multimodal turns). Fail-open."""
+    message (as a trailing text part on multimodal turns). Fail-open. Skipped outright in a
+    protected session: MoA advisors are other models (agent/protected_session.py)."""
+    from agent.protected_session import skip_side_task
+    if skip_side_task("moa_advisors", agent, *(api_messages or [])):
+        return
     try:
         from agent.message_content import flatten_message_text as _flatten_mt
         from agent.moa_loop import _preset_temperature, aggregate_moa_context

@@ -205,11 +205,10 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         logger.info(
-            "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
+            "inbound message: platform=%s user=%s chat=%s msg_len=%d reply_to_id=%s reply_to_text_len=%d",
             _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", (event.text or "")[:80].replace("\n", " "),
-            getattr(event, "reply_to_message_id", None),
-            (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " "),
+            source.chat_id or "unknown", len(event.text or ""), getattr(event, "reply_to_message_id", None),
+            len(getattr(event, "reply_to_text", None) or ""),
         )
 
         resolved = await self._hmwa_resolve_session(event, source)
@@ -1057,7 +1056,8 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         """Profile-scoping wrapper around ``_run_agent_inner`` (same keyword parameters; pass-through
         when multiplexing is off)."""
         with self._profile_scope_for_source(source):
-            return await self._run_agent_inner(message, context_prompt, history, source, session_id, **turn_kwargs)
+            from gateway.run_protected import defang_protected_reply  # protected replies: no fetched image URLs
+            return await defang_protected_reply(self, await self._run_agent_inner(message, context_prompt, history, source, session_id, **turn_kwargs), session_id)
 
     def _run_agent_display_settings(self, source: SessionSource) -> GatewayRunner._RunAgentDisplay:
         """Resolve per-platform display, progress, status and streaming-surface settings for a turn."""
@@ -1789,7 +1789,7 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
                 else:
                     pending = _pending_text or _build_media_placeholder(pending_event)
                 if pending:
-                    logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
+                    logger.debug("Processing queued message after agent completion (%d chars)", len(pending))
 
         # Leftover /steer (arrived after the last tool batch): deliver as the next user turn.
         pending_event, pending = self._merge_leftover_steer(result, adapter, source, session_key, pending_event, pending)
@@ -1909,7 +1909,7 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
         _interrupt_depth, history, _status_thread_metadata = (
             turn_ctx._interrupt_depth, turn_ctx.history, turn_ctx._status_thread_metadata,
         )
-        logger.debug("Processing pending message: '%s...'", pending[:40])
+        logger.debug("Processing pending message (%d chars)", len(pending or ""))
 
         # Clear the interrupt event so the recursive _run_agent isn't re-interrupted (infinite loop).
         _active = getattr(adapter, "_active_sessions", None) if adapter else None

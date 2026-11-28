@@ -235,8 +235,8 @@ def strip_stale_dangerous_confirmations(
             cleaned.append(msg)
             continue
         logger.debug(
-            "Redacting stale dangerous-confirmation text in user message (age=%.1fs, expiry=%.1fs): %r",
-            age, expiry_seconds, (msg.get("content") or "")[:80],
+            "Redacting stale dangerous-confirmation text in user message (age=%.1fs, expiry=%.1fs, content_len=%d)",
+            age, expiry_seconds, len(str(msg.get("content") or "")),
         )
         redacted = dict(msg)
         redacted["content"] = _EXPIRED_CONFIRMATION_SENTINEL

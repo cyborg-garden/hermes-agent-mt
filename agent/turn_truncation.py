@@ -750,16 +750,15 @@ def handle_content_policy_refusal(
     )
     stop_thinking_spinner(agent, thinking_spinner)
 
-    _refusal_log = _refusal_text[:500] + "..." if len(_refusal_text) > 500 else _refusal_text
     # native_stop_reason tells an Anthropic classifier refusal (``refusal``) from a Bedrock guardrail
     # block (``end_turn``); both arrive here as content_filter. Logged before the fallback try so a
     # refusal the fallback answers still leaves its cause in agent.log (#124874).
     logger.warning(
         "%sModel declined to respond (finish_reason=content_filter). model=%s provider=%s "
-        "native_stop_reason=%s stop_details=%s refusal=%s",
+        "native_stop_reason=%s stop_details=%s refusal_len=%d",
         agent.log_prefix, agent.model, agent.provider,
         getattr(response, "stop_reason", None) or "n/a", str(_stop_details or "n/a")[:500],
-        _refusal_log or "(no text)",
+        len(_refusal_text or ""),
     )
     if agent._has_pending_fallback():
         agent._buffer_diagnostic_status("⚠️ Model declined to respond (safety refusal) — trying fallback...")

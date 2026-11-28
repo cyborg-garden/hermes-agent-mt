@@ -588,6 +588,16 @@ def public_pre_transform(agent, pre_transform: Optional[Any]) -> Optional[Any]:
     return None if getattr(agent, "_hold_stream", False) else pre_transform
 
 
+def _protected_session_review_blocked(agent, messages) -> bool:
+    """A protected session never hands its transcript to a review fork (a side model).
+    Fails closed."""
+    try:
+        from agent.protected_session import skip_side_task
+        return skip_side_task("background_review", agent, *(messages or []))
+    except Exception:  # health: allow BLE001 -- fail closed: the review is skipped
+        return True
+
+
 def _mirror_turn_to_memory(
     agent, *, original_user_message, final_response, interrupted, messages, review_memory, review_skills, vetoed,
 ) -> None:
@@ -608,6 +618,7 @@ def _mirror_turn_to_memory(
         and not interrupted
         and not getattr(agent, "skip_background_review", False)
         and (review_memory or review_skills)
+        and not _protected_session_review_blocked(agent, messages)
     ):
         with suppress(Exception):
             agent._spawn_background_review(

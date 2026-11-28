@@ -644,12 +644,50 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int |
             return tool_error(format_session_db_unavailable(), success=False)
         owned_dbs.append(db)
     try:
-        return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-                         around_message_id, window, sort, profile, detail,
-                         after=after, before=before, exclude_session_ids=exclude_session_ids)
+        return _hide_protected(_dispatch(query, role_filter, limit, db, current_session_id, session_id,
+                                         around_message_id, window, sort, profile, detail,
+                                         after=after, before=before, exclude_session_ids=exclude_session_ids),
+                               db, session_id)
     finally:
         for owned_db in reversed(owned_dbs):
             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
+
+
+def _hide_protected(out: str, db: Any, requested_session_id: Any) -> str:
+    """From a session that is not protected, a conversation recorded as protected
+    (agent/protected_session.py) is never returned: it is dropped from listings and
+    refused when read directly. ``db`` is the store the result came from."""
+    try:
+        from agent.protected_session import is_protected
+        if is_protected() or db is None or not hasattr(db, "session_is_protected"):
+            return out
+        data = json.loads(out)
+    except Exception:  # health: allow BLE001 -- an unparseable result carries no session to hide and is returned as is
+        return out
+    if not isinstance(data, dict):
+        return out
+
+    def _hidden(sid: Any) -> bool:
+        if not isinstance(sid, str) or not sid:
+            return False
+        try:
+            return db.session_is_protected(sid.partition("/")[2] or sid) is True
+        except Exception:  # health: allow BLE001 -- fail closed: an unreadable record hides the session
+            return True  # cannot tell: fail closed
+
+    if _hidden(data.get("session_id")) or _hidden(requested_session_id):
+        return tool_error("That conversation holds protected text and can't be shown here.",
+                          success=False)
+    if isinstance(data.get("results"), list):
+        kept = [r for r in data["results"]
+                if not (isinstance(r, dict) and (_hidden(r.get("session_id"))
+                                                 or _hidden(r.get("parent_session_id"))))]
+        if len(kept) != len(data["results"]):
+            data["results"] = kept
+            if "count" in data:
+                data["count"] = len(kept)
+            return json.dumps(data, ensure_ascii=False)
+    return out
 
 
 def check_session_search_requirements() -> bool:

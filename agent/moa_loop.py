@@ -629,6 +629,11 @@ def _run_references_parallel(
     *agent*, the wait polls every ``_REFERENCE_POLL_INTERVAL_S`` so a user interrupt
     can abort it; in-flight calls cannot be killed and bill via ``late_accounting_sink``.
     """
+    from agent.protected_session import skip_side_task
+
+    # MoA advisors are other models: a protected session never consults them.
+    if skip_side_task("moa_advisors", agent, *(ref_messages or [])):
+        return []
     if not reference_models:
         return []
 

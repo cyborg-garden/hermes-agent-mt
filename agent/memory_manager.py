@@ -340,6 +340,44 @@ class MemoryManager:
 
         logger.info("Memory provider '%s' registered (%d tools)", provider.name, len(schemas))
 
+    def _protected(self) -> bool:
+        """True when the owning session holds protected text (agent/protected_session.py)."""
+        try:
+            from agent.protected_session import is_protected
+
+            owner = getattr(self, "_protected_owner", None)
+            agent = owner() if callable(owner) else None
+            return is_protected() or (agent is not None and is_protected(agent))
+        except Exception:  # health: allow BLE001 -- fail closed: an error counts as protected (agent/protected_session.py)
+            return True
+
+    def _content_providers(self, protected: Optional[bool] = None) -> list[MemoryProvider]:
+        """Providers that may receive conversation content. A protected session's
+        text never leaves for an external provider: only the local built-in one.
+        ``protected`` is a state captured earlier (queued work for an old session)."""
+        if protected is True or (protected is None and self._protected()):
+            return [p for p in self._providers if p.name == "builtin"]
+        return list(self._providers)
+
+    def _protected_history(self, messages: Any, session_id: Any = "") -> bool:
+        """Whether a history (and the session it belonged to) is protected: the live
+        flag, the session's id in the protected registry or record, or a marker in
+        the messages themselves. Captured when work is queued, not when it runs."""
+        try:
+            from agent import protected_session as _ps
+
+            if self._protected():
+                return True
+            owner = getattr(self, "_protected_owner", None)
+            agent = owner() if callable(owner) else None
+            if session_id and (
+                    session_id in (getattr(agent, "_protected_retired_sids", None) or ())
+                    or _ps.session_id_is_protected(session_id, getattr(agent, "_session_db", None))):
+                return True
+            return bool(messages) and _ps.text_has_marker(*messages, agent=agent)
+        except Exception:  # health: allow BLE001 -- fail closed: an error counts as protected (agent/protected_session.py)
+            return True
+
     @property
     def providers(self) -> list[MemoryProvider]:
         return list(self._providers)
@@ -367,6 +405,7 @@ class MemoryManager:
         clean_query = _redact_for_provider(clean_query)
         parts = self._each_provider(
             "prefetch failed (non-fatal)", lambda p: self._prefetch_provider(p, clean_query, session_id=session_id),
+            providers=self._content_providers(),
         )
         return "\n\n".join(p for p in parts if p and p.strip())
 
@@ -439,7 +478,7 @@ class MemoryManager:
         """Queue background prefetch on all providers for the next turn (see ``sync_all``)."""
         if self._fork_turn_hooks_suppressed():
             return
-        providers = list(self._providers)
+        providers = self._content_providers()
         clean_query = self._strip_skill_scaffolding(query) if providers else None
         if not clean_query or not self._owner_allows("queue_prefetch"):
             return
@@ -471,7 +510,7 @@ class MemoryManager:
         """
         if self._fork_turn_hooks_suppressed():
             return
-        providers = list(self._providers)
+        providers = self._content_providers()
         clean_user_content = self._strip_skill_scaffolding(user_content) if providers else None
         if not clean_user_content or not self._owner_allows("sync_turn"):
             return
@@ -611,6 +650,9 @@ class MemoryManager:
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
+        if provider.name != "builtin" and self._protected():
+            from agent.protected_session import PROTECTED_EGRESS_MESSAGE
+            return tool_error(PROTECTED_EGRESS_MESSAGE)
         scope = caller_scope(self._bound_scope, f"tool {tool_name}")
         if scope is None:
             return tool_error(refused_tool_message(tool_name))
@@ -647,14 +689,16 @@ class MemoryManager:
             accepted = kwargs if params is None or _has_var_kwargs(params) else {k: v for k, v in kwargs.items() if k in params}
             p.on_turn_start(turn_number, message, **accepted)
 
-        self._each_provider("on_turn_start failed", _tick)
+        self._each_provider("on_turn_start failed", _tick, providers=self._content_providers())
 
-    def on_session_end(self, messages: list[dict[str, Any]]) -> None:
+    def on_session_end(self, messages: list[dict[str, Any]], *, protected: Optional[bool] = None) -> None:
         if self._fork_turn_hooks_suppressed() or not self._owner_allows("on_session_end"):
             return
+        if protected is None:
+            protected = self._protected_history(messages)
         messages = _redact_messages_for_egress(messages or [])
         self._each_provider("on_session_end failed", lambda p: p.on_session_end(messages), level=logging.WARNING,
-                            exc_info=True)
+                            exc_info=True, providers=self._content_providers(protected))
 
     def commit_session_boundary_async(self, messages: list[dict[str, Any]], *, new_session_id: str,
                                       parent_session_id: str = "", reason: str = "new_session") -> None:
@@ -676,10 +720,13 @@ class MemoryManager:
         if not self._providers or not self._owner_allows("session_boundary"):
             return
         snapshot = list(messages or [])
+        # The old session's protection is decided now, with its history: by the
+        # time the worker runs, /new may already have cleared the live flag.
+        protected = self._protected_history(snapshot, parent_session_id)
 
         def _run() -> None:  # both hooks already guard per-provider
             try:
-                self.on_session_end(snapshot)
+                self.on_session_end(snapshot, protected=protected)
             except Exception as e:  # pragma: no cover
                 logger.warning("Session-boundary extraction failed: %s", e)
             try:
@@ -701,6 +748,7 @@ class MemoryManager:
         self._each_provider(
             "on_session_switch failed",
             lambda p: p.on_session_switch(new_session_id, parent_session_id=parent_session_id, reset=reset, **kwargs),
+            providers=self._content_providers(),
         )
 
     @staticmethod
@@ -736,7 +784,7 @@ class MemoryManager:
         from agent.message_metadata import without_withheld_prompts
         messages, evidence_messages = _redact_for_provider(
             without_withheld_prompts(messages or []), without_withheld_prompts(evidence_messages))
-        for provider in self._providers:
+        for provider in self._content_providers():
             version = self._checkpoint_api_version(provider)
             if version is None:
                 version = _LEGACY_PRE_COMPRESS_API_VERSION
@@ -787,7 +835,7 @@ class MemoryManager:
             else:
                 provider.on_memory_write(action, target, content, metadata=dict(metadata or {}))
 
-        external = [p for p in self._providers if p.name != "builtin"]
+        external = [p for p in self._content_providers() if p.name != "builtin"]
         self._each_provider("on_memory_write failed", _notify, providers=external)
 
     # Actions mirrored to external providers; non-mutating results (errors, staged) are
@@ -863,6 +911,7 @@ class MemoryManager:
         self._each_provider(
             "on_delegation failed",
             lambda p: p.on_delegation(task, result, child_session_id=child_session_id, **kwargs),
+            providers=self._content_providers(),
         )
 
     def claim_teardown(self, *, session_end: bool) -> bool:

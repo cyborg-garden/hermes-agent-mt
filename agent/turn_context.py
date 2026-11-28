@@ -583,6 +583,23 @@ def _persist_under_lock(agent: Any, fn, failure_msg: str, pending_cli_message: A
             agent._pending_cli_user_message = None
 
 
+def _protected_turn_start(agent: Any, conversation_history: Any, user_message: Any) -> None:
+    """Protected session (agent/protected_session.py): pick the sticky flag back up from
+    the session record, scan what this turn starts with (which only ever sets it), make
+    this agent the running session for the egress hooks, and put an agent a rate-limit
+    cooldown left on a fallback back on its primary when the session is protected."""
+    from agent import protected_session as _ps
+    _ps.load_persisted(agent)
+    _turn_start = list(conversation_history or []) + [{"role": "user", "content": user_message}]
+    _ps.scan(agent, _turn_start, source="turn_start")
+    _ps.activate(agent)
+    try:
+        from agent.routing_override import restore_primary_if_protected
+        restore_primary_if_protected(agent, _turn_start)
+    except Exception:
+        logger.debug("protected-content primary restore failed", exc_info=True)
+
+
 def _publish_runtime_main(agent: Any) -> None:
     """Tell auxiliary_client the live main provider/model for this turn (after primary
     restoration settled the runtime). Never raises: failure loses only the scope."""
@@ -1261,6 +1278,7 @@ def build_turn_context(
     from tools.skill_provenance import set_review_attended
     set_review_attended(getattr(agent, "_review_attended", False))
     agent._restore_primary_runtime()
+    _protected_turn_start(agent, conversation_history, user_message)
     _publish_runtime_main(agent)
     _refresh_mcp_tools_between_turns(agent)
 
@@ -1275,15 +1293,16 @@ def build_turn_context(
     )
     _reset_per_turn_agent_state(agent)
 
+    # The message length only: message text (possibly protected transcript text)
+    # never goes to a log.
     _preview_text = summarize_user_message_for_log(user_message)
-    _msg_preview = _preview_text[:80] + ("..." if len(_preview_text) > 80 else "")
     _turn_fmt = (
-        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg=%r"
+        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg_len=%d"
     )
     _turn_args = [
         agent.session_id or "none", agent.model, agent.provider or "unknown",
         agent.platform or "unknown", len(conversation_history or []),
-        _msg_preview.replace("\n", " "),
+        len(_preview_text),
     ]
     # Fork turns (background review, side questions) reuse the parent's session_id and
     # model; tag their turn-start line so logs can tell them apart (#118693).

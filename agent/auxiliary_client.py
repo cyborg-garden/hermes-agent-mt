@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- protected-session pin call sites only (helpers live in agent/auxiliary_protected.py)
 """Shared auxiliary client router for side tasks (compression, search, vision, ...).
 
 Text auto chain: main provider+model → OpenRouter → Nous Portal → custom endpoint →
@@ -36,6 +37,7 @@ from agent.error_classifier import (
 from agent.errors import InvalidProviderResponseError
 from agent.auxiliary_fallback_recovery import reapply_repairs
 from agent.auxiliary_managed_local import _is_managed_local_endpoint
+from agent.auxiliary_protected import pinned_route, protected_unavailable, reset_protected_session, set_protected_session
 from agent.auxiliary_reasoning_floor import remember_reasoning_floor, with_reasoning_floor
 from agent.auxiliary_profile_gates import (
     PROFILE_REASONING_KEYS, contains_profile_reasoning_fields, profile_forwards_max_tokens,
@@ -7241,6 +7243,7 @@ def _resolve_call_client(
     api_key: Optional[str], resolved_provider: str, resolved_model: Optional[str],
     resolved_base_url: Optional[str], resolved_api_key: Optional[str],
     resolved_api_mode: Optional[str], main_runtime: Optional[dict[str, Any]], async_mode: bool,
+    protected: bool = False,
 ) -> _ResolvedAuxRoute:
     """Resolve the client for one aux call: vision chain, or cached text client with the
     explicit-provider fallback_chain / auto-chain rescue; RuntimeError when nothing is configured."""
@@ -7251,6 +7254,8 @@ def _resolve_call_client(
             model=resolved_model or model, base_url=resolved_base_url or base_url,
             api_key=resolved_api_key or api_key, async_mode=async_mode, main_runtime=main_runtime,
         )
+        if client is None and protected:
+            raise protected_unavailable(task)  # protected text never leaves the primary
         if client is None and resolved_provider != "auto" and not resolved_base_url:
             logger.warning("Vision provider %s unavailable, falling back to auto vision backends",
                            resolved_provider)
@@ -7265,6 +7270,8 @@ def _resolve_call_client(
             api_key=resolved_api_key, api_mode=resolved_api_mode, main_runtime=main_runtime,
             task=task)
         effective_provider = _effective_provider_for_client(client, resolved_provider)
+        if client is None and protected:
+            raise protected_unavailable(task)  # protected text never leaves the primary
         if client is None:
             # Explicit provider with no credentials: honor the task fallback_chain before
             # raising (fallback entries may use OAuth / credential-pool auth).
@@ -7309,6 +7316,7 @@ class _PreparedAuxRequest(NamedTuple):
     effective_timeout: float
     effective_extra_body: dict[str, Any]
     base_info: str
+    protected: bool = False  # pinned to a protected session's configured primary
 
 
 def _prepare_aux_request(
@@ -7317,7 +7325,7 @@ def _prepare_aux_request(
     temperature: Optional[float], max_tokens: Optional[int], tools: Optional[list],
     timeout: Optional[float], extra_body: Optional[dict], reasoning_config: Optional[dict],
     extra_headers: Optional[dict[str, str]], api_mode: Optional[str],
-    route_info: Optional[dict[str, str]], async_mode: bool,
+    route_info: Optional[dict[str, str]], async_mode: bool, protected: bool = False,
 ) -> _PreparedAuxRequest:
     """Shared head of call_llm/async_call_llm: resolve route + client, publish it, build request kwargs.
     Sync-only: compression fast lane, per-request ``extra_headers``, and ``base_info`` falling
@@ -7333,6 +7341,7 @@ def _prepare_aux_request(
         resolved_provider=resolved_provider, resolved_model=resolved_model,
         resolved_base_url=resolved_base_url, resolved_api_key=resolved_api_key,
         resolved_api_mode=resolved_api_mode, main_runtime=main_runtime, async_mode=async_mode,
+        protected=protected,
     )
     effective_timeout = _effective_aux_timeout(task, timeout)
     # Codex-Responses-only: real SDK clients reject an unrecognized ``no_progress_timeout``
@@ -7376,7 +7385,7 @@ def _prepare_aux_request(
     return _PreparedAuxRequest(
         client, final_model, kwargs, resolved_provider, request_provider, resolved_model,
         resolved_base_url, resolved_api_key, resolved_api_mode, effective_timeout,
-        effective_extra_body, base_info)
+        effective_extra_body, base_info, protected)
 
 
 def _outcome(call: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[Any, Optional[Exception]]:
@@ -7965,6 +7974,9 @@ def _plan_aux_call(
     drivers pass to ``_retry_same_provider_*`` / ``_call_fallback_candidate_*``. One immutable
     runtime snapshot for keying/resolution/retries/fallbacks, so a concurrent /model switch
     can't mix key and client from different runtimes."""
+    # A protected session's call is pinned to its configured primary (agent/auxiliary_protected.py).
+    protected, (provider, model, base_url, api_key, api_mode) = pinned_route(
+        messages, task, main_runtime, provider, model, base_url, api_key, api_mode)
     main_runtime = _normalize_main_runtime(main_runtime)
     req = _prepare_aux_request(
         task, provider=provider, model=model, base_url=base_url, api_key=api_key,
@@ -7972,6 +7984,7 @@ def _plan_aux_call(
         max_tokens=max_tokens, tools=tools, timeout=timeout, extra_body=extra_body,
         reasoning_config=reasoning_config, extra_headers=extra_headers,
         api_mode=api_mode, route_info=route_info, async_mode=async_mode,
+        protected=protected,
     )
     candidate_kwargs = dict(
         task=task, messages=messages, temperature=temperature, max_tokens=max_tokens,
@@ -8108,6 +8121,8 @@ def _call_llm_impl(
             if not aux_errors.same_provider_retry(failure.verdict):
                 break
 
+    if req.protected:
+        raise failure.error  # protected text never leaves the configured primary: no fallback
     def _perform(step: _LadderStep) -> Any:
         kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
         if kind == "call":
@@ -8254,6 +8269,8 @@ async def _async_call_llm_impl(
             return resp
         failure = _primary_failure(req, exc)
 
+    if req.protected:
+        raise failure.error  # protected text never leaves the configured primary: no fallback
     async def _perform(step: _LadderStep) -> Any:
         kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
         if kind == "call":

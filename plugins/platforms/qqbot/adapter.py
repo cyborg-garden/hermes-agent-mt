@@ -744,8 +744,8 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
         attachments_raw = d.get("attachments")
         logger.info(
-            "[%s] C2C message: id=%s content=%r attachments=%s",
-            self._log_tag, msg_id, content[:50] if content else "",
+            "[%s] C2C message: id=%s content_len=%d attachments=%s",
+            self._log_tag, msg_id, len(content or ""),
             f"{len(attachments_raw) if isinstance(attachments_raw, list) else 0} items" if attachments_raw else "None",
         )
         if attachments_raw and isinstance(attachments_raw, list):
@@ -939,7 +939,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     url, ct, filename, asr_refer_text=asr_refer, voice_wav_url=wav_url)
                 if transcript:
                     voice_transcripts.append(f"[Voice] {transcript}")
-                    logger.debug("[%s] Voice transcript: %s", self._log_tag, transcript)
+                    logger.debug("[%s] Voice transcript (%d chars)", self._log_tag, len(transcript or ""))
                 else:
                     logger.warning("[%s] Voice STT failed for %s", self._log_tag, url[:60])
                     voice_transcripts.append("[Voice] [语音识别失败]")
@@ -1019,7 +1019,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         STT on ``voice_wav_url`` (pre-converted WAV, no SILK decode) → STT on the
         original URL (SILK→WAV). Returns the transcript or None."""
         if asr_refer_text:
-            logger.debug("[%s] STT: using QQ asr_refer_text: %r", self._log_tag, asr_refer_text[:100])
+            logger.debug("[%s] STT: using QQ asr_refer_text (%d chars)", self._log_tag, len(asr_refer_text))
             return asr_refer_text
 
         is_pre_wav = bool(voice_wav_url)
@@ -1068,7 +1068,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             finally:
                 self._unlink_quiet(wav_path)
             if transcript:
-                logger.debug("[%s] STT success: %r", self._log_tag, transcript[:100])
+                logger.debug("[%s] STT success (%d chars)", self._log_tag, len(transcript))
             else:
                 logger.warning("[%s] STT: ASR returned empty transcript", self._log_tag)
             return transcript

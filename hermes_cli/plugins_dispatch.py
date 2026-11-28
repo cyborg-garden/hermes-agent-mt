@@ -301,10 +301,17 @@ class PluginDispatchMixin:
         timeout = _resolve_hook_callback_timeout()
         use_timeout = _hook_uses_callback_timeout(hook_name, timeout)
         fail_closed = hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
+        # Each callback runs in its plugin's egress scope: in a protected session its
+        # outbound requests off the primary are refused (agent/protected_session.py).
+        from agent.protected_session import egress_scope, plugin_scope_name, skip_plugin_hook
         for cb in callbacks:
             try:
+                _scope = plugin_scope_name(cb)
+                if skip_plugin_hook(_scope):
+                    continue  # an exporter never receives a protected session's payload
                 if use_timeout:
-                    ret = self._run_hook_callback_bounded(hook_name, cb, kwargs, timeout)
+                    with egress_scope(_scope):
+                        ret = self._run_hook_callback_bounded(hook_name, cb, kwargs, timeout)
                     if ret is _HOOK_SKIPPED:
                         if failed is not None:
                             failed.append(cb)
@@ -312,7 +319,8 @@ class PluginDispatchMixin:
                             results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
                         continue
                 else:
-                    ret = self._invoke_hook_callback(cb, kwargs)
+                    with egress_scope(_scope):
+                        ret = self._invoke_hook_callback(cb, kwargs)
                 if ret is not None:
                     results.append(ret)
             except (Exception, SystemExit) as exc:  # health: allow BLE001 -- moved from invoke_hook: plugin callbacks are untrusted; each failure is reported and isolated
@@ -628,12 +636,17 @@ class PluginDispatchMixin:
         timeout = _resolve_hook_callback_timeout()
         use_timeout = _hook_uses_callback_timeout(hook_name, timeout)
         fail_closed = hook_name in _HOOK_TIMEOUT_FAIL_CLOSED_HOOKS
+        from agent.protected_session import egress_scope, plugin_scope_name, skip_plugin_hook
         for cb in self._hooks.get(hook_name, []):
             callback_name = getattr(cb, "__name__", repr(cb))
             try:
-                ret = cb(**self._hook_callback_kwargs(cb, kwargs))
-                if inspect.isawaitable(ret):
-                    ret = await (asyncio.wait_for(ret, timeout) if use_timeout else ret)
+                _scope = plugin_scope_name(cb)
+                if skip_plugin_hook(_scope):
+                    continue  # an exporter never receives a protected session's payload
+                with egress_scope(_scope):
+                    ret = cb(**self._hook_callback_kwargs(cb, kwargs))
+                    if inspect.isawaitable(ret):
+                        ret = await (asyncio.wait_for(ret, timeout) if use_timeout else ret)
                 if ret is not None:
                     results.append(ret)
             except TimeoutError:
@@ -752,7 +765,9 @@ class PluginDispatchMixin:
                 call_kwargs = {**kwargs, _payload_key: _safe_copy(kwargs[_payload_key]),
                                original_key: _safe_copy(kwargs[original_key])}
             try:
-                ret = cb(**self._hook_callback_kwargs(cb, call_kwargs))  # narrow signatures, as hooks
+                from agent.protected_session import egress_scope, plugin_scope_name
+                with egress_scope(plugin_scope_name(cb)):
+                    ret = cb(**self._hook_callback_kwargs(cb, call_kwargs))  # narrow signatures, as hooks
                 if ret is not None:
                     results.append(ret)
                     if _payload_key and isinstance(ret, dict) and isinstance(ret.get(_payload_key), dict):

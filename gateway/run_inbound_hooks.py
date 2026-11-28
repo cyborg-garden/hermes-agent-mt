@@ -79,11 +79,16 @@ class GatewayInboundHooksMixin:
             return event
         try:
             from hermes_cli.lifecycle import ainvoke_hook as _ainvoke_hook
-            _hook_results = await _ainvoke_hook(
-                "pre_gateway_dispatch", event=event, gateway=self,
-                # getattr: bare-runner tests build GatewayRunner via object.__new__ without __init__.
-                session_store=getattr(self, "session_store", None),
-            )
+            from agent.protected_session import protected_chat as _protected_chat
+            from gateway.run_protected import chat_is_protected
+            # Fired outside any turn: a chat whose session is protected runs the hook as a
+            # protected session (agent/protected_session.py).
+            with _protected_chat(protected=await chat_is_protected(self, source)):
+                _hook_results = await _ainvoke_hook(
+                    "pre_gateway_dispatch", event=event, gateway=self,
+                    # getattr: bare-runner tests build GatewayRunner via object.__new__ without __init__.
+                    session_store=getattr(self, "session_store", None),
+                )
         except Exception as _hook_exc:  # health: allow BLE001 -- moved unchanged from run_inbound.py (main has the same handler): a plugin hook must never stop dispatch
             logger.warning("pre_gateway_dispatch invocation failed: %s", _hook_exc)
             _hook_results = []

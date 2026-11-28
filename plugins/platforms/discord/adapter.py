@@ -37,6 +37,18 @@ from agent.retry_utils import parse_retry_after_seconds
 
 logger = logging.getLogger(__name__)
 
+
+def _holds_protected_transcript(raw: Any) -> bool:
+    """True when file bytes hold the Papa Reo transcript footer (agent/protected_session.py)."""
+    try:
+        from agent.protected_session import text_has_marker
+
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return text_has_marker(text)
+    except Exception:  # health: allow BLE001 -- fail closed: an error counts as protected (agent/protected_session.py)
+        return True
+
+
 _DISCORD_MARKDOWN_LINK_LABEL_RE = re.compile(r"([\\\[\]])")
 _DISCORD_URL_LABEL_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -6444,10 +6456,21 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             print(f"[Discord] Failed to cache {kind} attachment: {e}", flush=True)
             return att.url
 
-    async def _collect_attachment_media(self, all_attachments: list) -> tuple:
+    def _own_reference_attachment_ids(self, resolved_reference: Any, attachments: list) -> set:
+        """Ids of the attachments on this bot's own message being replied to: a transcript file
+        this agent sent (Papa Reo) is never pulled back into the conversation."""
+        client = getattr(self, "_client", None)
+        if resolved_reference is None or client is None:
+            return set()
+        if getattr(resolved_reference, "author", None) != getattr(client, "user", None):
+            return set()
+        return {id(a) for a in attachments}
+
+    async def _collect_attachment_media(self, all_attachments: list, own_reference_ids: Any = frozenset()) -> tuple:
         """Cache every attachment and return ``(media_urls, media_types, media_text_inlined,
         pending_text_injection)``; ``media_text_inlined[i]`` is True only when attachment ``i``'s
-        text was injected."""
+        text was injected. ``own_reference_ids`` are the ids of attachments on this bot's own
+        message being replied to: a Papa Reo transcript file among them is never pulled back in."""
         media_urls = []
         media_types = []
         media_text_inlined: list = []
@@ -6483,6 +6506,12 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     continue
                 try:
                     raw_bytes = await self._cache_discord_document(att, ext)
+                    if id(att) in own_reference_ids and _holds_protected_transcript(raw_bytes):
+                        _placeholder = (f"[{att.filename or 'transcript'}: a Papa Reo transcript this "
+                                        "agent sent earlier; its text is not shown]")
+                        pending_text_injection = (f"{pending_text_injection}\n\n{_placeholder}"
+                                                  if pending_text_injection else _placeholder)
+                        continue
                     cached_path = await cache_document_from_bytes_async(raw_bytes, att.filename or f"document{ext or '.bin'}")
                     if in_allowlist:
                         doc_mime = SUPPORTED_DOCUMENT_TYPES[ext]
@@ -6676,6 +6705,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         resolved_reference = getattr(reference, "resolved", None) if reference else None
         if resolved_reference is not None:
             referenced_attachments = list(getattr(resolved_reference, "attachments", []) or [])
+        own_reference_ids = self._own_reference_attachment_ids(resolved_reference, referenced_attachments)
         all_attachments = list(message.attachments) + snapshot_attachments + referenced_attachments
         if normalized_content.startswith("/"):
             msg_type = MessageType.COMMAND
@@ -6719,7 +6749,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         )
         source.platform_identity = _discord_platform_identity(message.author, guild)
         media_urls, media_types, media_text_inlined, pending_text_injection = await self._collect_attachment_media(
-            all_attachments)
+            all_attachments, own_reference_ids)
         event_text = normalized_content
         if pending_text_injection:
             event_text = f"{pending_text_injection}\n\n{event_text}" if event_text else pending_text_injection

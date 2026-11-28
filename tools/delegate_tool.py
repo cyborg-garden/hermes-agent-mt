@@ -14,6 +14,7 @@ tool calls or reasoning.
 import logging
 import time
 import weakref
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -513,6 +514,14 @@ def _build_children(
             child._routing_protected_markers = _markers(_rc.get("protected_markers"))
             child._routing_cheap_model = route.creds.get("model")
             child._routing_primary_model = (_chain[0] or {}).get("model") if _chain and isinstance(_chain[0], dict) else None
+        # Children inherit the parent's configured primary and its sticky protected flag
+        # (agent/protected_session.py): a parent holding protected text may hand a child
+        # the body without its marker, so none of the child's calls leave the primary.
+        from agent.protected_session import inherit as _inherit_protected, mark_protected
+        _inherit_protected(child, parent_agent)
+        from agent.routing_override import session_holds_protected_text
+        if session_holds_protected_text(parent_agent):
+            mark_protected(child, "parent")
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema
@@ -541,15 +550,82 @@ def _build_children(
 def _routes_for(task_list: list[dict[str, Any]], cfg: dict[str, Any], credentials_cfg: Optional[dict[str, Any]],
                 parent_agent: Any) -> tuple[list[Any], Optional[str]]:
     """Per-task routes: an internal caller's explicit ``credentials_cfg`` (e.g. /review → auxiliary.review) owns
-    every task's route; otherwise the active delegation provider decides each one."""
-    from tools.delegate_tool_routes import resolve_task_routes, route_for_config
-    if credentials_cfg is None:
-        return resolve_task_routes(task_list, cfg, parent_agent)
+    every task's route; otherwise the active delegation provider decides each one.
+
+    A parent holding protected text runs every child on its configured primary, or none;
+    a parent on a cheap route gives an unpinned child its primary, not the cheap model."""
+    from tools.delegate_tool_routes import TaskRoute, resolve_task_routes, route_for_config
     try:
-        route = route_for_config(credentials_cfg, parent_agent)
+        pinned = _protected_parent_creds(parent_agent)
     except ValueError as exc:
         return [], str(exc)
-    return [route] * len(task_list), None
+    if pinned is not None:
+        return [TaskRoute(pinned, {"fallback_providers": []})] * len(task_list), None
+    if credentials_cfg is None:
+        routes, err = resolve_task_routes(task_list, cfg, parent_agent)
+    else:
+        try:
+            route = route_for_config(credentials_cfg, parent_agent)
+        except ValueError as exc:
+            return [], str(exc)
+        routes, err = [route] * len(task_list), None
+    if err is not None:
+        return routes, err
+    try:
+        return [r if r.error or r.profile_home is not None
+                else replace(r, creds=_primary_creds_for_routed_parent(r.creds, parent_agent))
+                for r in routes], None
+    except ValueError as exc:
+        return [], str(exc)
+
+
+_ROUTE_CRED_KEYS = ("model", "provider", "base_url", "api_key", "api_mode")
+
+
+def _protected_parent_creds(parent_agent) -> Optional[dict[str, Any]]:
+    """The child credential bundle for a protected parent: its configured primary (never
+    ``delegation.model``, a cheap route or a sticky fallback). None for an unprotected
+    parent. Raises ValueError when the primary cannot be named."""
+    from agent import protected_session
+    from agent.routing_override import session_holds_protected_text
+    if not (protected_session.is_protected(parent_agent) or session_holds_protected_text(parent_agent)):
+        return None
+    primary = protected_session.configured_primary(parent_agent) or {}
+    if not (primary.get("model") and primary.get("base_url")):
+        raise ValueError("This conversation holds protected text and its main model "
+                         "cannot be named, so subagents cannot be started.")
+    return {**{k: primary.get(k) or None for k in _ROUTE_CRED_KEYS},
+            "request_overrides": getattr(parent_agent, "request_overrides", None)}
+
+
+def _primary_creds_for_routed_parent(creds: dict, parent_agent) -> dict:
+    """The default route for a parent that is itself on a cheap route.
+
+    A child with no pinned model inherits ``parent_agent.model``; on a cheap-routed turn
+    that is the cheap model, with no escalation or protected check on the child. Such a
+    child takes the parent's primary instead. Raises ValueError when that primary cannot
+    be named, so the spawn is refused rather than run cheap."""
+    if creds.get("model") or getattr(parent_agent, "_routing_protected_watch", False) is not True:
+        return creds
+    from agent.routing_override import _primary_model_of
+    primary = _primary_model_of(parent_agent)
+    if primary and str(getattr(parent_agent, "model", "") or "") == primary:
+        return creds  # the parent already runs on its primary
+    target = getattr(parent_agent, "_routing_escalation_target", None)
+    if isinstance(target, dict) and target.get("model"):
+        if all(target.get(k) for k in ("provider", "base_url", "api_key")):
+            return {**creds, **{k: target.get(k) or None for k in _ROUTE_CRED_KEYS}}
+        # An empty endpoint or key would make the child inherit the parent's (cheap) one.
+        if target.get("provider"):
+            return _resolve_delegation_credentials(
+                {k: target.get(k) for k in ("model", "provider")}, parent_agent)
+    chain = getattr(parent_agent, "_fallback_chain", None) or []
+    first = chain[0] if chain and isinstance(chain[0], dict) else {}
+    if primary and first.get("model") == primary and (first.get("provider") or first.get("base_url")):
+        return _resolve_delegation_credentials(
+            {k: first.get(k) for k in ("model", "provider", "base_url") if first.get(k)}, parent_agent)
+    raise ValueError("This turn runs on a cheap model and its primary model is not available, "
+                     "so subagents cannot be started. Do the work yourself in this turn.")
 
 
 def _settle_refused_transcripts(refused: list[dict[str, Any]], live_deleg_id: Optional[str], live_writers: list,

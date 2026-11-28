@@ -88,6 +88,9 @@ def _gateway_origin_json(agent: "AIAgent") -> Optional[str]:
         return None
 
 
+# Installs the protected-session egress hooks (httpx, requests, urllib, aiohttp,
+# botocore, thread context) once per process. See agent/protected_session.py.
+import agent.protected_session
 from agent.iteration_budget import IterationBudget
 from hermes_cli.env_loader import load_hermes_dotenv
 from hermes_cli.timeouts import get_provider_request_timeout, get_provider_stale_timeout
@@ -410,6 +413,10 @@ class AIAgent(
 
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
+        # A new session starts unflagged; a protected one is re-read from its
+        # record (or its history rescanned) at the next turn start.
+        from agent.protected_session import reset_for_new_session
+        reset_for_new_session(self)
         # The drifted-prompt compaction INFO is once per session, so a /new or /resume re-arms it.
         self._compaction_prompt_drift_logged = False
         # Who wrote the current turn. build_turn_context() sets it at the start of every turn.
